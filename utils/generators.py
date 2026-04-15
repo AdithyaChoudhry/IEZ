@@ -595,6 +595,58 @@ def generate_cable_schedule(
 
         if progress_callback:
             progress_callback(total, total)
+        # Compact tag blocks: detect blocks (main row contains TAG) and
+        # move them upward so blocks are contiguous with no interleaving
+        # empty rows. This preserves the 3-row-per-tag structure while
+        # removing stray blank spacer rows introduced by some templates.
+        try:
+            # Find tag column index from header rows
+            tag_col_idx = None
+            for row in tmpl_ws.iter_rows(min_row=CABLE_SCHEDULE_HEADER_ROW, max_row=CABLE_SCHEDULE_HEADER_ROW + 1):
+                for col_idx, cell in enumerate(row, 1):
+                    val = getattr(cell, 'value', None)
+                    if val and isinstance(val, str):
+                        v = val.strip().lower()
+                        if 'tag' in v and ('no' in v or 'number' in v):
+                            tag_col_idx = col_idx
+                            break
+                if tag_col_idx:
+                    break
+            if tag_col_idx is None:
+                tag_col_idx = 2
+
+            # Detect block starts by scanning for non-empty tag cell
+            block_starts: list[int] = []
+            r = CABLE_SCHEDULE_FIRST_DATA_ROW
+            last_row = out_ws.max_row
+            while r <= last_row:
+                tag_val = out_ws.cell(row=r, column=tag_col_idx).value
+                if tag_val is not None and str(tag_val).strip() != '':
+                    block_starts.append(r)
+                    r += ROWS_PER_TAG
+                else:
+                    r += 1
+
+            # Move blocks upward to eliminate gaps
+            dest = CABLE_SCHEDULE_FIRST_DATA_ROW
+            max_col = out_ws.max_column
+            for src in block_starts:
+                if src != dest:
+                    for off in range(ROWS_PER_TAG):
+                        for cidx in range(1, max_col + 1):
+                            src_cell = out_ws.cell(row=src + off, column=cidx)
+                            dst_cell = out_ws.cell(row=dest + off, column=cidx)
+                            dst_cell.value = src_cell.value
+                            try:
+                                dst_cell.font = _CS_FONT
+                                dst_cell.alignment = _CS_ALIGN
+                            except Exception:
+                                pass
+                            src_cell.value = None
+                dest += ROWS_PER_TAG
+        except Exception:
+            # non-fatal
+            pass
 
         out_bytes = workbook_to_bytes(out_wb)
         return out_bytes, "Cable_Schedule.xlsx", None

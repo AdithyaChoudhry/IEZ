@@ -1,0 +1,21 @@
+# Python
+venv/
+__pycache__/
+*.py[cod]
+*.pyo
+.Python
+
+# Streamlit
+.streamlit/
+
+# macOS
+.DS_Store
+
+# Test / temp files
+_test_*.py
+_inspect_*.py
+
+# Excel output files (generated, not needed in repo)
+Cable_Schedule.xlsx
+Loop_Wiring.xlsx
+Datasheets.zip

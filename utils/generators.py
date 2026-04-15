@@ -776,16 +776,31 @@ def generate_loop_wiring(
             (None, None, error_string) on failure.
     """
     try:
-        # ── 1. Find template sheet (case-insensitive) ────────────────────────
-        template_sheet_name = next(
-            (s for s in template_wb.sheetnames
-             if s.strip().lower() == LOOP_WIRING_TEMPLATE_SHEET.lower()),
-            None,
-        )
+        # ── 1. Find template sheet with tolerant matching ───────────────────
+        def _normalize_name(x: str) -> str:
+            if x is None:
+                return ""
+            # lower, strip, remove non-alphanumeric characters for tolerant compare
+            return re.sub(r'[^0-9a-z]', '', str(x).strip().lower())
+
+        target_norm = _normalize_name(LOOP_WIRING_TEMPLATE_SHEET)
+        template_sheet_name = None
+        # exact tolerant match first
+        for s in template_wb.sheetnames:
+            if _normalize_name(s) == target_norm:
+                template_sheet_name = s
+                break
+        # then try substring (tolerant) match
+        if template_sheet_name is None:
+            for s in template_wb.sheetnames:
+                if target_norm in _normalize_name(s) or _normalize_name(s) in target_norm:
+                    template_sheet_name = s
+                    break
+
         if not template_sheet_name:
             return None, None, (
-                f"Loop Wiring template does not contain sheet "
-                f"'{LOOP_WIRING_TEMPLATE_SHEET}'. Found: {template_wb.sheetnames}"
+                f"Loop Wiring template does not contain sheet '{LOOP_WIRING_TEMPLATE_SHEET}'. "
+                f"Found: {template_wb.sheetnames}"
             )
 
         # ── 2. Locate tag column in input DataFrame ──────────────────────────

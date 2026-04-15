@@ -115,6 +115,11 @@ def _build_formatted_list(df: pd.DataFrame, sheet_name: str) -> bytes:
 # 3. Data Sheet Generator
 # ─────────────────────────────────────────────────────────────────────────────
 
+# Values in datasheet value cells that are considered "empty placeholders".
+# ONLY these are replaced; anything else ("NA", "VTS", numbers, etc.) is preserved.
+_PLACEHOLDER_VALUES = {"refer annexure 1", "refer annexure1", "annexure 1", "", None}
+
+
 def generate_datasheets(
     df: pd.DataFrame,
     template_wb: openpyxl.Workbook,
@@ -123,51 +128,80 @@ def generate_datasheets(
     progress_callback=None,
 ) -> tuple[list[tuple[bytes, str]] | None, str | None]:
     """
-    For each selected tag, copy the 'Annexure' sheet from the template,
-    fill in values from the corresponding IODB row, and save as a separate file.
+    For each selected tag, copy the entire template workbook, then perform
+    layout-aware field mapping on the 'Annexure' sheet:
 
-    The function searches for each IODB column header inside the Annexure sheet
-    and writes the value into the cell immediately to the right of the label.
+      1. Scan EVERY cell in the sheet.
+      2. If the cell text matches an IODB column name (case-insensitive, with
+         fuzzy fallback), look rightward in the same row (up to 5 cells).
+      3. Write the IODB value into the first rightward cell whose current value
+         is a placeholder (None, empty, or "Refer Annexure 1").
+      4. Never overwrite formulas, "NA", "VTS", or any other meaningful text.
+      5. Write "TBA" when the IODB value is empty/NaN.
 
-    Args:
-        df: IODB DataFrame
-        template_wb: openpyxl Workbook loaded from the datasheet template
-        tag_column: Name of the column in df that holds tag numbers
-        selected_tags: Tags to generate sheets for
-        progress_callback: optional callable(current, total)
-
-    Returns:
-        (list_of_(bytes, filename), None) on success
-        (None, error_string) on failure
+    Preserves all formatting, merged cells, and structure — only placeholder
+    cells are touched.
     """
     try:
-        ANNEXURE_SHEET = "Annexure"
-        # Case-insensitive sheet name search
-        sheet_match = next(
+        # ───────────────────────────────────────────────────────────────────────
+        # Locate Annexure sheet (case-insensitive, then partial match)
+        # ───────────────────────────────────────────────────────────────────────
+        ANNEXURE_SHEET = next(
             (s for s in template_wb.sheetnames if s.strip().lower() == "annexure"),
             None,
         )
-        if not sheet_match:
+        # Also accept "Annexure 1- NEW WWTP", "Annexure 1", etc.
+        if ANNEXURE_SHEET is None:
+            ANNEXURE_SHEET = next(
+                (s for s in template_wb.sheetnames if "annexure" in s.strip().lower()),
+                None,
+            )
+        if ANNEXURE_SHEET is None:
             return None, (
                 f"Template does not contain a sheet named 'Annexure'. "
                 f"Found sheets: {template_wb.sheetnames}"
             )
-        ANNEXURE_SHEET = sheet_match
 
-        # Build a normalised map of Annexure header labels → (row, col)
-        # We scan the entire Annexure sheet for cells whose text matches an IODB
-        # column name. The VALUE is written into the cell immediately to the right.
-        # This is done once per template (not per tag) for speed.
+        if tag_column not in df.columns:
+            return None, f"Tag column '{tag_column}' not found in IODB."
+
+        # ───────────────────────────────────────────────────────────────────────
+        # Build normalised IODB column index for fast lookup
+        # ───────────────────────────────────────────────────────────────────────
+        # Map: normalised_col_name -> original column name (preserves case for df access)
+        iodb_col_norm: dict[str, str] = {
+            str(c).strip().lower(): str(c) for c in df.columns
+        }
+        iodb_col_names_norm = list(iodb_col_norm.keys())
+
+        # ───────────────────────────────────────────────────────────────────────
+        # Pre-scan template sheet ONCE to build a label-position map.
+        # For each cell that contains text matching an IODB column:
+        #   label_map[norm_label] = (row, col_of_label_cell)
+        # We defer finding the target write-cell to fill-time so we can
+        # respect per-tag placeholder state.
+        # ───────────────────────────────────────────────────────────────────────
         tmpl_ws = template_wb[ANNEXURE_SHEET]
-        # Collect {iodb_col_lower: (row, col_of_value_cell)} by scanning template
-        label_positions: dict[str, tuple[int, int]] = {}
-        for row in tmpl_ws.iter_rows():
-            for cell in row:
-                if cell.value is None:
+        # label_map: norm_label -> (row, label_col)
+        label_map: dict[str, tuple[int, int]] = {}
+        for t_row in tmpl_ws.iter_rows():
+            for t_cell in t_row:
+                if t_cell.value is None:
                     continue
-                key = str(cell.value).strip().lower()
-                if key:  # map label cell → value cell is one column to the right
-                    label_positions[key] = (cell.row, cell.column + 1)
+                norm = str(t_cell.value).strip().lower()
+                if not norm:
+                    continue
+                # Exact match
+                if norm in iodb_col_norm:
+                    label_map[norm] = (t_cell.row, t_cell.column)
+                else:
+                    # Fuzzy: check if template label contains or is contained
+                    # by an IODB column name (handles "Line Size (NB)" vs "Line size")
+                    for iodb_norm in iodb_col_names_norm:
+                        if (iodb_norm in norm or norm in iodb_norm) and len(norm) >= 3:
+                            if norm not in label_map:
+                                label_map[norm] = (t_cell.row, t_cell.column)
+                            break
 
         results: list[tuple[bytes, str]] = []
         total = len(selected_tags)
@@ -176,37 +210,30 @@ def generate_datasheets(
             if progress_callback:
                 progress_callback(idx, total)
 
-            # Locate matching IODB row
+            # Find IODB row for this tag
             mask = df[tag_column].astype(str).str.strip() == str(tag).strip()
             if not mask.any():
                 continue
-            row_data: dict = df[mask].iloc[0].to_dict()
+            row_data = df[mask].iloc[0].to_dict()
 
-            # Build normalised IODB data lookup {col_lower: value_or_TBA}
-            iodb_lookup: dict[str, object] = {}
+            # Build normalised lookup {norm_col -> value}
+            iodb_values: dict[str, object] = {}
             for col, val in row_data.items():
                 norm_key = str(col).strip().lower()
                 if val is None or (isinstance(val, float) and pd.isna(val)):
-                    iodb_lookup[norm_key] = "TBA"
+                    iodb_values[norm_key] = "TBA"
                 else:
-                    iodb_lookup[norm_key] = val
+                    iodb_values[norm_key] = val
 
-            # Deep-copy workbook to preserve all formatting/formulas
+            # Deep-copy workbook so every tag gets pristine formatting
             new_wb = _copy_workbook(template_wb)
             ws = new_wb[ANNEXURE_SHEET]
 
-            # Fill matched positions
-            for label_key, (r, c) in label_positions.items():
-                if label_key in iodb_lookup:
-                    target_cell = ws.cell(row=r, column=c)
-                    # Never overwrite an existing formula
-                    if isinstance(target_cell.value, str) and target_cell.value.startswith("="):
-                        continue
-                    target_cell.value = iodb_lookup[label_key]
-
-            # Also do a full sheet sweep to fill any label→right-cell pairs
-            # that weren't pre-mapped (catches merged/offset layouts)
-            _fill_sheet_from_row(ws, iodb_lookup)
+            # ────────────────────────────────────────────────
+            # Spatial fill: for each matched label cell,
+            # scan rightward for a placeholder and write the IODB value.
+            # ────────────────────────────────────────────────
+            _spatial_fill(ws, label_map, iodb_values, iodb_col_norm)
 
             out_bytes = workbook_to_bytes(new_wb)
             safe_tag = re.sub(r'[\\/*?:\[\]]', '_', str(tag))
@@ -222,32 +249,70 @@ def generate_datasheets(
         return None, f"Datasheet generation failed: {e}"
 
 
-def _fill_sheet_from_row(ws, row_data: dict):
+def _is_placeholder(value) -> bool:
     """
-    Scan a worksheet for cell values that match IODB column names (case-insensitive).
-    When a match is found, write the IODB value into the cell immediately to the right.
-    - Preserves formula cells.
-    - Writes "TBA" for None / NaN values.
-    row_data keys should already be normalised to lowercase string.
+    Return True if a cell value is a placeholder that may be overwritten.
+    Placeholders: None, empty string, or any string that contains
+    'refer annexure' (case-insensitive).
+    Any other value — 'NA', 'VTS', a number, a formula — is preserved.
     """
-    # Accept both raw and pre-normalised dicts
-    col_map = {str(k).strip().lower(): v for k, v in row_data.items()}
+    if value is None:
+        return True
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped == "":
+            return True
+        if "refer annexure" in stripped.lower() or stripped.lower() == "annexure 1":
+            return True
+    return False
 
-    for row in ws.iter_rows():
-        for cell in row:
-            if cell.value is None:
+
+def _spatial_fill(
+    ws,
+    label_map: dict[str, tuple[int, int]],
+    iodb_values: dict[str, object],
+    iodb_col_norm: dict[str, str],
+    max_right_search: int = 5,
+):
+    """
+    Fill worksheet by spatial label-to-value mapping.
+
+    For each (norm_label -> (row, label_col)) in label_map:
+      1. Resolve which IODB column this label corresponds to.
+      2. Get the IODB value for this tag.
+      3. Scan cells to the RIGHT (same row) for the first placeholder.
+      4. Write the value there.  Never overwrite formulas or meaningful content.
+    """
+    for norm_label, (r, label_col) in label_map.items():
+        # Resolve IODB value for this label
+        iodb_value = None
+        if norm_label in iodb_values:
+            iodb_value = iodb_values[norm_label]
+        else:
+            # Try fuzzy resolution: find the best-matching IODB column
+            for iodb_norm, orig_col in iodb_col_norm.items():
+                if (iodb_norm in norm_label or norm_label in iodb_norm) and len(norm_label) >= 3:
+                    raw = iodb_values.get(iodb_norm)
+                    if raw is not None:
+                        iodb_value = raw
+                    break
+
+        if iodb_value is None:
+            # No IODB column matched this label at all — do nothing
+            continue
+
+        # Search rightward for a placeholder cell to write into
+        for offset in range(1, max_right_search + 1):
+            target = ws.cell(row=r, column=label_col + offset)
+            # Skip read-only merged-cell slaves (non-top-left cells in a merge)
+            if target.__class__.__name__ == "MergedCell":
                 continue
-            cell_text = str(cell.value).strip().lower()
-            if cell_text in col_map:
-                right_col = cell.column + 1
-                right_cell = ws.cell(row=cell.row, column=right_col)
-                if isinstance(right_cell.value, str) and right_cell.value.startswith("="):
-                    continue
-                val = col_map[cell_text]
-                # Write TBA for missing values
-                if val is None or (isinstance(val, float) and pd.isna(val)):
-                    val = "TBA"
-                right_cell.value = val
+            # Never touch formula cells
+            if isinstance(target.value, str) and target.value.startswith("="):
+                break  # formula encountered — stop scanning right
+            if _is_placeholder(target.value):
+                target.value = iodb_value
+                break  # wrote successfully — move on to next label
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -893,9 +958,35 @@ def _inject_drawings_from_template(
 def _copy_workbook(wb: openpyxl.Workbook) -> openpyxl.Workbook:
     """
     Serialize a workbook to bytes and reload it, achieving a deep copy.
-    This is the safest way to duplicate a workbook with formulas and styles intact.
+
+    Image-ref fix: openpyxl's Image._data() closes img.ref (a BytesIO) after
+    reading image bytes during wb.save().  That means a second call to
+    _copy_workbook on the same wb would fail with "I/O operation on closed file".
+    After each save we therefore restore wb's image refs from the freshly-loaded
+    copy's independent BytesIO objects so every subsequent call works correctly.
     """
     buf = io.BytesIO()
-    wb.save(buf)
+    wb.save(buf)           # NOTE: closes every img.ref on wb
+    raw = buf.getvalue()   # full bytes before seeking
     buf.seek(0)
-    return load_workbook(buf)
+    new_wb = load_workbook(buf)
+    new_wb._copybuf = buf  # keep buf alive for new_wb's own save()
+
+    # Restore img.refs on original wb (and give new_wb fresh independent refs)
+    # so that (a) the next _copy_workbook call on wb works and (b) new_wb.save()
+    # can write its images without a closed-file error.
+    for ws_orig, ws_new in zip(wb.worksheets, new_wb.worksheets):
+        orig_imgs = getattr(ws_orig, '_images', [])
+        new_imgs  = getattr(ws_new,  '_images', [])
+        for o_img, n_img in zip(orig_imgs, new_imgs):
+            try:
+                # getvalue() returns all bytes regardless of current stream pos
+                img_bytes = (n_img.ref.getvalue()
+                             if hasattr(n_img.ref, 'getvalue')
+                             else (n_img.ref.seek(0) or n_img.ref.read()))
+                o_img.ref = io.BytesIO(img_bytes)   # fresh ref for next copy
+                n_img.ref = io.BytesIO(img_bytes)   # fresh ref for this copy's save
+            except Exception:
+                pass
+
+    return new_wb

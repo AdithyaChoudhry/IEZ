@@ -140,28 +140,31 @@ with st.sidebar:
     st.markdown("## Instrumentation EZ")
     st.markdown("---")
 
-    st.markdown("### 📁 Global File Uploads")
-    iodb_file = st.file_uploader(
-        "Upload IODB Source File",
-        type=["xlsx", "xls"],
-        key="iodb_upload",
-        help="Main IODB source Excel file (sheet name: IODB)",
-    )
-    loop_input_file = st.file_uploader(
-        "Upload Loop Wiring Input File",
-        type=["xlsx", "xls"],
-        key="loop_input_upload",
-        help="Loop Wiring Input Excel file (must contain a 'Tag Number' column)",
-    )
-
-    st.markdown("---")
-    st.markdown("### 📑 Module")
+    st.markdown("### � Module")
     selected_module = st.radio(
         "Select a module:",
         MODULES,
         index=0,
         label_visibility="collapsed",
     )
+    st.markdown("---")
+
+    # Summary of files currently cached in session state
+    _cache_labels = {
+        "iodb_upload":        "IODB Source",
+        "loop_input_upload":  "Loop Wiring Input",
+        "ds_template_upload": "DS Template",
+        "cs_template_upload": "CS Template",
+        "lw_template_upload": "LW Template",
+    }
+    _any_loaded = False
+    for _wk, _label in _cache_labels.items():
+        if f"_fc_{_wk}" in st.session_state:
+            if not _any_loaded:
+                st.markdown("**📂 Loaded Files**")
+                _any_loaded = True
+            _fname = st.session_state.get(f"_fn_{_wk}", _label)
+            st.caption(f"✅ {_label}: {_fname}")
     st.markdown("---")
     st.caption("v1.0.0 · Built with Streamlit & openpyxl")
 
@@ -188,10 +191,35 @@ def cached_iodb_df(file_bytes: bytes) -> tuple[pd.DataFrame | None, str | None]:
 
 
 def get_iodb_bytes() -> bytes | None:
-    """Return the raw bytes of the uploaded IODB file, or None."""
-    if iodb_file is not None:
-        iodb_file.seek(0)
-        return iodb_file.read()
+    """Return the cached bytes of the IODB file from session state, or None."""
+    return st.session_state.get("_fc_iodb_upload")
+
+
+def _file_section(label: str, widget_key: str, help_text: str = "") -> bytes | None:
+    """
+    Render a file_uploader whose bytes are persisted in st.session_state.
+    Uploaded files survive module switches.  A Clear button resets them.
+    Returns raw bytes when a file is available, otherwise None.
+    """
+    cache_key = f"_fc_{widget_key}"
+    name_key  = f"_fn_{widget_key}"
+
+    uploaded = st.file_uploader(label, type=["xlsx", "xls"], key=widget_key, help=help_text)
+    if uploaded is not None:
+        uploaded.seek(0)
+        st.session_state[cache_key] = uploaded.read()
+        st.session_state[name_key]  = uploaded.name
+
+    cached = st.session_state.get(cache_key)
+    if cached is not None:
+        if uploaded is None:
+            col_a, col_b = st.columns([5, 1])
+            col_a.caption(f"✅ Using: **{st.session_state.get(name_key, 'cached file')}**")
+            if col_b.button("✕", key=f"_clr_{widget_key}", help="Clear this file"):
+                st.session_state.pop(cache_key, None)
+                st.session_state.pop(name_key,  None)
+                st.rerun()
+        return cached
     return None
 
 
@@ -204,11 +232,14 @@ def render_instrument_list():
         "Select columns from the IODB and export them as a clean **Instrument List** Excel file."
     )
 
-    if iodb_file is None:
-        st.info("⬆️ Please upload the **IODB Source File** in the sidebar to continue.")
+    iodb_raw = _file_section(
+        "📊 Upload IODB Source File", "iodb_upload",
+        "Main IODB source Excel file (sheet name: IODB)",
+    )
+    if iodb_raw is None:
         return
 
-    iodb_bytes = get_iodb_bytes()
+    iodb_bytes = iodb_raw
     with st.spinner("Reading IODB columns…"):
         columns, err = cached_iodb_columns(iodb_bytes)
 
@@ -244,8 +275,7 @@ def render_instrument_list():
             st.warning("Please select at least one column.")
             return
         with st.spinner("Generating…"):
-            iodb_file.seek(0)
-            iodb_snap = io.BytesIO(iodb_file.read())
+            iodb_snap = io.BytesIO(iodb_raw)
             out_bytes, filename, err = process_instrument_list(iodb_snap, selected)
         if err:
             st.error(f"Error: {err}")
@@ -269,11 +299,14 @@ def render_io_list():
         "Select columns from the IODB and export them as an **I/O List** Excel file."
     )
 
-    if iodb_file is None:
-        st.info("⬆️ Please upload the **IODB Source File** in the sidebar to continue.")
+    iodb_raw = _file_section(
+        "📊 Upload IODB Source File", "iodb_upload",
+        "Main IODB source Excel file (sheet name: IODB)",
+    )
+    if iodb_raw is None:
         return
 
-    iodb_bytes = get_iodb_bytes()
+    iodb_bytes = iodb_raw
     with st.spinner("Reading IODB columns…"):
         columns, err = cached_iodb_columns(iodb_bytes)
 
@@ -313,8 +346,7 @@ def render_io_list():
             st.warning("Please select at least one column.")
             return
         with st.spinner("Generating…"):
-            iodb_file.seek(0)
-            iodb_snap = io.BytesIO(iodb_file.read())
+            iodb_snap = io.BytesIO(iodb_raw)
             out_bytes, filename, err = process_io_list(iodb_snap, selected)
         if err:
             st.error(f"Error: {err}")
@@ -340,20 +372,20 @@ def render_datasheet():
 
     col_left, col_right = st.columns(2)
     with col_left:
-        if iodb_file is None:
-            st.info("⬆️ Upload **IODB Source File** in the sidebar.")
+        iodb_raw = _file_section(
+            "📊 Upload IODB Source File", "iodb_upload",
+            "Main IODB source Excel file (sheet name: IODB)",
+        )
     with col_right:
-        ds_template = st.file_uploader(
-            "📎 Upload Datasheet Template (.xlsx)",
-            type=["xlsx", "xls"],
-            key="ds_template_upload",
-            help="Template must contain a sheet named 'Annexure'.",
+        tmpl_raw = _file_section(
+            "📎 Datasheet Template", "ds_template_upload",
+            "Template must contain a sheet named 'Annexure'.",
         )
 
-    if iodb_file is None or ds_template is None:
+    if iodb_raw is None or tmpl_raw is None:
         return
 
-    iodb_bytes = get_iodb_bytes()
+    iodb_bytes = iodb_raw
     with st.spinner("Reading IODB tags…"):
         tags, err = cached_iodb_tags(iodb_bytes, "TAG NO")
 
@@ -389,10 +421,8 @@ def render_datasheet():
                     text=f"Processing tag {current}/{total}…",
                 )
 
-        iodb_file.seek(0)
-        iodb_snap = io.BytesIO(iodb_file.read())
-        ds_template.seek(0)
-        tmpl_snap = io.BytesIO(ds_template.read())
+        iodb_snap = io.BytesIO(iodb_raw)
+        tmpl_snap = io.BytesIO(tmpl_raw)
         out_bytes, filename, err = process_datasheets(
             iodb_snap, tmpl_snap, "TAG NO", selected_tags, progress_callback=progress_cb
         )
@@ -422,21 +452,21 @@ def render_cable_schedule():
 
     col_left, col_right = st.columns(2)
     with col_left:
-        if iodb_file is None:
-            st.info("⬆️ Upload **IODB Source File** in the sidebar.")
+        iodb_raw = _file_section(
+            "📊 Upload IODB Source File", "iodb_upload",
+            "Main IODB source Excel file (sheet name: IODB)",
+        )
     with col_right:
-        cs_template = st.file_uploader(
-            "📎 Upload Cable Schedule Template (.xlsx)",
-            type=["xlsx", "xls"],
-            key="cs_template_upload",
-            help="Template must contain a 'Cable Schedule -INST' sheet.",
+        cs_tmpl_raw = _file_section(
+            "📎 Cable Schedule Template", "cs_template_upload",
+            "Template must contain a 'Cable Schedule -INST' sheet.",
         )
 
-    if iodb_file is None or cs_template is None:
+    if iodb_raw is None or cs_tmpl_raw is None:
         return
 
     # Show column pickers for JB and Tag columns
-    iodb_bytes = get_iodb_bytes()
+    iodb_bytes = iodb_raw
     with st.spinner("Reading IODB columns…"):
         columns, err = cached_iodb_columns(iodb_bytes)
     if err:
@@ -486,10 +516,8 @@ def render_cable_schedule():
                     text=f"Processing JB {current}/{total}…",
                 )
 
-        iodb_file.seek(0)
-        iodb_snap = io.BytesIO(iodb_file.read())
-        cs_template.seek(0)
-        cs_snap = io.BytesIO(cs_template.read())
+        iodb_snap = io.BytesIO(iodb_raw)
+        cs_snap = io.BytesIO(cs_tmpl_raw)
         out_bytes, filename, err = process_cable_schedule(
             iodb_snap, cs_snap, jb_col, tag_col, progress_callback=progress_cb
         )
@@ -519,24 +547,23 @@ def render_loop_wiring():
 
     col_left, col_right = st.columns(2)
     with col_left:
-        if loop_input_file is None:
-            st.info("⬆️ Upload **Loop Wiring Input File** in the sidebar.")
+        lw_input_raw = _file_section(
+            "📊 Loop Wiring Input File", "loop_input_upload",
+            "Loop Wiring Input Excel file (must contain a 'Tag Number' column)",
+        )
     with col_right:
-        lw_template = st.file_uploader(
-            "📎 Upload Loop Wiring Template (.xlsx)",
-            type=["xlsx", "xls"],
-            key="lw_template_upload",
-            help="Template must contain a sheet named 'AI - INST'.",
+        lw_tmpl_raw = _file_section(
+            "📎 Loop Wiring Template", "lw_template_upload",
+            "Template must contain a sheet named 'AI - INST'.",
         )
 
-    if loop_input_file is None or lw_template is None:
+    if lw_input_raw is None or lw_tmpl_raw is None:
         return
 
     # Preview input tags
     with st.expander("👁️ Loop Wiring Input Preview", expanded=False):
         from utils.file_handler import read_loop_wiring_input
-        loop_input_file.seek(0)
-        lw_df, lw_err = read_loop_wiring_input(loop_input_file)
+        lw_df, lw_err = read_loop_wiring_input(io.BytesIO(lw_input_raw))
         if lw_err:
             st.error(f"Could not read Loop Wiring Input: {lw_err}")
         else:
@@ -559,10 +586,8 @@ def render_loop_wiring():
                     text=f"Processing tag {current}/{total}…",
                 )
 
-        loop_input_file.seek(0)
-        lw_input_snap = io.BytesIO(loop_input_file.read())
-        lw_template.seek(0)
-        lw_tmpl_snap = io.BytesIO(lw_template.read())
+        lw_input_snap = io.BytesIO(lw_input_raw)
+        lw_tmpl_snap = io.BytesIO(lw_tmpl_raw)
         out_bytes, filename, err = process_loop_wiring(
             lw_input_snap, lw_tmpl_snap, progress_callback=progress_cb
         )

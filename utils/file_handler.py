@@ -5,6 +5,7 @@ Provides safe wrappers with error feedback.
 """
 
 import io
+import re
 import zipfile
 import pandas as pd
 import openpyxl
@@ -69,6 +70,64 @@ def read_loop_wiring_input(uploaded_file) -> tuple[pd.DataFrame | None, str | No
 _ZIP_MAGIC = b'PK\x03\x04'       # .xlsx / .xlsm (ZIP-based)
 _OLE2_MAGIC = b'\xd0\xcf\x11\xe0'  # .xls (OLE2 / BIFF)
 
+# ── [Content_Types].xml synthesiser ─────────────────────────────────────────
+# Used when a ZIP-based .xlsx is missing its [Content_Types].xml entry.
+# We map well-known part paths / path patterns to their OOXML content types
+# and emit a minimal but valid XML so openpyxl can proceed.
+_CT_OVERRIDES: dict[str, str] = {
+    'xl/workbook.xml':        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml',
+    'xl/workbook.bin':        'application/vnd.ms-excel.sheet.binary.macroEnabled.main',
+    'xl/sharedstrings.xml':   'application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml',
+    'xl/styles.xml':          'application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml',
+    'xl/calcchain.xml':       'application/vnd.openxmlformats-officedocument.spreadsheetml.calcChain+xml',
+    'docprops/core.xml':      'application/vnd.openxmlformats-package.core-properties+xml',
+    'docprops/app.xml':       'application/vnd.openxmlformats-officedocument.extended-properties+xml',
+}
+_CT_PATTERNS: list[tuple[str, str]] = [
+    (r'^xl/worksheets/sheet\d+\.xml$',   'application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml'),
+    (r'^xl/theme/theme\d*\.xml$',        'application/vnd.openxmlformats-officedocument.theme+xml'),
+    (r'^xl/drawings/drawing\d+\.xml$',   'application/vnd.openxmlformats-officedocument.drawing+xml'),
+    (r'^xl/charts/chart\d+\.xml$',       'application/vnd.openxmlformats-officedocument.drawingml.chart+xml'),
+    (r'^xl/chartsheets/sheet\d+\.xml$',  'application/vnd.openxmlformats-officedocument.spreadsheetml.chartsheet+xml'),
+    (r'^xl/macrosheets/sheet\d+\.xml$',  'application/vnd.ms-excel.macrosheet+xml'),
+]
+
+
+def _synthesize_content_types(names: list[str]) -> bytes:
+    """Return a minimal valid [Content_Types].xml body derived from the ZIP entry list."""
+    defaults = [
+        ('rels',  'application/vnd.openxmlformats-package.relationships+xml'),
+        ('xml',   'application/xml'),
+        ('vml',   'application/vnd.openxmlformats-officedocument.vmlDrawing'),
+        ('png',   'image/png'),
+        ('jpg',   'image/jpeg'),
+        ('jpeg',  'image/jpeg'),
+        ('gif',   'image/gif'),
+        ('emf',   'image/x-emf'),
+        ('wmf',   'image/x-wmf'),
+        ('bin',   'application/vnd.openxmlformats-officedocument.spreadsheetml.printerSettings'),
+    ]
+    overrides: dict[str, str] = {}
+    for name in names:
+        nl = name.lower().lstrip('/')
+        if nl in _CT_OVERRIDES:
+            overrides[f'/{name}'] = _CT_OVERRIDES[nl]
+            continue
+        for pattern, ct in _CT_PATTERNS:
+            if re.match(pattern, nl):
+                overrides[f'/{name}'] = ct
+                break
+    lines = [
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">',
+    ]
+    for ext, ct in defaults:
+        lines.append(f'  <Default Extension="{ext}" ContentType="{ct}"/>')
+    for part, ct in overrides.items():
+        lines.append(f'  <Override PartName="{part}" ContentType="{ct}"/>')
+    lines.append('</Types>')
+    return '\n'.join(lines).encode('utf-8')
+
 
 def load_workbook_from_upload(uploaded_file, keep_vba: bool = False, read_only: bool = False):
     """
@@ -120,12 +179,17 @@ def load_workbook_from_upload(uploaded_file, keep_vba: bool = False, read_only: 
                 (n for n in names if n.lower() == '[content_types].xml'), None
             )
             if ct_entry is None:
-                return None, None, (
-                    "The Excel file is missing [Content_Types].xml and cannot be opened. "
-                    "Please re-save it as .xlsx in Excel and try again."
-                )
-            if ct_entry != '[Content_Types].xml':
-                # Rebuild the ZIP with the correct canonical name
+                # Auto-repair: synthesize a valid [Content_Types].xml from the archive contents
+                ct_content = _synthesize_content_types(names)
+                clean = io.BytesIO()
+                with zipfile.ZipFile(clean, 'w', zipfile.ZIP_DEFLATED) as zout:
+                    zout.writestr('[Content_Types].xml', ct_content)
+                    for name in names:
+                        zout.writestr(name, z.read(name))
+                clean.seek(0)
+                data = clean.read()
+            elif ct_entry != '[Content_Types].xml':
+                # Rebuild the ZIP with the correct canonical entry name
                 clean = io.BytesIO()
                 with zipfile.ZipFile(clean, 'w', zipfile.ZIP_DEFLATED) as zout:
                     for name in names:

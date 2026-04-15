@@ -83,9 +83,11 @@ def process_datasheets(
     if err:
         return None, None, f"Failed to read IODB: {err}"
 
-    wb, _, err = load_workbook_from_upload(template_file)
+    wb, _tmpl_buf, err = load_workbook_from_upload(template_file)
     if err:
         return None, None, f"Failed to load template: {err}"
+    # Keep _tmpl_buf alive so openpyxl can copy embedded images/drawings
+    # from the source ZIP when wb.save() is called inside generate_datasheets.
 
     results, err = generate_datasheets(df, wb, tag_column, selected_tags, progress_callback)
     if err:
@@ -115,8 +117,12 @@ def process_cable_schedule(
 ) -> tuple[bytes | None, str | None, str | None]:
     """
     Full pipeline: read IODB + template → generate cable schedule.
-    Template is opened in read-only mode to avoid corrupt-style openpyxl bugs
-    present in some reference cable schedule files.
+
+    The template is loaded twice:
+      - In read-only mode for safe structure/prototype reading.
+      - The raw bytes are passed to the generator so it can reload the template
+        in writable mode (preserving header formatting, merged cells, etc.).
+    Falls back to a fresh workbook if the writable load fails.
 
     Returns (bytes, "Cable_Schedule.xlsx", error)
     """
@@ -124,12 +130,26 @@ def process_cable_schedule(
     if err:
         return None, None, f"Failed to read IODB: {err}"
 
-    # Use read_only=True to safely load templates that have corrupt style tables
-    wb, _, err = load_workbook_from_upload(template_file, read_only=True)
+    # Read raw bytes so the generator can build a writable output workbook
+    try:
+        template_file.seek(0)
+        tmpl_bytes = template_file.read()
+        template_file.seek(0)
+    except Exception:
+        tmpl_bytes = None
+
+    # Load read-only for safe structure reading (avoids corrupt-style loops)
+    wb, _, err = load_workbook_from_upload(
+        io.BytesIO(tmpl_bytes) if tmpl_bytes else template_file,
+        read_only=True,
+    )
     if err:
         return None, None, f"Failed to load template: {err}"
 
-    return generate_cable_schedule(df, wb, jb_column, tag_column, progress_callback)
+    return generate_cable_schedule(
+        df, wb, jb_column, tag_column, progress_callback,
+        template_bytes=tmpl_bytes,
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -184,8 +204,51 @@ def get_iodb_tags(iodb_file, tag_column: str = "TAG NO") -> tuple[list[str] | No
     df, err = read_iodb(iodb_file)
     if err:
         return None, err
+
+    # If requested tag column missing, attempt to auto-detect a Tag-like
+    # column by name or by probing header rows in the source file.
     if tag_column not in df.columns:
-        return None, f"Column '{tag_column}' not found in IODB. Available: {list(df.columns)}"
+        # try case-insensitive name match
+        cols_lower = {str(c).strip().lower(): c for c in df.columns}
+        found = None
+        for k in (tag_column.lower(), 'tag no', 'tag', 'tag number', 'tag_number'):
+            if k in cols_lower:
+                found = cols_lower[k]
+                break
+        if found is None:
+            # probe header rows across sheets in the original file object
+            try:
+                # ensure we have a bytes buffer
+                iodb_file.seek(0)
+                xls = pd.ExcelFile(iodb_file)
+                for sheet in xls.sheet_names:
+                    for hr in range(0, 11):
+                        try:
+                            iodb_file.seek(0)
+                            cand = pd.read_excel(iodb_file, sheet_name=sheet, header=hr, nrows=10)
+                            iodb_file.seek(0)
+                        except Exception:
+                            iodb_file.seek(0)
+                            continue
+                        cand_cols = [str(c).strip().lower() for c in cand.columns]
+                        for k in ('tag no', 'tag', 'tag number', 'tag_number'):
+                            if k in cand_cols:
+                                found = cand.columns[cand_cols.index(k)]
+                                # re-read full df with detected header
+                                iodb_file.seek(0)
+                                df = pd.read_excel(iodb_file, sheet_name=sheet, header=hr)
+                                break
+                        if found is not None:
+                            break
+                    if found is not None:
+                        break
+            except Exception:
+                pass
+
+        if found is None:
+            return None, f"Column '{tag_column}' not found in IODB. Available: {list(df.columns)}"
+        tag_column = found
+
     tags = df[tag_column].dropna().astype(str).str.strip()
     tags = sorted(tags[tags != ""].unique().tolist())
     return tags, None

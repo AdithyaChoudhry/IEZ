@@ -319,24 +319,6 @@ def _spatial_fill(
 # 4. Cable Schedule Generator
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Mapping from IODB column → Cable Schedule template column header text
-# (based on analysis of the reference Cable_schedule.xlsx)
-CABLE_SCHEDULE_COL_MAP = {
-    "TAG NO": "TAG NUMBER",
-    "LOOP NUMBER": "LOOP NUMBER",
-    "EQUIPMENT DESCRIPTION": "EQUIPMENT DESCRIPTION",
-    "SIGNAL I/O TYPE": "SIGNAL I/O TYPE",
-    "P&ID NO.": "P&ID NO.",
-    "SIGNAL TO": "SIGNAL TO",
-    "INSTRUMENT TO JB CABLE TAG NO": "INSTRUMENT TO JB CABLE TAG NO",
-    "INSTRUMENT TO JB CABLE": "INSTRUMENT TO JB CABLE",
-    "BRANCH CABLE LENGTH": "BRANCH CABLE LENGTH",
-    "INSTRUMENT SIDE GLAND": "INSTRUMENT SIDE GLAND",
-    "JB TAG No.": "JB TAG No.",
-    "MAIN CABLE TAG NUMBER": "MAIN CABLE TAG NUMBER",
-    "MAIN CABLE TYPE": "MAIN CABLE TYPE",
-}
-
 # The target sheet inside the cable schedule template
 CABLE_SCHEDULE_SHEET = "Cable Schedule -INST"
 
@@ -346,8 +328,50 @@ CABLE_SCHEDULE_HEADER_ROW = 7
 CABLE_SCHEDULE_FIRST_DATA_ROW = 9
 # Rows per tag in the template (the reference shows 3 rows per tag entry)
 ROWS_PER_TAG = 3
-# Max tags per JB section
+# Max tags per JB section (kept for reference; no longer enforced)
 MAX_TAGS_PER_JB = 12
+
+# Cable Schedule cell formatting (Arial 12, centered, wrap)
+_CS_FONT      = Font(name='Arial', size=12)
+_CS_FONT_BOLD = Font(name='Arial', size=12, bold=True)
+_CS_ALIGN     = Alignment(horizontal='center', vertical='center', wrap_text=True)
+
+
+def _adjust_formula_row(formula: str, src_row: int, dst_row: int) -> str:
+    """
+    When copying a formula from src_row to dst_row, adjust every *relative*
+    row reference by the offset (dst_row - src_row).
+
+    Rules (standard Excel copy-paste semantics):
+      A9   / $A9   → row is relative  → shift by offset
+      A$9  / $A$9  → row is absolute  → leave unchanged
+    """
+    if not isinstance(formula, str) or not formula.startswith('=') or dst_row == src_row:
+        return formula
+    offset = dst_row - src_row
+
+    def _sub(m):
+        col_tok  = m.group(1)   # e.g. "A" or "$A"
+        abs_mark = m.group(2)   # "$" → absolute row, "" → relative row
+        row_n    = int(m.group(3))
+        if abs_mark:            # absolute row – leave as-is
+            return m.group(0)
+        return f'{col_tok}{row_n + offset}'
+
+    return re.sub(r'(\$?[A-Za-z]+)(\$?)(\d+)', _sub, formula)
+
+
+def _find_cs_sheet(template_wb) -> str | None:
+    """Return the Cable Schedule sheet name; fuzzy-matches if exact name is missing."""
+    if CABLE_SCHEDULE_SHEET in template_wb.sheetnames:
+        return CABLE_SCHEDULE_SHEET
+    for s in template_wb.sheetnames:
+        if 'cable schedule' in s.lower() and 'inst' in s.lower():
+            return s
+    for s in template_wb.sheetnames:
+        if 'cable' in s.lower():
+            return s
+    return None
 
 
 def generate_cable_schedule(
@@ -356,169 +380,223 @@ def generate_cable_schedule(
     jb_column: str = "JUNCTION BOX",
     tag_column: str = "TAG NO",
     progress_callback=None,
+    template_bytes: bytes = None,
 ) -> tuple[bytes | None, str | None, str | None]:
     """
-    Group IODB rows by JB Number, sort ascending, pad to 12 tags with SPARE,
-    and populate into the Cable Schedule template sheet.
+    Generate a Cable Schedule from IODB data using the uploaded template.
 
-    NOTE: Some cable schedule templates contain corrupt style/hyperlink structures
-    that cause openpyxl to loop infinitely when saving.  The generator therefore
-    reads the header map from the template's read-only view and writes all data
-    rows into a fresh openpyxl Workbook (same column layout, no styles copied).
-    This avoids the bug while still producing a correct, downloadable output.
+    Logic:
+    - Filters IODB rows where JUNCTION BOX has a non-blank value other than "-".
+    - Sorts ascending by JUNCTION BOX (natural / alphanumeric order).
+    - Groups by JB value; all tags for a JB are written consecutively.
+    - For each tag, writes one 3-row block matching the template structure:
+        * Copies the template prototype block (rows 9-11) cell by cell.
+        * Formula cells are carried forward with row references adjusted for the
+          new row position (e.g. row-9 formula with ref to "row 9" → adjusts to
+          destination row so sequential counters like "06" → "07" work correctly).
+        * Non-formula cells are filled from the matching IODB column via
+          case-insensitive / fuzzy header matching.
+        * Missing IODB values → "TBA".
+    - All generated cells: Arial 12, center/center alignment, wrap-text.
 
     Args:
         df: IODB DataFrame
-        template_wb: openpyxl Workbook loaded from the cable schedule template
-        jb_column: Column in df containing Junction Box numbers
-        tag_column: Column in df containing tag numbers
-        progress_callback: optional callable(current, total)
+        template_wb: openpyxl Workbook (may be read-only) — used to read structure.
+        jb_column: IODB column containing Junction Box numbers.
+        tag_column: IODB column containing tag numbers.
+        progress_callback: optional callable(current, total).
+        template_bytes: raw bytes of template file; when supplied a fresh
+            writable copy is built from it (preserving all template formatting).
 
     Returns:
         (bytes, "Cable_Schedule.xlsx", None) on success
         (None, None, error_string) on failure
     """
     try:
-        if CABLE_SCHEDULE_SHEET not in template_wb.sheetnames:
-            # Fuzzy match
-            match = next(
-                (s for s in template_wb.sheetnames
-                 if "cable schedule" in s.lower() and "inst" in s.lower()),
-                None,
+        # ── Locate cable schedule sheet ──────────────────────────────────────
+        target_sheet = _find_cs_sheet(template_wb)
+        if target_sheet is None:
+            return None, None, (
+                f"Could not find Cable Schedule sheet. "
+                f"Available: {template_wb.sheetnames}"
             )
-            if not match:
-                return None, None, (
-                    f"Could not find Cable Schedule instrument sheet. "
-                    f"Available: {template_wb.sheetnames}"
-                )
-            target_sheet = match
-        else:
-            target_sheet = CABLE_SCHEDULE_SHEET
-
-        # ── Read template structure (read-only mode to avoid corrupt-style bugs) ──
         tmpl_ws = template_wb[target_sheet]
-        header_map = _build_header_map(tmpl_ws, CABLE_SCHEDULE_HEADER_ROW)
-        sub_header_map = _build_header_map(tmpl_ws, CABLE_SCHEDULE_HEADER_ROW + 1)
 
-        # Snapshot the full ferrule block from template rows 9-11.
-        # Read ALL columns from AK to max_column — covers TB markers, ferrule
-        # codes and anything else in the ferrule section — and copy them
-        # exactly (without modification) into every tag block in the output.
-        _ferrule_start = column_index_from_string("AK")
-        _ferrule_end = max(tmpl_ws.max_column, _ferrule_start)
-        ferrule_col_letters = tuple(
-            get_column_letter(c) for c in range(_ferrule_start, _ferrule_end + 1)
-        )
-        formula_block = _read_formula_block(
-            tmpl_ws,
-            start_row=CABLE_SCHEDULE_FIRST_DATA_ROW,
-            num_rows=ROWS_PER_TAG,
-            cols=ferrule_col_letters,
-        )
+        # ── Build header map: col_idx → normalised lower-case header text ────
+        # Combines main header row (7) and sub-header row (8).
+        header_map: dict[int, str] = {}
+        for hr_off in range(2):
+            for row in tmpl_ws.iter_rows(
+                min_row=CABLE_SCHEDULE_HEADER_ROW + hr_off,
+                max_row=CABLE_SCHEDULE_HEADER_ROW + hr_off,
+            ):
+                for col_idx, cell in enumerate(row, 1):
+                    val = getattr(cell, 'value', None)
+                    if val is not None and col_idx not in header_map:
+                        txt = str(val).strip()
+                        if txt:
+                            header_map[col_idx] = txt.lower()
 
-        # Also read ferrule column headers (template rows 7 and 8) so they
-        # appear in the output header rows as well.
-        ferrule_header_rows: dict[tuple[int, int], object] = {}
-        for _hoff in range(2):
-            _tmpl_hrow = CABLE_SCHEDULE_HEADER_ROW + _hoff
-            for _ci in range(_ferrule_start, _ferrule_end + 1):
-                _val = None
-                for _r in tmpl_ws.iter_rows(
-                    min_row=_tmpl_hrow, max_row=_tmpl_hrow,
-                    min_col=_ci, max_col=_ci, values_only=True,
-                ):
-                    _val = _r[0]
-                if _val is not None:
-                    ferrule_header_rows[(_hoff, _ci)] = _val
+        # Reverse: normalised text → col_idx
+        rev_hdr: dict[str, int] = {v: k for k, v in header_map.items()}
 
-        # ── Filter & sort IODB rows ──
-        work_df = df[df[jb_column].notna() & (df[jb_column].astype(str).str.strip() != "")].copy()
+        # ── Match IODB columns → template column indices (fuzzy) ─────────────
+        iodb_norm: dict[str, str] = {str(c).strip().lower(): str(c) for c in df.columns}
+        col_match: dict[str, int] = {}  # iodb_col_original → template_col_idx
+        for iodb_n, iodb_orig in iodb_norm.items():
+            if iodb_n in rev_hdr:
+                col_match[iodb_orig] = rev_hdr[iodb_n]
+            else:
+                for h_txt, h_col in rev_hdr.items():
+                    if (iodb_n in h_txt or h_txt in iodb_n) and len(iodb_n) >= 3:
+                        if iodb_orig not in col_match:
+                            col_match[iodb_orig] = h_col
+                        break
+
+        # ── Snapshot prototype block (template rows 9-11, ALL columns) ───────
+        # proto[row_offset][col_idx] = cell_value_or_formula_string
+        proto: dict[int, dict[int, object]] = {i: {} for i in range(ROWS_PER_TAG)}
+        for row_off in range(ROWS_PER_TAG):
+            src_r = CABLE_SCHEDULE_FIRST_DATA_ROW + row_off
+            for row in tmpl_ws.iter_rows(min_row=src_r, max_row=src_r):
+                for col_idx, cell in enumerate(row, 1):
+                    val = getattr(cell, 'value', None)
+                    if val is not None:
+                        proto[row_off][col_idx] = val
+
+        # ── Filter IODB: keep rows where JB has a real value (not "" or "-") ─
+        jb_str  = df[jb_column].astype(str).str.strip()
+        valid   = df[jb_column].notna() & (jb_str != "") & (jb_str != "-")
+        if not valid.any():
+            return None, None, (
+                f"No rows found in IODB where '{jb_column}' has a "
+                f"value other than blank or '-'."
+            )
+        work_df = df[valid].copy()
         work_df[jb_column] = work_df[jb_column].astype(str).str.strip()
 
-        # Natural sort by JB number
+        # Natural sort by JB column (ascending, handles mixed alpha-numeric)
         try:
-            work_df["_jb_sort"] = work_df[jb_column].apply(
-                lambda x: [int(t) if t.isdigit() else t for t in re.split(r'(\d+)', x)]
+            work_df["_jb_key"] = work_df[jb_column].apply(
+                lambda x: [int(t) if t.isdigit() else t.lower()
+                           for t in re.split(r'(\d+)', x)]
             )
-            work_df = work_df.sort_values("_jb_sort")
-            work_df = work_df.drop(columns=["_jb_sort"])
+            work_df = work_df.sort_values("_jb_key").drop(columns=["_jb_key"])
         except Exception:
             work_df = work_df.sort_values(jb_column)
 
-        # ── Group by JB, pad to MAX_TAGS_PER_JB with SPARE ──
-        groups = {}
-        for jb, grp in work_df.groupby(jb_column, sort=False):
-            groups[jb] = grp.to_dict("records")
+        # ── Build output workbook ─────────────────────────────────────────────
+        # Prefer: reload template_bytes in writable mode so the full template
+        # layout (merged cells, column widths, header styles) is preserved.
+        out_wb = None
+        if template_bytes:
+            for _opts in (
+                dict(keep_vba=False, read_only=False, keep_links=False),
+                dict(keep_vba=True,  read_only=False, keep_links=False),
+            ):
+                try:
+                    out_wb = openpyxl.load_workbook(io.BytesIO(template_bytes), **_opts)
+                    break
+                except Exception:
+                    continue
 
-        all_entries = []
-        for jb, rows in groups.items():
-            tag_rows = rows[:MAX_TAGS_PER_JB]
-            while len(tag_rows) < MAX_TAGS_PER_JB:
-                tag_rows.append({tag_column: "SPARE", jb_column: jb})
-            all_entries.append((jb, tag_rows))
+        if out_wb is None and not getattr(template_wb, 'read_only', True):
+            # Template already loaded writable — deep-copy it
+            try:
+                out_wb = _copy_workbook(template_wb)
+            except Exception:
+                pass
 
-        # ── Build a fresh output workbook ──
-        new_wb = openpyxl.Workbook()
-        ws = new_wb.active
-        ws.title = target_sheet
+        if out_wb is None:
+            # Last resort: fresh workbook + reconstruct headers from prototype data
+            out_wb = openpyxl.Workbook()
+            out_ws_new = out_wb.active
+            out_ws_new.title = target_sheet
+            for h_off in range(CABLE_SCHEDULE_FIRST_DATA_ROW - 1):
+                h_row = h_off + 1
+                for row in tmpl_ws.iter_rows(min_row=h_row, max_row=h_row):
+                    for cell in row:
+                        if cell.value is not None:
+                            oc = out_ws_new.cell(row=h_row, column=cell.column,
+                                                 value=cell.value)
+                            oc.font      = _CS_FONT_BOLD
+                            oc.alignment = _CS_ALIGN
 
-        # Write regular column headers from template
-        for col_name, col_idx in header_map.items():
-            hcell = ws.cell(row=1, column=col_idx, value=col_name.title())
-            hcell.alignment = _LIST_ALIGNMENT
-            hcell.font = _HEADER_FONT
-        for col_name, col_idx in sub_header_map.items():
-            if col_name:
-                hcell = ws.cell(row=2, column=col_idx, value=col_name)
-                hcell.alignment = _LIST_ALIGNMENT
-                hcell.font = _HEADER_FONT
-        # Write ferrule column headers — exact copy from template
-        for (row_off, col_idx), val in ferrule_header_rows.items():
-            hcell = ws.cell(row=row_off + 1, column=col_idx, value=val)
-            hcell.alignment = _LIST_ALIGNMENT
-            hcell.font = _HEADER_FONT
+        out_ws = out_wb[target_sheet]
 
-        current_row = 3
-        sl_no = 1
-        total_jbs = len(all_entries)
+        # Clear all pre-existing data rows (≥ FIRST_DATA_ROW)
+        for r_idx in range(CABLE_SCHEDULE_FIRST_DATA_ROW, out_ws.max_row + 1):
+            for row in out_ws.iter_rows(min_row=r_idx, max_row=r_idx):
+                for cell in row:
+                    try:
+                        cell.value = None
+                    except Exception:
+                        pass
 
-        for jb_idx, (jb_name, tag_rows) in enumerate(all_entries):
+        # ── Write data rows ───────────────────────────────────────────────────
+        current_row = CABLE_SCHEDULE_FIRST_DATA_ROW
+        sl_no       = 1
+        jb_order    = list(dict.fromkeys(work_df[jb_column]))  # preserves sort order, deduped
+        total       = len(jb_order)
+
+        for jb_idx, jb_name in enumerate(jb_order):
             if progress_callback:
-                progress_callback(jb_idx, total_jbs)
+                progress_callback(jb_idx, total)
 
-            for tag_entry in tag_rows:
-                is_spare = str(tag_entry.get(tag_column, "")).strip().upper() == "SPARE"
+            tag_entries = work_df[work_df[jb_column] == jb_name].to_dict('records')
 
-                # ── Row A (main data row) ──
-                _write_cable_row(
-                    ws, current_row, tag_entry, header_map,
-                    tag_column, jb_column, sl_no=sl_no,
-                )
+            for entry in tag_entries:
+                # 1. Copy the prototype block (all 3 rows) with formula adjustment
+                for row_off in range(ROWS_PER_TAG):
+                    dst_r = current_row + row_off
+                    src_r = CABLE_SCHEDULE_FIRST_DATA_ROW + row_off
 
-                # ── Paste full ferrule block for all 3 sub-rows ──
-                # Values are copied EXACTLY from the template (no overrides) so
-                # the ferrule side looks identical to the reference template.
-                for row_offset in range(ROWS_PER_TAG):
-                    target_r = current_row + row_offset
-                    for (tmpl_col_letter, tmpl_row_off_key), cell_val in formula_block.items():
-                        if tmpl_row_off_key == row_offset:
-                            col_idx = column_index_from_string(tmpl_col_letter)
-                            ws.cell(row=target_r, column=col_idx).value = cell_val
+                    for col_idx, proto_val in proto[row_off].items():
+                        try:
+                            c = out_ws.cell(row=dst_r, column=col_idx)
+                        except Exception:
+                            continue
+                        if isinstance(proto_val, str) and proto_val.startswith('='):
+                            c.value = _adjust_formula_row(proto_val, src_r, dst_r)
+                        else:
+                            c.value = proto_val
+                        c.font      = _CS_FONT
+                        c.alignment = _CS_ALIGN
 
-                # Apply formatting to all 3 rows
-                for row_offset in range(ROWS_PER_TAG):
-                    for cell in ws[current_row + row_offset]:
-                        cell.alignment = _LIST_ALIGNMENT
-                        cell.font = _LIST_FONT
+                # 2. Fill IODB values in main row (row_off=0); preserve formulas
+                dst_main = current_row
 
-                if not is_spare:
-                    sl_no += 1
+                # Serial number in column A (if not a formula)
+                sn = out_ws.cell(row=dst_main, column=1)
+                if not (isinstance(sn.value, str) and sn.value.startswith('=')):
+                    sn.value     = sl_no
+                    sn.font      = _CS_FONT
+                    sn.alignment = _CS_ALIGN
+
+                for iodb_col, tmpl_col_idx in col_match.items():
+                    try:
+                        c = out_ws.cell(row=dst_main, column=tmpl_col_idx)
+                    except Exception:
+                        continue
+                    if isinstance(c.value, str) and c.value.startswith('='):
+                        continue  # keep formula
+                    raw = entry.get(iodb_col)
+                    if raw is None or (isinstance(raw, float) and pd.isna(raw)):
+                        c.value = "TBA"
+                    elif str(raw).strip() in ("", "nan"):
+                        c.value = "TBA"
+                    else:
+                        c.value = str(raw).strip() if isinstance(raw, str) else raw
+                    c.font      = _CS_FONT
+                    c.alignment = _CS_ALIGN
+
+                sl_no      += 1
                 current_row += ROWS_PER_TAG
 
         if progress_callback:
-            progress_callback(total_jbs, total_jbs)
+            progress_callback(total, total)
 
-        out_bytes = workbook_to_bytes(new_wb)
+        out_bytes = workbook_to_bytes(out_wb)
         return out_bytes, "Cable_Schedule.xlsx", None
 
     except Exception as e:

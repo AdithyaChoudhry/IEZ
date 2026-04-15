@@ -22,8 +22,84 @@ def read_iodb(uploaded_file) -> tuple[pd.DataFrame | None, str | None]:
     """
     try:
         uploaded_file.seek(0)
-        df = pd.read_excel(uploaded_file, sheet_name="IODB", header=0)
-        # Drop fully empty rows
+        # First try a direct (case-sensitive) read for speed
+        try:
+            df = pd.read_excel(uploaded_file, sheet_name="IODB", header=0)
+            uploaded_file.seek(0)
+            df = df.dropna(how="all").reset_index(drop=True)
+            return df, None
+        except Exception:
+            uploaded_file.seek(0)
+
+        # Otherwise inspect workbook sheet names and try to find the best match.
+        uploaded_file.seek(0)
+        xls = pd.ExcelFile(uploaded_file)
+        names = xls.sheet_names
+
+        # 1) exact match (case-insensitive)
+        match = next((s for s in names if s.strip().lower() == 'iodb'), None)
+        # 2) substring match
+        if match is None:
+            match = next((s for s in names if 'iodb' in s.strip().lower()), None)
+
+        # 3) fallback: look for a sheet that contains a Tag-like column header
+        if match is None:
+            for s in names:
+                try:
+                    uploaded_file.seek(0)
+                    sample = pd.read_excel(uploaded_file, sheet_name=s, nrows=6)
+                    uploaded_file.seek(0)
+                except Exception:
+                    uploaded_file.seek(0)
+                    continue
+                cols_lower = [str(c).strip().lower() for c in sample.columns]
+                tag_keys = ('tag no', 'tag', 'tag number', 'tag_number')
+                if any(k in cols_lower for k in tag_keys):
+                    match = s
+                    break
+
+        if match is None:
+            return None, "Worksheet named 'IODB' not found. Please ensure the IODB sheet is present or contains a 'Tag' column."
+
+        # Read the detected sheet with header detection: sometimes the real
+        # header row is not the first row (leading notes/metadata). Try
+        # header=0 first, then probe header rows up to 10 to find a sensible
+        # header that contains a Tag-like column or has non-empty column names.
+        uploaded_file.seek(0)
+        df = pd.read_excel(uploaded_file, sheet_name=match, header=0)
+        # If columns are mostly unnamed or the standard tag column is missing,
+        # attempt to detect header row.
+        cols = [str(c) for c in df.columns]
+        unnamed_count = sum(1 for c in cols if c.startswith('Unnamed'))
+        tag_keys = ('tag no', 'tag', 'tag number', 'tag_number')
+        has_tag = any(k in [str(c).strip().lower() for c in cols] for k in tag_keys)
+
+        if unnamed_count > max(1, len(cols) // 2) or not has_tag:
+            # probe header rows and pick the best candidate by score.
+            # Score = 100 if contains tag-like header + number of non-unnamed columns.
+            best_score = -1
+            best_df = df
+            for hr in range(0, 11):
+                try:
+                    uploaded_file.seek(0)
+                    cand = pd.read_excel(uploaded_file, sheet_name=match, header=hr)
+                    uploaded_file.seek(0)
+                except Exception:
+                    uploaded_file.seek(0)
+                    continue
+                cand_cols_raw = list(cand.columns)
+                cand_cols = [str(c).strip().lower() for c in cand_cols_raw]
+                n_non_unnamed = sum(1 for c in cand_cols_raw if not str(c).startswith('Unnamed') and str(c).strip() != '')
+                has_tag_cand = any(k in cand_cols for k in tag_keys)
+                score = (100 if has_tag_cand else 0) + n_non_unnamed
+                if score > best_score:
+                    best_score = score
+                    best_df = cand
+                    # if candidate has tag header, it's the best possible — stop early
+                    if has_tag_cand:
+                        break
+            df = best_df
+
         df = df.dropna(how="all").reset_index(drop=True)
         return df, None
     except Exception as e:

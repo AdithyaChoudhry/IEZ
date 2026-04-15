@@ -791,7 +791,7 @@ def generate_loop_wiring(
         # ── 2. Locate tag column in input DataFrame ──────────────────────────
         tag_col = next(
             (c for c in lw_df.columns
-             if c.strip().lower() in ("tag no", "tag number", "tag no.")),
+             if c.strip().lower() in ("tag no", "tag number", "tag no.", "tag_nummber")),
             None,
         )
         if tag_col is None:

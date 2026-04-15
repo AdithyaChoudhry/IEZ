@@ -211,7 +211,7 @@ def get_iodb_tags(iodb_file, tag_column: str = "TAG NO") -> tuple[list[str] | No
         # try case-insensitive name match
         cols_lower = {str(c).strip().lower(): c for c in df.columns}
         found = None
-        for k in (tag_column.lower(), 'tag no', 'tag', 'tag number', 'tag_number'):
+        for k in (tag_column.lower(), 'tag no', 'tag', 'tag number', 'tag_number', 'tag_nummber'):
             if k in cols_lower:
                 found = cols_lower[k]
                 break
@@ -231,7 +231,7 @@ def get_iodb_tags(iodb_file, tag_column: str = "TAG NO") -> tuple[list[str] | No
                             iodb_file.seek(0)
                             continue
                         cand_cols = [str(c).strip().lower() for c in cand.columns]
-                        for k in ('tag no', 'tag', 'tag number', 'tag_number'):
+                        for k in ('tag no', 'tag', 'tag number', 'tag_number', 'tag_nummber'):
                             if k in cand_cols:
                                 found = cand.columns[cand_cols.index(k)]
                                 # re-read full df with detected header

@@ -53,7 +53,7 @@ def read_iodb(uploaded_file) -> tuple[pd.DataFrame | None, str | None]:
                     uploaded_file.seek(0)
                     continue
                 cols_lower = [str(c).strip().lower() for c in sample.columns]
-                tag_keys = ('tag no', 'tag', 'tag number', 'tag_number')
+                tag_keys = ('tag no', 'tag', 'tag number', 'tag_number', 'tag_nummber')
                 if any(k in cols_lower for k in tag_keys):
                     match = s
                     break
@@ -71,7 +71,7 @@ def read_iodb(uploaded_file) -> tuple[pd.DataFrame | None, str | None]:
         # attempt to detect header row.
         cols = [str(c) for c in df.columns]
         unnamed_count = sum(1 for c in cols if c.startswith('Unnamed'))
-        tag_keys = ('tag no', 'tag', 'tag number', 'tag_number')
+        tag_keys = ('tag no', 'tag', 'tag number', 'tag_number', 'tag_nummber')
         has_tag = any(k in [str(c).strip().lower() for c in cols] for k in tag_keys)
 
         if unnamed_count > max(1, len(cols) // 2) or not has_tag:
@@ -129,7 +129,9 @@ def read_loop_wiring_input(uploaded_file) -> tuple[pd.DataFrame | None, str | No
                     uploaded_file.seek(0)
                     # Check if 'Tag Number' column exists (case-insensitive)
                     cols_lower = [str(c).strip().lower() for c in df.columns]
-                    if "tag number" in cols_lower:
+                    # Accept common variants and known misspelling 'tag_nummber'
+                    tag_variants = ("tag number", "tag_no", "tag no", "tag", "tag_number", "tag_nummber")
+                    if any(k in cols_lower for k in tag_variants):
                         # Normalise column names
                         df.columns = [str(c).strip() for c in df.columns]
                         df = df.dropna(how="all").reset_index(drop=True)
@@ -137,7 +139,7 @@ def read_loop_wiring_input(uploaded_file) -> tuple[pd.DataFrame | None, str | No
                 except Exception:
                     uploaded_file.seek(0)
                     continue
-        return None, "Could not find a sheet with a 'Tag Number' column in the Loop Wiring Input file."
+        return None, "Could not find a sheet with a 'Tag Number' (or 'Tag_nummber') column in the Loop Wiring Input file."
     except Exception as e:
         return None, str(e)
 

@@ -751,13 +751,11 @@ def _write_cable_row(
 # ─────────────────────────────────────────────────────────────────────────────
 
 # The template sheet to use in the Loop Wiring template
-LOOP_WIRING_TEMPLATE_SHEET = "AI - INST"
-
-# Row 7 (1-based) in the AI-INST sheet contains input column headers:
-# Tag Number | Loop number | IO TYPE | JB No.  (columns Q-T, i.e. col 17-20)
-LOOP_WIRING_HEADER_ROW = 7
-# Row 8 is the first data row where values are filled in
-LOOP_WIRING_DATA_ROW = 8
+LOOP_WIRING_TEMPLATE_SHEET = "AI Instr"
+LOOP_WIRING_HEADER_ROW = 18        # Row containing column headers (W→AR)
+LOOP_WIRING_DATA_ROW   = 19        # Row where tag values are written
+LOOP_WIRING_COL_START  = 23        # Column W
+LOOP_WIRING_COL_END    = 44        # Column AR
 
 
 def generate_loop_wiring(
@@ -767,24 +765,18 @@ def generate_loop_wiring(
     template_bytes: bytes = None,
 ) -> tuple[bytes | None, str | None, str | None]:
     """
-    For each tag in the Loop Wiring Input file, duplicate the AI - INST template
-    sheet and fill data under the matching column headers in row 8.
+    For each tag in lw_df, copy the 'AI Instr' template sheet and fill
+    row 19 (columns W→AR) with matched IODB values.
 
-    Shapes/lines are preserved by injecting the template drawing XML at ZIP level
-    (openpyxl does not round-trip complex drawings).
+    Sheet preservation: copy_worksheet() keeps shapes, formulas, and
+    formatting intact. Drawing XML is also re-injected at ZIP level for
+    connectors / text-boxes that openpyxl cannot round-trip.
 
-    Args:
-        lw_df: DataFrame from the Loop Wiring Input file (has 'Tag Number' etc.)
-        template_wb: openpyxl Workbook loaded from the Loop Wiring template
-        progress_callback: optional callable(current, total)
-        template_bytes: raw bytes of the template file, used for drawing injection
-
-    Returns:
-        (bytes, "Loop_Wiring.xlsx", None) on success
-        (None, None, error_string) on failure
+    Returns (bytes, "Loop_Wiring.xlsx", None) on success,
+            (None, None, error_string) on failure.
     """
     try:
-        # Find template sheet (case-insensitive)
+        # ── 1. Find template sheet (case-insensitive) ────────────────────────
         template_sheet_name = next(
             (s for s in template_wb.sheetnames
              if s.strip().lower() == LOOP_WIRING_TEMPLATE_SHEET.lower()),
@@ -792,81 +784,77 @@ def generate_loop_wiring(
         )
         if not template_sheet_name:
             return None, None, (
-                f"Loop Wiring template does not contain sheet '{LOOP_WIRING_TEMPLATE_SHEET}'. "
-                f"Found: {template_wb.sheetnames}"
+                f"Loop Wiring template does not contain sheet "
+                f"'{LOOP_WIRING_TEMPLATE_SHEET}'. Found: {template_wb.sheetnames}"
             )
 
-        # Find 'Tag Number' column in the input DataFrame
+        # ── 2. Locate tag column in input DataFrame ──────────────────────────
         tag_col = next(
-            (c for c in lw_df.columns if c.strip().lower() == "tag number"),
+            (c for c in lw_df.columns
+             if c.strip().lower() in ("tag no", "tag number", "tag no.")),
             None,
         )
+        if tag_col is None:
+            tag_col = next(
+                (c for c in lw_df.columns if "tag" in c.strip().lower()),
+                None,
+            )
         if not tag_col:
-            return None, None, "Loop Wiring Input file does not have a 'Tag Number' column."
+            return None, None, "No 'Tag Number' column found in Loop Wiring input."
 
-        # Get the header row from the template sheet to know which columns map to what
         tmpl_ws = template_wb[template_sheet_name]
-        header_col_map = _get_loop_wiring_header_map(tmpl_ws, LOOP_WIRING_HEADER_ROW)
 
-        # Deep-copy the full template workbook into the output workbook.
-        # copy_worksheet() is used (not _copy_workbook + re-load) so that
-        # openpyxl's internal drawing/shape references stay intact within the
-        # SAME workbook object — shapes are preserved when copying within a wb.
-        out_wb = _copy_workbook(template_wb)
-
-        # Remove every sheet except the AI-INST template from the output wb
-        for sname in list(out_wb.sheetnames):
-            if sname != template_sheet_name:
-                del out_wb[sname]
-
-        # Rename the template so we can copy_worksheet from it repeatedly
-        out_wb[template_sheet_name].title = "_TEMPLATE_"
-        template_in_out = out_wb["_TEMPLATE_"]
+        # ── 3. Read headers from row 18, cols W(23)→AR(44) ──────────────────
+        header_col_map: dict[str, int] = {}
+        for col in range(LOOP_WIRING_COL_START, LOOP_WIRING_COL_END + 1):
+            hdr = tmpl_ws.cell(row=LOOP_WIRING_HEADER_ROW, column=col).value
+            if hdr is not None:
+                header_col_map[str(hdr).strip().lower()] = col
 
         tags = lw_df[tag_col].dropna().astype(str).str.strip().unique().tolist()
         total = len(tags)
 
+        # ── 4. One copied sheet per tag ──────────────────────────────────────
         for idx, tag in enumerate(tags):
             if progress_callback:
                 progress_callback(idx, total)
 
-            # copy_worksheet preserves cell values, formulas, styles AND drawings.
-            # openpyxl's copy_worksheet does a SHALLOW copy of the drawing, so every
-            # sheet ends up sharing the same drawing object — that causes missing shapes
-            # when saving.  deepcopy gives each sheet its own independent drawing tree.
-            new_ws = out_wb.copy_worksheet(template_in_out)
+            new_ws = template_wb.copy_worksheet(tmpl_ws)
             safe_tag = re.sub(r'[\\/*?:\[\]]', '_', tag)
-            new_ws.title = safe_tag[:31]
-            try:
-                if getattr(template_in_out, '_drawing', None) is not None:
-                    new_ws._drawing = copy.deepcopy(template_in_out._drawing)
-            except Exception:
-                pass  # prefer partial output over a crash
+            new_ws.title = f"Loop_{safe_tag}"[:31]
 
-            # Locate this tag's row in the input DataFrame
             tag_rows = lw_df[lw_df[tag_col].astype(str).str.strip() == tag]
             if tag_rows.empty:
                 continue
-            row_data = tag_rows.iloc[0].to_dict()
+            norm_row = {str(k).strip().lower(): v for k, v in tag_rows.iloc[0].items()}
 
-            # Fill data row — never touch the drawing layer
-            _fill_loop_wiring_row(new_ws, LOOP_WIRING_DATA_ROW, row_data, header_col_map)
+            for hdr_key, col in header_col_map.items():
+                value = norm_row.get(hdr_key)
+                if value is None:
+                    for rk, rv in norm_row.items():
+                        if hdr_key in rk or rk in hdr_key:
+                            value = rv
+                            break
+                cell = new_ws.cell(row=LOOP_WIRING_DATA_ROW, column=col)
+                if isinstance(cell.value, str) and cell.value.startswith("="):
+                    continue  # preserve formulas
+                if value is None or (isinstance(value, float) and pd.isna(value)):
+                    cell.value = "TBA"
+                else:
+                    cell.value = value
 
-        # Remove the placeholder template sheet from the output
-        del out_wb["_TEMPLATE_"]
+        # ── 5. Remove the original template sheet ────────────────────────────
+        del template_wb[template_sheet_name]
 
-        if not out_wb.sheetnames:
-            return None, None, "No sheets were generated. Check that tags exist in the input file."
+        if not template_wb.sheetnames:
+            return None, None, "No tag sheets were generated. Check that the input has tags."
 
         if progress_callback:
             progress_callback(total, total)
 
-        out_bytes = workbook_to_bytes(out_wb)
+        out_bytes = workbook_to_bytes(template_wb)
 
-        # Inject drawing shapes/lines from the template at ZIP level.
-        # openpyxl does not expose complex drawings (connectors, ovals, text-boxes)
-        # through its Python API; we must copy the raw drawing XML into the output
-        # zip so Excel/Numbers can render the same lines and shapes on every sheet.
+        # ── 6. Re-inject drawing XML for shapes/connectors at ZIP level ──────
         if template_bytes is not None:
             out_bytes = _inject_drawings_from_template(
                 out_bytes, template_bytes, template_sheet_name
@@ -876,50 +864,6 @@ def generate_loop_wiring(
 
     except Exception as e:
         return None, None, f"Loop Wiring generation failed: {e}"
-
-
-def _get_loop_wiring_header_map(ws, header_row: int) -> dict[str, int]:
-    """
-    Read the header row of the loop wiring template to map column names → column indices.
-    The template keeps input headers (Tag Number, Loop number, IO TYPE, JB No., etc.)
-    in specific columns of the header row.
-    Returns {normalised_col_name: col_index (1-based)}.
-    """
-    result = {}
-    for cell in ws[header_row]:
-        if cell.value is not None:
-            key = str(cell.value).strip().lower()
-            result[key] = cell.column
-    return result
-
-
-def _fill_loop_wiring_row(ws, data_row: int, row_data: dict, header_col_map: dict):
-    """
-    Fill data_row in the loop wiring sheet using header_col_map to find target columns.
-    - Only writes to cells that do NOT already contain a formula.
-    - Writes "TBA" for None / NaN values.
-    - Does not touch any drawing or shape objects.
-    """
-    # Normalise input row keys to lowercase for case-insensitive matching
-    norm_row = {str(k).strip().lower(): v for k, v in row_data.items()}
-
-    for header_key, col_idx in header_col_map.items():
-        value = norm_row.get(header_key)
-        # Also try partial / alias matches for common column name variations
-        if value is None:
-            for rk, rv in norm_row.items():
-                if header_key in rk or rk in header_key:
-                    value = rv
-                    break
-        cell = ws.cell(row=data_row, column=col_idx)
-        if isinstance(cell.value, str) and cell.value.startswith("="):
-            continue  # never overwrite formulas
-        if value is None or (isinstance(value, float) and pd.isna(value)):
-            # Only write TBA if the cell is currently empty
-            if cell.value is None:
-                cell.value = "TBA"
-        else:
-            cell.value = value
 
 
 # ─────────────────────────────────────────────────────────────────────────────

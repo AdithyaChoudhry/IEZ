@@ -1417,69 +1417,46 @@ def generate_iodb_validation(
                         f"Instrument Range unit '{iu}'", 8))
 
         # ══════════════════════════════════════════════════════════════════════
-        # RULE 9 — FAIL ACTION must be FAIL OPEN/FAIL CLOSE, FO/FC, or LAST POS
+        # RULE 9 — FAIL ACTION must be FO, FC, or LAST POS
         # ══════════════════════════════════════════════════════════════════════
         if fail_col:
-            # Accept both short and long forms: FO/FC or FAIL OPEN/FAIL CLOSE
-            _valid_fa = {"FO", "FC", "FAIL OPEN", "FAIL CLOSE", "LAST POS", "-", "NA", "N/A"}
+            _valid_fa = {"FO", "FC", "LAST POS", "-", "NA", "N/A",
+                         "FAIL OPEN", "FAIL CLOSE"}
             for i in range(len(df)):
-                fa_raw = df.iloc[i][fail_col]
-                fa = _val_norm(fa_raw)
+                fa = _val_norm(df.iloc[i][fail_col])
                 if fa and fa not in _valid_fa:
                     errors.append(_err(i, fail_col,
-                        f"Fail action '{fa_raw}' is invalid — allowed: FAIL OPEN, FAIL CLOSE, LAST POS, or '-'", 9))
-
+                        f"Fail action '{fa}' is invalid — allowed: "
+                        "FO (Fail Open), FC (Fail Close), LAST POS", 9))
 
         # ══════════════════════════════════════════════════════════════════════
         # RULE 10 — SETPOINT ALARM ORDER: LL < L < H < HH
-        # Must check the explicit IODB headers (e.g., SET POINT ALARM LOW LOW(BE),
-        # SET POINT ALARM(BF), SET POINT FOR ALARM HIGH(BG), SET POINT FOR ALARM HIGH HIGH(BH)).
-        # For each adjacent pair, if both values are present and numeric, verify lower < upper.
-        # Error message must name the lesser column and the greater column with values.
+        # Checks each adjacent pair and reports a specific message per violation.
         # ══════════════════════════════════════════════════════════════════════
-        # Candidate header names (prefer these exact phrases)
-        ll_candidates = [
-            "SET POINT ALARM LOW LOW", "SET POINT FOR ALARM LOW LOW", "LOW LOW ALARM", "LL"
-        ]
-        l_candidates = [
-            "SET POINT ALARM", "SET POINT FOR ALARM", "LOW ALARM", "L"
-        ]
-        h_candidates = [
-            "SET POINT FOR ALARM HIGH", "SET POINT ALARM HIGH", "HIGH ALARM", "H"
-        ]
-        hh_candidates = [
-            "SET POINT FOR ALARM HIGH HIGH", "SET POINT ALARM HIGH HIGH", "HIGH HIGH ALARM", "HH"
-        ]
-
-        def _first(cands):
-            for nm in cands:
-                found = _val_find_col_exact(df, nm)
-                if found is not None:
-                    return found
-            return None
-
-        llc = _first(ll_candidates) or ll_col
-        lc  = _first(l_candidates)  or l_col
-        hc  = _first(h_candidates)  or h_col
-        hhc = _first(hh_candidates) or hh_col
-
-        if all(c is not None for c in (llc, lc, hc, hhc)):
-            pairs = [(llc, lc), (lc, hc), (hc, hhc)]
-            SKIP_SET = {"-", "N/A", "NA", "N.A.", "TBA", ""}
+        if all(c is not None for c in (ll_col, l_col, h_col, hh_col)):
+            _sp_pairs = [
+                (ll_col, l_col),   # LL must be < L
+                (l_col,  h_col),   # L  must be < H
+                (h_col,  hh_col),  # H  must be < HH
+            ]
+            _SP_SKIP = {"-", "N/A", "NA", "N.A.", "TBA", ""}
             for i in range(len(df)):
-                for lower_col, upper_col in pairs:
+                for lower_col, upper_col in _sp_pairs:
                     try:
                         lv = df.iloc[i][lower_col]
                         uv = df.iloc[i][upper_col]
                         if (_val_empty(lv) or _val_empty(uv)
-                                or _val_norm(lv) in SKIP_SET
-                                or _val_norm(uv) in SKIP_SET):
+                                or _val_norm(lv) in _SP_SKIP
+                                or _val_norm(uv) in _SP_SKIP):
                             continue
-                        lower_val = float(str(lv).strip().replace(',', ''))
-                        upper_val = float(str(uv).strip().replace(',', ''))
+                        lower_val = float(str(lv).strip())
+                        upper_val = float(str(uv).strip())
                         if not lower_val < upper_val:
+                            # upper_val is numerically less (but should be greater)
                             errors.append(_err(i, upper_col,
-                                f"The following value ({lower_col}) in Set point ({lower_val:g}) can not be lesser than the following set point value ({upper_col}) ({upper_val:g})", 10))
+                                f"The following value {upper_val:g} ({upper_col}) "
+                                f"in Set point can not be lesser than the Following "
+                                f"set point value {lower_val:g} ({lower_col})", 10))
                     except (ValueError, TypeError):
                         pass
 

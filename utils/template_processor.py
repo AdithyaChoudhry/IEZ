@@ -267,7 +267,7 @@ def get_iodb_dataframe(iodb_file) -> tuple[pd.DataFrame | None, str | None]:
 def process_iodb_validation(
     raw_bytes: bytes,
     auto_correct_spelling: bool = False,
-) -> tuple[bytes | None, bytes | None, list[dict], str | None]:
+) -> tuple[bytes | None, bytes | None, bytes | None, list[dict], str | None]:
     """
     Drive the full IODB validation pipeline.
 
@@ -275,6 +275,7 @@ def process_iodb_validation(
     -------
     error_log_bytes   : Excel validation report (two sheets)
     highlighted_bytes : Original workbook with error cells colour-coded
+    tba_bytes         : Excel listing every cell whose value is "TBA"
     errors            : List of error dicts for Streamlit display
     error_message     : None on success; human-readable string on failure
     """
@@ -282,7 +283,8 @@ def process_iodb_validation(
         buf = io.BytesIO(raw_bytes)
         df  = pd.read_excel(buf, sheet_name=0, header=0)
         df.columns = [str(c).strip() for c in df.columns]
-        df = df.dropna(how="all").reset_index(drop=True)
+        # Preserve original index so Excel row numbers are correct after dropna
+        df = df.dropna(how="all")
 
         buf2 = io.BytesIO(raw_bytes)
         wb, _, err = load_workbook_from_upload(buf2)
@@ -292,4 +294,4 @@ def process_iodb_validation(
         return generate_iodb_validation(df, wb, auto_correct_spelling)
     except Exception as exc:
         import traceback
-        return None, None, [], f"Failed to process file: {exc}\n{traceback.format_exc()}"
+        return None, None, None, [], f"Failed to process file: {exc}\n{traceback.format_exc()}"

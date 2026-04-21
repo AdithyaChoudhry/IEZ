@@ -655,7 +655,7 @@ def render_iodb_validation():
     if st.button("🔍 Run Validation", type="primary", disabled=(iodb_file is None)):
         with st.spinner("Running validation…"):
             raw_bytes = iodb_file.getvalue()
-            log_bytes, hl_bytes, errs, err_msg = process_iodb_validation(
+            log_bytes, hl_bytes, tba_bytes, errs, err_msg = process_iodb_validation(
                 raw_bytes, auto_correct_spelling=auto_correct
             )
         if err_msg:
@@ -664,10 +664,12 @@ def render_iodb_validation():
             st.session_state["_val_errors"]      = errs
             st.session_state["_val_err_log"]     = log_bytes
             st.session_state["_val_highlighted"] = hl_bytes
+            st.session_state["_val_tba"]         = tba_bytes
 
     errors    = st.session_state.get("_val_errors")
     log_bytes = st.session_state.get("_val_err_log")
     hl_bytes  = st.session_state.get("_val_highlighted")
+    tba_bytes = st.session_state.get("_val_tba")
 
     if errors is not None:
         if not errors:
@@ -703,15 +705,12 @@ def render_iodb_validation():
                 )
                 with st.expander(label, expanded=False):
                     for e in row_errs:
-                        badge = (
-                            "🔴" if e["rule"] == 1
-                            else "🔵" if e["rule"] == 12
-                            else "🟡"
-                        )
+                        # Display only the error (no badge, no rule label)
+                        # Show the location then centre the error message
                         st.markdown(
-                            f"`[Row {e['row']} | S.NO: {e['sno']} | TAG: {e['tag']} "
-                            f"| Column: {e['column']} | Cell: {e['cell']}]`  \n"
-                            f"{badge} **Rule {e['rule']}** — {e['message']}"
+                            f"`[Row {e['row']} | S.NO: {e['sno']} | TAG: {e['tag']} | Column: {e['column']} | Cell: {e['cell']}]`  \n"
+                            f"<div style=\"text-align:center; margin-top:6px;\">→ {e['message']}</div>",
+                            unsafe_allow_html=True,
                         )
 
             st.markdown("---")
@@ -732,6 +731,17 @@ def render_iodb_validation():
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     key="dl_val_hl",
                 )
+
+    # TBA download is always shown once validation has run (independent of errors)
+    if tba_bytes:
+        st.markdown("---")
+        st.download_button(
+            label="📥 Download TBA Details (Excel)",
+            data=tba_bytes,
+            file_name="TBA details.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="dl_val_tba",
+        )
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -1201,14 +1201,13 @@ def generate_iodb_validation(
     df: pd.DataFrame,
     wb: openpyxl.Workbook,
     auto_correct_spelling: bool = False,
-) -> tuple[bytes | None, bytes | None, list[dict], str | None]:
+) -> tuple[bytes | None, bytes | None, bytes | None, list[dict], str | None]:
     """
     Run all 12 IODB validation rules on *df* and return:
 
       error_log_bytes   — Formatted Excel validation report
       highlighted_bytes — Original workbook with error cells highlighted
-                          (red = empty, amber = logic, blue = spelling,
-                           green = auto-corrected spelling when requested)
+      tba_bytes         — Excel listing every cell whose value is "TBA"
       errors            — List of error dicts for Streamlit display
       error_message     — None on success; string description on failure
 
@@ -1229,6 +1228,7 @@ def generate_iodb_validation(
         scope_col  = _val_find_col(df, "SCOPE OF SUPPLY", "SUPPLY SCOPE", "SCOPE")
         vendor_col = _val_find_col(df, "VENDOR PACKAGE", "VENDOR PKG", "VENDOR PACKAGE NAME")
         itype_col  = _val_find_col(df, "INSTRUMENT TYPE", "INST TYPE")
+        iname_col  = _val_find_col(df, "INSTRUMENT NAME", "INSTR NAME", "INST NAME")
         power_col  = _val_find_col(df, "POWER SUPPLY")
         wire_col   = _val_find_col(df, "2 WIRE/4 WIRE", "2WIRE/4WIRE", "2WIRE 4WIRE", "WIRE TYPE")
         signal_col = _val_find_col(df, "SIGNAL I/O TYPE", "SIGNAL TYPE", "I/O TYPE", "IO TYPE", "SIGNAL IO TYPE")
@@ -1255,14 +1255,24 @@ def generate_iodb_validation(
         # ── Error builder ─────────────────────────────────────────────────────
         def _err(i: int, col: str, msg: str, rule: int) -> dict:
             """Build a standardised error dict for row i (0-based df index)."""
-            row_idx = i + 2                                     # Excel row
+            # Use the original DataFrame index (preserved from read_excel) so
+            # that rows dropped by dropna don't shift the Excel row number.
+            row_idx = int(df.index[i]) + 2                     # Excel row
             ci      = _val_col_idx(col_names, col)
             sno_v   = "UNKNOWN"
             tag_v   = "UNKNOWN"
             if sno_col:
                 sv = df.iloc[i].get(sno_col, "")
                 if not _val_empty(sv):
-                    sno_v = str(sv).strip()
+                    # Format S.NO without trailing .0 when numeric
+                    try:
+                        fsv = float(sv)
+                        if float(fsv).is_integer():
+                            sno_v = str(int(fsv))
+                        else:
+                            sno_v = str(fsv)
+                    except Exception:
+                        sno_v = str(sv).strip()
             if tag_col:
                 tv = df.iloc[i].get(tag_col, "")
                 if not _val_empty(tv):
@@ -1313,20 +1323,20 @@ def generate_iodb_validation(
                         "Instrument is under Vendor package scope so Vendor package name should be mentioned", 3))
 
         # ══════════════════════════════════════════════════════════════════════
-        # RULE 4 — TAG NO keyword vs INSTRUMENT TYPE (substring mapping)
+        # RULE 4 — TAG NO keyword vs INSTRUMENT NAME (substring mapping)
         # ══════════════════════════════════════════════════════════════════════
-        if tag_col and itype_col:
+        if tag_col and iname_col:
             for i in range(len(df)):
                 tag_v  = _val_norm(df.iloc[i][tag_col])
-                itype  = _val_norm(df.iloc[i][itype_col])
-                if not tag_v or not itype:
+                iname  = _val_norm(df.iloc[i][iname_col])
+                if not tag_v or not iname:
                     continue
                 for key in _TAG_KEYS_SORTED:
                     if key in tag_v:
                         expected = _TAG_TYPE_MAP[key].upper()
-                        if itype != expected:
-                            errors.append(_err(i, itype_col,
-                                f"Instrument Type mismatch with TAG NO "
+                        if iname != expected:
+                            errors.append(_err(i, iname_col,
+                                f"Instrument Name mismatch with TAG NO "
                                 f"(TAG contains '{key}', expected: {_TAG_TYPE_MAP[key]})", 4))
                         break
 
@@ -1468,6 +1478,8 @@ def generate_iodb_validation(
                 "flanged", "threaded", "diaphragm", "capillary", "impulse",
                 "pulsation", "dampener", "manifold", "multipoint", "thermocouple",
                 "rtd", "pvdf", "ptfe", "hastelloy", "inconel",
+                # common engineering abbreviations & units that should not be flagged
+                "sqmm", "sq.mm", "mm2", "mm²", "sqm", "m2", "cm2",
             ])
             # Skip columns that are code/numeric fields
             _SKIP_SPELL = {
@@ -1506,8 +1518,8 @@ def generate_iodb_validation(
                             errors.append(_err(i, col,
                                 f"Possible spelling: '{wrong}' → "
                                 f"suggested: '{correct}'", 12))
-                            row_idx = i + 2
-                            spell_corrections.setdefault((row_idx, col), []).append(
+                            exc_row = int(df.index[i]) + 2
+                            spell_corrections.setdefault((exc_row, col), []).append(
                                 (wrong, correct)
                             )
 
@@ -1559,8 +1571,9 @@ def generate_iodb_validation(
         _c_aln   = Alignment(horizontal="center", vertical="center", wrap_text=True)
         _l_aln   = Alignment(horizontal="left",   vertical="center", wrap_text=True)
 
-        log_cols   = ["Row #", "S.NO", "TAG NO", "Column", "Cell", "Rule", "Error Message"]
-        log_widths = [8, 12, 24, 28, 8, 10, 65]
+        # Remove 'Row #' and 'Rule' columns per user request
+        log_cols   = ["S.NO", "TAG NO", "Column", "Cell", "Error Message"]
+        log_widths = [12, 24, 28, 12, 90]
 
         for ci, (hdr_txt, w) in enumerate(zip(log_cols, log_widths), start=1):
             c = rpt_ws.cell(row=1, column=ci, value=hdr_txt)
@@ -1573,15 +1586,16 @@ def generate_iodb_validation(
         for ri, e in enumerate(errors, start=2):
             rfill = _VAL_ROW_FILL_A if ri % 2 == 0 else _VAL_ROW_FILL_B
             vals  = [
-                e["row"], e["sno"], e["tag"],
+                e["sno"], e["tag"],
                 e["column"], e["cell"],
-                f"Rule {e['rule']}", e["message"],
+                e["message"],
             ]
             for ci2, val in enumerate(vals, start=1):
                 c = rpt_ws.cell(row=ri, column=ci2, value=val)
                 c.font  = _dfont
                 c.fill  = rfill
-                c.alignment = _c_aln if ci2 <= 6 else _l_aln
+                # Centre all columns including the Error Message column
+                c.alignment = _c_aln
             rpt_ws.row_dimensions[ri].height = 20
 
         # Freeze header row
@@ -1624,8 +1638,64 @@ def generate_iodb_validation(
             sum_ws.cell(row=sri, column=2, value=rule_ct[rn]).font = d_font
 
         log_bytes = workbook_to_bytes(log_wb)
-        return log_bytes, highlighted_bytes, errors, None
+
+        # ══════════════════════════════════════════════════════════════════════
+        # BUILD TBA DETAILS EXCEL
+        # Scan every cell for the literal value "TBA" and list them.
+        # ══════════════════════════════════════════════════════════════════════
+        tba_rows: list[dict] = []
+        for col in col_names:
+            ci_tba = _val_col_idx(col_names, col)
+            for i in range(len(df)):
+                v = df.iloc[i][col]
+                if not _val_empty(v) and str(v).strip().upper() == "TBA":
+                    orig_row = int(df.index[i]) + 2
+                    sno_v_t = "UNKNOWN"
+                    tag_v_t = "UNKNOWN"
+                    if sno_col:
+                        sv = df.iloc[i].get(sno_col, "")
+                        if not _val_empty(sv):
+                            try:
+                                fsv = float(sv)
+                                sno_v_t = str(int(fsv)) if float(fsv).is_integer() else str(fsv)
+                            except Exception:
+                                sno_v_t = str(sv).strip()
+                    if tag_col:
+                        tv = df.iloc[i].get(tag_col, "")
+                        if not _val_empty(tv):
+                            tag_v_t = str(tv).strip()
+                    tba_rows.append({
+                        "sno":    sno_v_t,
+                        "tag":    tag_v_t,
+                        "column": col,
+                        "cell":   _val_addr(ci_tba, orig_row),
+                    })
+
+        tba_wb = openpyxl.Workbook()
+        tba_ws = tba_wb.active
+        tba_ws.title = "TBA Details"
+        tba_hdrs   = ["S.NO", "TAG NO", "Column", "Cell"]
+        tba_widths = [12, 28, 32, 12]
+        for ci, (hdr_txt, w) in enumerate(zip(tba_hdrs, tba_widths), start=1):
+            c = tba_ws.cell(row=1, column=ci, value=hdr_txt)
+            c.fill = _VAL_HDR_FILL
+            c.font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+            c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            tba_ws.column_dimensions[get_column_letter(ci)].width = w
+        tba_ws.row_dimensions[1].height = 22
+        for ri, row in enumerate(tba_rows, start=2):
+            rfill = _VAL_ROW_FILL_A if ri % 2 == 0 else _VAL_ROW_FILL_B
+            for ci2, val in enumerate([row["sno"], row["tag"], row["column"], row["cell"]], start=1):
+                c = tba_ws.cell(row=ri, column=ci2, value=val)
+                c.font = Font(name="Calibri", size=11)
+                c.fill = rfill
+                c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            tba_ws.row_dimensions[ri].height = 20
+        tba_ws.freeze_panes = "A2"
+        tba_bytes = workbook_to_bytes(tba_wb)
+
+        return log_bytes, highlighted_bytes, tba_bytes, errors, None
 
     except Exception as exc:
         import traceback
-        return None, None, [], f"Validation failed: {exc}\n{traceback.format_exc()}"
+        return None, None, None, [], f"Validation failed: {exc}\n{traceback.format_exc()}"

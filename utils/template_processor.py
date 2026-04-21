@@ -281,7 +281,10 @@ def process_iodb_validation(
     """
     try:
         buf = io.BytesIO(raw_bytes)
-        df  = pd.read_excel(buf, sheet_name=0, header=0)
+        # keep_default_na=False so literal "NA", "N/A", "TBA", "-" etc. are
+        # kept as strings and don't get silently treated as empty cells.
+        df  = pd.read_excel(buf, sheet_name=0, header=0,
+                            keep_default_na=False, na_values=[''])
         df.columns = [str(c).strip() for c in df.columns]
         # Preserve original index so Excel row numbers are correct after dropna
         df = df.dropna(how="all")

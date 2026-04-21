@@ -1239,11 +1239,21 @@ def generate_iodb_validation(
         calu_col   = _val_find_col(df, "CALIBRATION UNIT", "CAL UNIT", "CALIB UNIT")
         instu_col  = _val_find_col(df, "INST RANGE UNIT", "INST UNIT", "INSTRUMENT UNIT", "INST RANGE UNITS")
         fail_col   = _val_find_col(df, "FAIL ACTION", "FAIL SAFE", "FAILURE ACTION")
-        # Alarm columns: use EXACT match to avoid "FLOW" matching "LOW" etc.
-        ll_col = _val_find_col_exact(df, "LOW LOW", "LOLO", "LL", "L.L.", "LOW LOW ALARM", "LLLL")
-        l_col  = _val_find_col_exact(df, "LOW", "LO", "L", "LOW ALARM")
-        h_col  = _val_find_col_exact(df, "HIGH", "HI", "H", "HIGH ALARM")
-        hh_col = _val_find_col_exact(df, "HIGH HIGH", "HIHI", "HH", "H.H.", "HIGH HIGH ALARM", "HHHH")
+        # Alarm / setpoint columns for Rule 10 — exact match only to avoid
+        # substring collisions.  User's IODB names are the first candidates;
+        # generic short-names are kept as fallbacks.
+        ll_col = _val_find_col_exact(df,
+            "SET POINT ALARM LOW LOW", "SET POINT FOR ALARM LOW LOW",
+            "SETPOINT ALARM LOW LOW", "LOW LOW ALARM", "LOW LOW", "LOLO", "LL")
+        l_col  = _val_find_col_exact(df,
+            "SET POINT ALARM", "SET POINT FOR ALARM",
+            "SETPOINT ALARM", "LOW ALARM", "LOW", "LO")
+        h_col  = _val_find_col_exact(df,
+            "SET POINT FOR ALARM HIGH", "SET POINT ALARM HIGH",
+            "SETPOINT FOR ALARM HIGH", "HIGH ALARM", "HIGH", "HI")
+        hh_col = _val_find_col_exact(df,
+            "SET POINT FOR ALARM HIGH HIGH", "SET POINT ALARM HIGH HIGH",
+            "SETPOINT FOR ALARM HIGH HIGH", "HIGH HIGH ALARM", "HIGH HIGH", "HIHI", "HH")
         # Prevent l_col / h_col from aliasing the LL/HH column
         if l_col and l_col == ll_col:
             l_col = None
@@ -1410,7 +1420,7 @@ def generate_iodb_validation(
         # RULE 9 — FAIL ACTION must be FO, FC, or LAST POS
         # ══════════════════════════════════════════════════════════════════════
         if fail_col:
-            _valid_fa = {"FO", "FC", "LAST POS", "-"}
+            _valid_fa = {"FO", "FC", "LAST POS", "-", "NA", "N/A"}
             for i in range(len(df)):
                 fa = _val_norm(df.iloc[i][fail_col])
                 if fa and fa not in _valid_fa:
@@ -1419,27 +1429,35 @@ def generate_iodb_validation(
                         "FO (Fail Open), FC (Fail Close), LAST POS", 9))
 
         # ══════════════════════════════════════════════════════════════════════
-        # RULE 10 — ALARM SETPOINT ORDER: LL < L < H < HH
+        # RULE 10 — SETPOINT ALARM ORDER: LL < L < H < HH
+        # Checks each adjacent pair and reports a specific message per violation.
         # ══════════════════════════════════════════════════════════════════════
         if all(c is not None for c in (ll_col, l_col, h_col, hh_col)):
+            _sp_pairs = [
+                (ll_col, l_col),   # LL must be < L
+                (l_col,  h_col),   # L  must be < H
+                (h_col,  hh_col),  # H  must be < HH
+            ]
+            _SP_SKIP = {"-", "N/A", "NA", "N.A.", "TBA", ""}
             for i in range(len(df)):
-                try:
-                    vals: list[float] = []
-                    skip = False
-                    for ac in (ll_col, l_col, h_col, hh_col):
-                        v = df.iloc[i][ac]
-                        if _val_empty(v) or str(v).strip() in ("-", "N/A", "NA"):
-                            skip = True
-                            break
-                        vals.append(float(str(v).strip()))
-                    if not skip and len(vals) == 4:
-                        if not (vals[0] < vals[1] < vals[2] < vals[3]):
-                            errors.append(_err(i, ll_col,
-                                f"Alarm set points are not in correct order — "
-                                f"LL={vals[0]}, L={vals[1]}, H={vals[2]}, HH={vals[3]} "
-                                f"(required: LL < L < H < HH)", 10))
-                except (ValueError, TypeError):
-                    pass
+                for lower_col, upper_col in _sp_pairs:
+                    try:
+                        lv = df.iloc[i][lower_col]
+                        uv = df.iloc[i][upper_col]
+                        if (_val_empty(lv) or _val_empty(uv)
+                                or _val_norm(lv) in _SP_SKIP
+                                or _val_norm(uv) in _SP_SKIP):
+                            continue
+                        lower_val = float(str(lv).strip())
+                        upper_val = float(str(uv).strip())
+                        if not lower_val < upper_val:
+                            # upper_val is numerically less (but should be greater)
+                            errors.append(_err(i, upper_col,
+                                f"The following value {upper_val:g} ({upper_col}) "
+                                f"in Set point can not be lesser than the Following "
+                                f"set point value {lower_val:g} ({lower_col})", 10))
+                    except (ValueError, TypeError):
+                        pass
 
         # ══════════════════════════════════════════════════════════════════════
         # RULE 11 — S.NO must be strictly ascending
@@ -1674,7 +1692,7 @@ def generate_iodb_validation(
         tba_wb = openpyxl.Workbook()
         tba_ws = tba_wb.active
         tba_ws.title = "TBA Details"
-        tba_hdrs   = ["S.NO", "TAG NO", "Column", "Cell"]
+        tba_hdrs   = ["S.NO", "TAG NO", "Column Name", "Cell"]
         tba_widths = [12, 28, 32, 12]
         for ci, (hdr_txt, w) in enumerate(zip(tba_hdrs, tba_widths), start=1):
             c = tba_ws.cell(row=1, column=ci, value=hdr_txt)

@@ -17,6 +17,7 @@ from utils.template_processor import (
     process_datasheets,
     process_cable_schedule,
     process_loop_wiring,
+    process_iodb_validation,
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -133,6 +134,7 @@ MODULES = [
     "📄  Data Sheet",
     "🔗  Cable Schedule",
     "🔄  Loop Wiring",
+    "🔍  IODB Validation",
 ]
 
 with st.sidebar:
@@ -606,6 +608,133 @@ def render_loop_wiring():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# 6. IODB Validation
+# ─────────────────────────────────────────────────────────────────────────────
+
+def render_iodb_validation():
+    st.markdown("## 🔍 IODB Validation")
+    st.markdown(
+        "Upload your IODB Excel file to run 12 automated validation rules. "
+        "Download a colour-coded highlighted file and a full error log."
+    )
+
+    with st.expander("📋 Validation Rules Applied", expanded=False):
+        st.markdown(
+            """
+| Rule | Description |
+|------|-------------|
+| 1    | All non-status/remarks cells must be filled |
+| 2    | Hazardous area → IS type; Safe area → NIS type |
+| 3    | Non-WABAG scope must have a Vendor Package name |
+| 4    | TAG NO keyword must match Instrument Type |
+| 4B   | TAG NO must be fully uppercase |
+| 5    | Non-24V-DC power + not 4-wire → mismatch error |
+| 6    | AI signals → AJB; DI/DO signals → DJB |
+| 7    | Calibration range max must not exceed Instrument range max |
+| 8    | Calibration unit must match Instrument range unit |
+| 9    | Fail Action must be FO, FC, or LAST POS |
+| 10   | Alarm setpoints must follow LL < L < H < HH |
+| 11   | S.NO must be strictly ascending |
+| 12   | Spelling check on free-text columns |
+"""
+        )
+
+    iodb_file = st.file_uploader(
+        "Upload IODB Excel",
+        type=["xlsx", "xls"],
+        key="iodb_upload",
+        help="Row 1 must be column headers; Row 2 onwards are data rows.",
+    )
+
+    auto_correct = st.checkbox(
+        "Auto-correct spelling in highlighted output",
+        value=False,
+        help="When enabled, likely misspelled words are replaced and highlighted green.",
+    )
+
+    if st.button("🔍 Run Validation", type="primary", disabled=(iodb_file is None)):
+        with st.spinner("Running validation…"):
+            raw_bytes = iodb_file.getvalue()
+            log_bytes, hl_bytes, errs, err_msg = process_iodb_validation(
+                raw_bytes, auto_correct_spelling=auto_correct
+            )
+        if err_msg:
+            st.error(f"Validation error: {err_msg}")
+        else:
+            st.session_state["_val_errors"]      = errs
+            st.session_state["_val_err_log"]     = log_bytes
+            st.session_state["_val_highlighted"] = hl_bytes
+
+    errors    = st.session_state.get("_val_errors")
+    log_bytes = st.session_state.get("_val_err_log")
+    hl_bytes  = st.session_state.get("_val_highlighted")
+
+    if errors is not None:
+        if not errors:
+            st.success("✅ No validation errors found — IODB looks good!")
+        else:
+            r1    = [e for e in errors if e["rule"] == 1]
+            r2_10 = [e for e in errors if 2 <= e["rule"] <= 10]
+            r11   = [e for e in errors if e["rule"] == 11]
+            r12   = [e for e in errors if e["rule"] == 12]
+
+            c1, c2, c3, c4, c5 = st.columns(5)
+            c1.metric("Total Errors", len(errors))
+            c2.metric("Empty Cells",  len(r1),    delta_color="off")
+            c3.metric("Logic Errors", len(r2_10), delta_color="off")
+            c4.metric("Order Errors", len(r11),   delta_color="off")
+            c5.metric("Spelling",     len(r12),   delta_color="off")
+
+            st.markdown("---")
+
+            from collections import defaultdict
+            by_row: dict = defaultdict(list)
+            for e in errors:
+                by_row[e["row"]].append(e)
+
+            st.markdown(f"### Errors by Row ({len(by_row)} rows affected)")
+            for row_num in sorted(by_row):
+                row_errs = by_row[row_num]
+                first    = row_errs[0]
+                label = (
+                    f"Row {row_num}  |  S.NO: {first['sno']}  "
+                    f"|  TAG: {first['tag']}  "
+                    f"|  {len(row_errs)} error(s)"
+                )
+                with st.expander(label, expanded=False):
+                    for e in row_errs:
+                        badge = (
+                            "🔴" if e["rule"] == 1
+                            else "🔵" if e["rule"] == 12
+                            else "🟡"
+                        )
+                        st.markdown(
+                            f"`[Row {e['row']} | S.NO: {e['sno']} | TAG: {e['tag']} "
+                            f"| Column: {e['column']} | Cell: {e['cell']}]`  \n"
+                            f"{badge} **Rule {e['rule']}** — {e['message']}"
+                        )
+
+            st.markdown("---")
+            col_dl1, col_dl2 = st.columns(2)
+            if log_bytes:
+                col_dl1.download_button(
+                    label="📥 Download Error Log (Excel)",
+                    data=log_bytes,
+                    file_name="IODB_Validation_Report.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="dl_val_log",
+                )
+            if hl_bytes:
+                col_dl2.download_button(
+                    label="📥 Download Highlighted Excel",
+                    data=hl_bytes,
+                    file_name="IODB_Highlighted.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="dl_val_hl",
+                )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Main router
 # ─────────────────────────────────────────────────────────────────────────────
 with st.container():
@@ -621,5 +750,7 @@ with st.container():
         render_cable_schedule()
     elif MODULES[4] in selected_module:
         render_loop_wiring()
+    elif MODULES[5] in selected_module:
+        render_iodb_validation()
 
     st.markdown("</div>", unsafe_allow_html=True)

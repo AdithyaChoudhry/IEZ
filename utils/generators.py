@@ -1079,3 +1079,553 @@ def _copy_workbook(wb: openpyxl.Workbook) -> openpyxl.Workbook:
                 pass
 
     return new_wb
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 6. IODB Validation Engine
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Optional spell-check support — degrades gracefully if library not installed
+try:
+    from spellchecker import SpellChecker as _SpellChecker
+    _SPELL_AVAILABLE = True
+except ImportError:
+    _SPELL_AVAILABLE = False
+
+# TAG NO substring → expected Instrument Type (longer keys first to prevent
+# shorter keys matching before longer ones, e.g. "FIT" before "DFIT")
+_TAG_TYPE_MAP: dict[str, str] = {
+    "DFIT":  "DIFFERENTIAL FLOW INDICATING TRANSMITTER",
+    "DPIT":  "DIFFERENTIAL PRESSURE INDICATING TRANSMITTER",
+    "DLIT":  "DIFFERENTIAL LEVEL INDICATING TRANSMITTER",
+    "FIT":   "FLOW INDICATING TRANSMITTER",
+    "LIT":   "LEVEL INDICATING TRANSMITTER",
+    "TIT":   "TEMPERATURE INDICATING TRANSMITTER",
+    "PIT":   "PRESSURE INDICATING TRANSMITTER",
+    "AIT":   "ANALYZER INDICATING TRANSMITTER",
+    "DPG":   "DIFFERENTIAL PRESSURE GAUGE",
+    "LG":    "LEVEL GAUGE",
+    "FG":    "FLOW GAUGE",
+    "PG":    "PRESSURE GAUGE",
+    "TG":    "TEMPERATURE GAUGE",
+}
+_TAG_KEYS_SORTED = sorted(_TAG_TYPE_MAP, key=len, reverse=True)
+
+# Cell fill colours for highlighted output
+_VAL_FILL_EMPTY  = PatternFill(start_color="FFB3B3", end_color="FFB3B3", fill_type="solid")  # light red   → empty/mandatory
+_VAL_FILL_LOGIC  = PatternFill(start_color="FFD966", end_color="FFD966", fill_type="solid")  # amber       → logic rules
+_VAL_FILL_SPELL  = PatternFill(start_color="BDD7EE", end_color="BDD7EE", fill_type="solid")  # light blue  → spelling
+_VAL_FILL_FIXED  = PatternFill(start_color="D5E8D4", end_color="D5E8D4", fill_type="solid")  # light green → auto-corrected
+
+_VAL_HDR_FILL  = PatternFill(start_color="1B5EA7", end_color="1B5EA7", fill_type="solid")
+_VAL_ROW_FILL_A = PatternFill(start_color="EEF3FB", end_color="EEF3FB", fill_type="solid")
+_VAL_ROW_FILL_B = PatternFill(start_color="FFFFFF", end_color="FFFFFF", fill_type="solid")
+
+
+# ── Low-level helpers ────────────────────────────────────────────────────────
+
+def _val_addr(col_idx: int, row_idx: int) -> str:
+    """Return Excel cell address for 1-based col/row indices (e.g. 'B5')."""
+    return f"{get_column_letter(col_idx)}{row_idx}"
+
+
+def _val_norm(val) -> str:
+    """Strip + uppercase a value; NaN/None returns empty string."""
+    if val is None or (isinstance(val, float) and pd.isna(val)):
+        return ""
+    return str(val).strip().upper()
+
+
+def _val_empty(val) -> bool:
+    """True when value is None, NaN, or blank string."""
+    if val is None:
+        return True
+    if isinstance(val, float) and pd.isna(val):
+        return True
+    return str(val).strip() == ""
+
+
+def _val_find_col(df: pd.DataFrame, *keywords: str) -> str | None:
+    """
+    Find the first matching column in df.
+    Strategy: exact match (case-insensitive) → substring match.
+    """
+    kws = [k.upper() for k in keywords]
+    cols_map = {str(c).strip().upper(): c for c in df.columns}
+    for kw in kws:                            # exact first
+        if kw in cols_map:
+            return cols_map[kw]
+    for kw in kws:                            # substring fallback
+        for cu, co in cols_map.items():
+            if kw in cu:
+                return co
+    return None
+
+
+def _val_find_col_exact(df: pd.DataFrame, *keywords: str) -> str | None:
+    """Find a column by EXACT match only (case-insensitive). No substring."""
+    kws = {k.upper() for k in keywords}
+    for col in df.columns:
+        if str(col).strip().upper() in kws:
+            return col
+    return None
+
+
+def _val_col_idx(col_names: list[str], col_name: str) -> int:
+    """Return 1-based column index; falls back to 1 if not found."""
+    try:
+        return col_names.index(col_name) + 1
+    except ValueError:
+        return 1
+
+
+def _val_parse_range(val) -> tuple[float, float] | None:
+    """
+    Parse 'min-max' or 'min to max' strings (handles negative numbers).
+    Returns (min_val, max_val) or None when parsing fails.
+    """
+    if _val_empty(val):
+        return None
+    s = str(val).strip()
+    if s in ("-", "N/A", "NA", "TBA", ""):
+        return None
+    m = re.search(r'(-?\d+(?:\.\d+)?)\s*(?:[-\u2013~]|to)\s*(-?\d+(?:\.\d+)?)', s)
+    if m:
+        return float(m.group(1)), float(m.group(2))
+    return None
+
+
+# ── Main validation function ─────────────────────────────────────────────────
+
+def generate_iodb_validation(
+    df: pd.DataFrame,
+    wb: openpyxl.Workbook,
+    auto_correct_spelling: bool = False,
+) -> tuple[bytes | None, bytes | None, list[dict], str | None]:
+    """
+    Run all 12 IODB validation rules on *df* and return:
+
+      error_log_bytes   — Formatted Excel validation report
+      highlighted_bytes — Original workbook with error cells highlighted
+                          (red = empty, amber = logic, blue = spelling,
+                           green = auto-corrected spelling when requested)
+      errors            — List of error dicts for Streamlit display
+      error_message     — None on success; string description on failure
+
+    Assumes:  df row i  →  workbook row (i + 2)
+              (row 1 = header, row 2 = first data row)
+
+    getCellAddress(col_idx, row_idx) implemented as _val_addr().
+    """
+    try:
+        errors: list[dict] = []
+        col_names = list(df.columns)
+
+        # ── Locate key columns ────────────────────────────────────────────────
+        sno_col    = _val_find_col(df, "S.NO", "S NO", "SNO", "S.NO.", "SERIAL NO", "SR NO", "SL NO")
+        tag_col    = _val_find_col(df, "TAG NO", "TAG NUMBER", "TAG_NO", "TAG_NUMBER", "TAG")
+        area_col   = _val_find_col(df, "AREA CLASSIFICATION")
+        isnis_col  = _val_find_col(df, "IS/NIS TYPE", "IS/NIS", "IS NIS", "IS_NIS", "ISNIS")
+        scope_col  = _val_find_col(df, "SCOPE OF SUPPLY", "SUPPLY SCOPE", "SCOPE")
+        vendor_col = _val_find_col(df, "VENDOR PACKAGE", "VENDOR PKG", "VENDOR PACKAGE NAME")
+        itype_col  = _val_find_col(df, "INSTRUMENT TYPE", "INST TYPE")
+        power_col  = _val_find_col(df, "POWER SUPPLY")
+        wire_col   = _val_find_col(df, "2 WIRE/4 WIRE", "2WIRE/4WIRE", "2WIRE 4WIRE", "WIRE TYPE")
+        signal_col = _val_find_col(df, "SIGNAL I/O TYPE", "SIGNAL TYPE", "I/O TYPE", "IO TYPE", "SIGNAL IO TYPE")
+        subsys_col = _val_find_col(df, "SUB SYSTEM", "SUBSYSTEM", "SUB-SYSTEM")
+        jb_col     = _val_find_col(df, "JUNCTION BOX", "JB", "J/B")
+        calr_col   = _val_find_col(df, "CALIBRATION RANGE", "CAL RANGE", "CALIB RANGE")
+        instr_col  = _val_find_col(df, "INST RANGE", "INSTRUMENT RANGE", "INSTR RANGE")
+        calu_col   = _val_find_col(df, "CALIBRATION UNIT", "CAL UNIT", "CALIB UNIT")
+        instu_col  = _val_find_col(df, "INST RANGE UNIT", "INST UNIT", "INSTRUMENT UNIT", "INST RANGE UNITS")
+        fail_col   = _val_find_col(df, "FAIL ACTION", "FAIL SAFE", "FAILURE ACTION")
+        # Alarm columns: use EXACT match to avoid "FLOW" matching "LOW" etc.
+        ll_col = _val_find_col_exact(df, "LOW LOW", "LOLO", "LL", "L.L.", "LOW LOW ALARM", "LLLL")
+        l_col  = _val_find_col_exact(df, "LOW", "LO", "L", "LOW ALARM")
+        h_col  = _val_find_col_exact(df, "HIGH", "HI", "H", "HIGH ALARM")
+        hh_col = _val_find_col_exact(df, "HIGH HIGH", "HIHI", "HH", "H.H.", "HIGH HIGH ALARM", "HHHH")
+        # Prevent l_col / h_col from aliasing the LL/HH column
+        if l_col and l_col == ll_col:
+            l_col = None
+        if h_col and h_col == hh_col:
+            h_col = None
+
+        SKIP_EMPTY = {"STATUS", "REMARKS"}
+
+        # ── Error builder ─────────────────────────────────────────────────────
+        def _err(i: int, col: str, msg: str, rule: int) -> dict:
+            """Build a standardised error dict for row i (0-based df index)."""
+            row_idx = i + 2                                     # Excel row
+            ci      = _val_col_idx(col_names, col)
+            sno_v   = "UNKNOWN"
+            tag_v   = "UNKNOWN"
+            if sno_col:
+                sv = df.iloc[i].get(sno_col, "")
+                if not _val_empty(sv):
+                    sno_v = str(sv).strip()
+            if tag_col:
+                tv = df.iloc[i].get(tag_col, "")
+                if not _val_empty(tv):
+                    tag_v = str(tv).strip()
+            return {
+                "row":     row_idx,
+                "sno":     sno_v,
+                "tag":     tag_v,
+                "column":  col,
+                "cell":    _val_addr(ci, row_idx),
+                "message": msg,
+                "rule":    rule,
+            }
+
+        # ══════════════════════════════════════════════════════════════════════
+        # RULE 1 — Empty cell validation (except STATUS and REMARKS)
+        # ══════════════════════════════════════════════════════════════════════
+        for col in col_names:
+            if col.strip().upper() in SKIP_EMPTY:
+                continue
+            for i in range(len(df)):
+                if _val_empty(df.iloc[i][col]):
+                    errors.append(_err(i, col, "Cell cannot be empty", 1))
+
+        # ══════════════════════════════════════════════════════════════════════
+        # RULE 2 — AREA CLASSIFICATION vs IS/NIS TYPE
+        # ══════════════════════════════════════════════════════════════════════
+        if area_col and isnis_col:
+            for i in range(len(df)):
+                area  = _val_norm(df.iloc[i][area_col])
+                isnis = _val_norm(df.iloc[i][isnis_col])
+                if area == "HAZARDOUS" and isnis != "IS":
+                    errors.append(_err(i, isnis_col,
+                        "Instrument under Hazardous area should be IS type only", 2))
+                elif area == "SAFE AREA" and isnis != "NIS":
+                    errors.append(_err(i, isnis_col,
+                        "Instrument under Safe area should be NIS type only", 2))
+
+        # ══════════════════════════════════════════════════════════════════════
+        # RULE 3 — SCOPE OF SUPPLY vs VENDOR PACKAGE
+        # ══════════════════════════════════════════════════════════════════════
+        if scope_col and vendor_col:
+            for i in range(len(df)):
+                scope  = _val_norm(df.iloc[i][scope_col])
+                vendor = df.iloc[i][vendor_col]
+                if scope != "WABAG" and (_val_empty(vendor) or _val_norm(vendor) == "-"):
+                    errors.append(_err(i, vendor_col,
+                        "Instrument is under Vendor package scope so Vendor package name should be mentioned", 3))
+
+        # ══════════════════════════════════════════════════════════════════════
+        # RULE 4 — TAG NO keyword vs INSTRUMENT TYPE (substring mapping)
+        # ══════════════════════════════════════════════════════════════════════
+        if tag_col and itype_col:
+            for i in range(len(df)):
+                tag_v  = _val_norm(df.iloc[i][tag_col])
+                itype  = _val_norm(df.iloc[i][itype_col])
+                if not tag_v or not itype:
+                    continue
+                for key in _TAG_KEYS_SORTED:
+                    if key in tag_v:
+                        expected = _TAG_TYPE_MAP[key].upper()
+                        if itype != expected:
+                            errors.append(_err(i, itype_col,
+                                f"Instrument Type mismatch with TAG NO "
+                                f"(TAG contains '{key}', expected: {_TAG_TYPE_MAP[key]})", 4))
+                        break
+
+        # ══════════════════════════════════════════════════════════════════════
+        # RULE 4B — TAG NO must be fully uppercase
+        # ══════════════════════════════════════════════════════════════════════
+        if tag_col:
+            for i in range(len(df)):
+                tv = df.iloc[i][tag_col]
+                if not _val_empty(tv):
+                    ts = str(tv).strip()
+                    if ts != ts.upper():
+                        errors.append(_err(i, tag_col,
+                            "Tag name shall be in capital letters", 4))
+
+        # ══════════════════════════════════════════════════════════════════════
+        # RULE 5 — POWER SUPPLY vs 2 WIRE / 4 WIRE
+        # ══════════════════════════════════════════════════════════════════════
+        if power_col and wire_col:
+            for i in range(len(df)):
+                power = _val_norm(df.iloc[i][power_col])
+                wire  = _val_norm(df.iloc[i][wire_col])
+                if power not in ("24V DC", "-", "") and wire != "4 WIRE - EXT POWER":
+                    errors.append(_err(i, wire_col,
+                        "2 wire instrument is Loop powered and 24 V DC and "
+                        "4 wire is External powered", 5))
+
+        # ══════════════════════════════════════════════════════════════════════
+        # RULE 6 — SIGNAL I/O TYPE vs JUNCTION BOX
+        # ══════════════════════════════════════════════════════════════════════
+        if signal_col and jb_col:
+            jb_msg = ("All AI signals should be connected to AJB and "
+                      "All DI or DO signals should be connected to DJB")
+            for i in range(len(df)):
+                signal = _val_norm(df.iloc[i][signal_col])
+                jb     = _val_norm(df.iloc[i][jb_col])
+                subsys = _val_norm(df.iloc[i][subsys_col]) if subsys_col else ""
+                # Only apply when instrument is NOT routed via a sub-system
+                if subsys not in ("-", ""):
+                    continue
+                if signal == "AI" and "AJB" not in jb:
+                    errors.append(_err(i, jb_col, jb_msg, 6))
+                elif signal in ("DI", "DO") and "DJB" not in jb:
+                    errors.append(_err(i, jb_col, jb_msg, 6))
+
+        # ══════════════════════════════════════════════════════════════════════
+        # RULE 7 — CALIBRATION RANGE must not exceed INSTRUMENT RANGE
+        # ══════════════════════════════════════════════════════════════════════
+        if calr_col and instr_col:
+            for i in range(len(df)):
+                cal_r  = _val_parse_range(df.iloc[i][calr_col])
+                inst_r = _val_parse_range(df.iloc[i][instr_col])
+                if cal_r and inst_r and cal_r[1] > inst_r[1]:
+                    errors.append(_err(i, calr_col,
+                        f"Calibration range ({cal_r[0]}-{cal_r[1]}) exceeds "
+                        f"Instrument range ({inst_r[0]}-{inst_r[1]})", 7))
+
+        # ══════════════════════════════════════════════════════════════════════
+        # RULE 8 — CALIBRATION UNIT must match INST RANGE UNIT
+        # ══════════════════════════════════════════════════════════════════════
+        if calu_col and instu_col:
+            for i in range(len(df)):
+                cu = _val_norm(df.iloc[i][calu_col])
+                iu = _val_norm(df.iloc[i][instu_col])
+                if cu and iu and cu != iu:
+                    errors.append(_err(i, calu_col,
+                        f"Calibration Range unit '{cu}' should be same as "
+                        f"Instrument Range unit '{iu}'", 8))
+
+        # ══════════════════════════════════════════════════════════════════════
+        # RULE 9 — FAIL ACTION must be FO, FC, or LAST POS
+        # ══════════════════════════════════════════════════════════════════════
+        if fail_col:
+            _valid_fa = {"FO", "FC", "LAST POS", "-"}
+            for i in range(len(df)):
+                fa = _val_norm(df.iloc[i][fail_col])
+                if fa and fa not in _valid_fa:
+                    errors.append(_err(i, fail_col,
+                        f"Fail action '{fa}' is invalid — allowed: "
+                        "FO (Fail Open), FC (Fail Close), LAST POS", 9))
+
+        # ══════════════════════════════════════════════════════════════════════
+        # RULE 10 — ALARM SETPOINT ORDER: LL < L < H < HH
+        # ══════════════════════════════════════════════════════════════════════
+        if all(c is not None for c in (ll_col, l_col, h_col, hh_col)):
+            for i in range(len(df)):
+                try:
+                    vals: list[float] = []
+                    skip = False
+                    for ac in (ll_col, l_col, h_col, hh_col):
+                        v = df.iloc[i][ac]
+                        if _val_empty(v) or str(v).strip() in ("-", "N/A", "NA"):
+                            skip = True
+                            break
+                        vals.append(float(str(v).strip()))
+                    if not skip and len(vals) == 4:
+                        if not (vals[0] < vals[1] < vals[2] < vals[3]):
+                            errors.append(_err(i, ll_col,
+                                f"Alarm set points are not in correct order — "
+                                f"LL={vals[0]}, L={vals[1]}, H={vals[2]}, HH={vals[3]} "
+                                f"(required: LL < L < H < HH)", 10))
+                except (ValueError, TypeError):
+                    pass
+
+        # ══════════════════════════════════════════════════════════════════════
+        # RULE 11 — S.NO must be strictly ascending
+        # ══════════════════════════════════════════════════════════════════════
+        if sno_col:
+            prev_sno: float | None = None
+            for i in range(len(df)):
+                sv = df.iloc[i][sno_col]
+                if _val_empty(sv):
+                    continue
+                try:
+                    curr = float(str(sv).strip())
+                    if prev_sno is not None and curr <= prev_sno:
+                        errors.append(_err(i, sno_col,
+                            f"S.NO is not in ascending order "
+                            f"(current={curr}, previous={prev_sno})", 11))
+                    prev_sno = curr
+                except ValueError:
+                    pass
+
+        # ══════════════════════════════════════════════════════════════════════
+        # RULE 12 — SPELL CHECK (requires pyspellchecker)
+        # ══════════════════════════════════════════════════════════════════════
+        # spell_corrections maps (row_idx, col_name) → [(wrong, correct), ...]
+        # used for the auto-correct feature in the highlighted output.
+        spell_corrections: dict[tuple[int, str], list[tuple[str, str]]] = {}
+
+        if _SPELL_AVAILABLE:
+            spell = _SpellChecker()
+            # Load domain-specific terms to prevent false positives
+            spell.word_frequency.load_words([
+                "wabag", "iodb", "transmitter", "instrumentation", "calibration",
+                "commissioning", "setpoint", "flowmeter", "thermowell",
+                "manometer", "orifice", "actuator", "positioner", "solenoid",
+                "junction", "datasheet", "annexure", "nozzle", "reducer",
+                "flanged", "threaded", "diaphragm", "capillary", "impulse",
+                "pulsation", "dampener", "manifold", "multipoint", "thermocouple",
+                "rtd", "pvdf", "ptfe", "hastelloy", "inconel",
+            ])
+            # Skip columns that are code/numeric fields
+            _SKIP_SPELL = {
+                "S.NO", "S NO", "SNO", "TAG NO", "TAG NUMBER", "TAG",
+                "JUNCTION BOX", "JB", "J/B", "POWER SUPPLY",
+                "SIGNAL I/O TYPE", "SIGNAL TYPE", "I/O TYPE", "IO TYPE",
+                "CALIBRATION RANGE", "INST RANGE", "CALIBRATION UNIT",
+                "INST RANGE UNIT", "INST UNIT", "INSTRUMENT UNIT",
+                "IS/NIS TYPE", "IS/NIS", "IS NIS", "FAIL ACTION",
+                "LOW LOW", "LOW", "HIGH", "HIGH HIGH", "LL", "L", "H", "HH",
+                "2 WIRE/4 WIRE", "SCOPE OF SUPPLY", "VENDOR PACKAGE",
+                "AREA CLASSIFICATION", "P&ID NO", "LOOP NO", "LOOP NUMBER",
+                "STATUS", "REMARKS", "SUB SYSTEM", "SUBSYSTEM",
+            }
+            for col in col_names:
+                if col.strip().upper() in _SKIP_SPELL:
+                    continue
+                for i in range(len(df)):
+                    v = df.iloc[i][col]
+                    if _val_empty(v):
+                        continue
+                    # Only check plain alphabetic words (4+ chars, not all-caps,
+                    # no digits) to avoid flagging codes/abbreviations/numbers.
+                    words = re.findall(r'\b[a-zA-Z]{4,}\b', str(v))
+                    words = [
+                        w for w in words
+                        if not w.isupper()
+                        and not any(ch.isdigit() for ch in w)
+                    ]
+                    if not words:
+                        continue
+                    misspelled = spell.unknown(words)
+                    for wrong in sorted(misspelled):
+                        correct = spell.correction(wrong)
+                        if correct and correct.lower() != wrong.lower():
+                            errors.append(_err(i, col,
+                                f"Possible spelling: '{wrong}' → "
+                                f"suggested: '{correct}'", 12))
+                            row_idx = i + 2
+                            spell_corrections.setdefault((row_idx, col), []).append(
+                                (wrong, correct)
+                            )
+
+        # ══════════════════════════════════════════════════════════════════════
+        # BUILD HIGHLIGHTED WORKBOOK
+        # Apply fills to every error cell; optionally auto-correct spelling.
+        # ══════════════════════════════════════════════════════════════════════
+        ws_hl = wb.worksheets[0]
+        for e in errors:
+            ci   = _val_col_idx(col_names, e["column"])
+            cell = ws_hl.cell(row=e["row"], column=ci)
+            if e["rule"] == 1:
+                cell.fill = _VAL_FILL_EMPTY
+            elif e["rule"] == 12:
+                cell.fill = _VAL_FILL_SPELL
+            else:
+                cell.fill = _VAL_FILL_LOGIC
+
+        if auto_correct_spelling and spell_corrections:
+            for (row_idx, col), pairs in spell_corrections.items():
+                ci   = _val_col_idx(col_names, col)
+                cell = ws_hl.cell(row=row_idx, column=ci)
+                if cell.value and not str(cell.value).startswith("="):
+                    new_val = str(cell.value)
+                    for wrong, correct in pairs:
+                        new_val = re.sub(
+                            r'\b' + re.escape(wrong) + r'\b',
+                            correct,
+                            new_val,
+                            flags=re.IGNORECASE,
+                        )
+                    cell.value = new_val
+                    cell.fill = _VAL_FILL_FIXED   # green = corrected
+
+        highlighted_bytes = workbook_to_bytes(wb)
+
+        # ══════════════════════════════════════════════════════════════════════
+        # BUILD ERROR LOG EXCEL
+        # Sheet 1: full error table  |  Sheet 2: summary
+        # ══════════════════════════════════════════════════════════════════════
+        from collections import Counter
+
+        log_wb = openpyxl.Workbook()
+        rpt_ws = log_wb.active
+        rpt_ws.title = "Validation Report"
+
+        _hfont   = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+        _dfont   = Font(name="Calibri", size=11)
+        _c_aln   = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        _l_aln   = Alignment(horizontal="left",   vertical="center", wrap_text=True)
+
+        log_cols   = ["Row #", "S.NO", "TAG NO", "Column", "Cell", "Rule", "Error Message"]
+        log_widths = [8, 12, 24, 28, 8, 10, 65]
+
+        for ci, (hdr_txt, w) in enumerate(zip(log_cols, log_widths), start=1):
+            c = rpt_ws.cell(row=1, column=ci, value=hdr_txt)
+            c.fill = _VAL_HDR_FILL
+            c.font = _hfont
+            c.alignment = _c_aln
+            rpt_ws.column_dimensions[get_column_letter(ci)].width = w
+        rpt_ws.row_dimensions[1].height = 22
+
+        for ri, e in enumerate(errors, start=2):
+            rfill = _VAL_ROW_FILL_A if ri % 2 == 0 else _VAL_ROW_FILL_B
+            vals  = [
+                e["row"], e["sno"], e["tag"],
+                e["column"], e["cell"],
+                f"Rule {e['rule']}", e["message"],
+            ]
+            for ci2, val in enumerate(vals, start=1):
+                c = rpt_ws.cell(row=ri, column=ci2, value=val)
+                c.font  = _dfont
+                c.fill  = rfill
+                c.alignment = _c_aln if ci2 <= 6 else _l_aln
+            rpt_ws.row_dimensions[ri].height = 20
+
+        # Freeze header row
+        rpt_ws.freeze_panes = "A2"
+
+        # Summary sheet
+        sum_ws = log_wb.create_sheet("Summary")
+        sum_ws.column_dimensions["A"].width = 42
+        sum_ws.column_dimensions["B"].width = 10
+
+        title_font = Font(name="Calibri", size=14, bold=True, color="1B5EA7")
+        h2_font    = Font(name="Calibri", size=11, bold=True)
+        d_font     = Font(name="Calibri", size=11)
+
+        sum_ws.cell(row=1, column=1, value="IODB Validation Summary").font = title_font
+        sum_ws.cell(row=2, column=1, value=f"Total Errors:      {len(errors)}").font = h2_font
+        rows_with_err = len({e["row"] for e in errors})
+        sum_ws.cell(row=3, column=1, value=f"Rows with Errors:  {rows_with_err}").font = d_font
+
+        _rule_labels = {
+            1:  "Empty Cell Validation",
+            2:  "Area Classification vs IS/NIS",
+            3:  "Scope of Supply vs Vendor Package",
+            4:  "TAG NO vs Instrument Type / Capitalisation",
+            5:  "Power Supply Logic",
+            6:  "Signal Type vs Junction Box",
+            7:  "Range Validation",
+            8:  "Unit Match",
+            9:  "Fail Action",
+            10: "Alarm Setpoint Order",
+            11: "S.NO Order",
+            12: "Spelling Check",
+        }
+        rule_ct = Counter(e["rule"] for e in errors)
+        sum_ws.cell(row=5, column=1, value="Errors by Rule").font = h2_font
+        sum_ws.cell(row=5, column=2, value="Count").font = h2_font
+        for sri, rn in enumerate(sorted(rule_ct), start=6):
+            sum_ws.cell(row=sri, column=1,
+                        value=f"Rule {rn}: {_rule_labels.get(rn, '')}").font = d_font
+            sum_ws.cell(row=sri, column=2, value=rule_ct[rn]).font = d_font
+
+        log_bytes = workbook_to_bytes(log_wb)
+        return log_bytes, highlighted_bytes, errors, None
+
+    except Exception as exc:
+        import traceback
+        return None, None, [], f"Validation failed: {exc}\n{traceback.format_exc()}"

@@ -22,6 +22,7 @@ from utils.generators import (
     generate_datasheets,
     generate_cable_schedule,
     generate_loop_wiring,
+    generate_iodb_validation,
 )
 
 
@@ -257,3 +258,38 @@ def get_iodb_tags(iodb_file, tag_column: str = "TAG NO") -> tuple[list[str] | No
 def get_iodb_dataframe(iodb_file) -> tuple[pd.DataFrame | None, str | None]:
     """Return the full IODB dataframe for preview purposes."""
     return read_iodb(iodb_file)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# IODB Validation
+# ─────────────────────────────────────────────────────────────────────────────
+
+def process_iodb_validation(
+    raw_bytes: bytes,
+    auto_correct_spelling: bool = False,
+) -> tuple[bytes | None, bytes | None, list[dict], str | None]:
+    """
+    Drive the full IODB validation pipeline.
+
+    Returns
+    -------
+    error_log_bytes   : Excel validation report (two sheets)
+    highlighted_bytes : Original workbook with error cells colour-coded
+    errors            : List of error dicts for Streamlit display
+    error_message     : None on success; human-readable string on failure
+    """
+    try:
+        buf = io.BytesIO(raw_bytes)
+        df  = pd.read_excel(buf, sheet_name=0, header=0)
+        df.columns = [str(c).strip() for c in df.columns]
+        df = df.dropna(how="all").reset_index(drop=True)
+
+        buf2 = io.BytesIO(raw_bytes)
+        wb, _, err = load_workbook_from_upload(buf2)
+        if err:
+            return None, None, [], err
+
+        return generate_iodb_validation(df, wb, auto_correct_spelling)
+    except Exception as exc:
+        import traceback
+        return None, None, [], f"Failed to process file: {exc}\n{traceback.format_exc()}"

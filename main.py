@@ -153,11 +153,13 @@ with st.sidebar:
 
     # Summary of files currently cached in session state
     _cache_labels = {
-        "iodb_upload":        "IODB Source",
-        "loop_input_upload":  "Loop Wiring Input",
-        "ds_template_upload": "DS Template",
-        "cs_template_upload": "CS Template",
-        "lw_template_upload": "LW Template",
+        "iodb_upload":         "IODB Source",
+        "loop_input_upload":   "Loop Wiring Input",
+        "inst_template_upload":"Instrument List Template",
+        "io_template_upload":  "I/O List Template",
+        "ds_template_upload":  "DS Template",
+        "cs_template_upload":  "CS Template",
+        "lw_template_upload":  "LW Template",
     }
     _any_loaded = False
     for _wk, _label in _cache_labels.items():
@@ -231,13 +233,21 @@ def _file_section(label: str, widget_key: str, help_text: str = "") -> bytes | N
 def render_instrument_list():
     st.markdown('<div class="section-title">🗂️ Instrument List Generator</div>', unsafe_allow_html=True)
     st.markdown(
-        "Select columns from the IODB and export them as a clean **Instrument List** Excel file."
+        "Select columns, apply per-column filters, and export as a clean **Instrument List** Excel file."
     )
 
-    iodb_raw = _file_section(
-        "📊 Upload IODB Source File", "iodb_upload",
-        "Main IODB source Excel file (sheet name: IODB)",
-    )
+    col_left, col_right = st.columns(2)
+    with col_left:
+        iodb_raw = _file_section(
+            "📊 Upload IODB Source File", "iodb_upload",
+            "Main IODB source Excel file (sheet name: IODB)",
+        )
+    with col_right:
+        tmpl_raw = _file_section(
+            "📎 Upload Template (optional)", "inst_template_upload",
+            "If provided, the output will be appended as a new sheet to this workbook.",
+        )
+
     if iodb_raw is None:
         return
 
@@ -249,6 +259,7 @@ def render_instrument_list():
         st.error(f"Failed to read IODB: {err}")
         return
 
+    # ── Column selection ──────────────────────────────────────────────────────
     with st.expander("📋 Column Selection", expanded=True):
         col1, col2 = st.columns([3, 1])
         with col2:
@@ -261,15 +272,43 @@ def render_instrument_list():
             key="inst_col_select",
         )
 
-    # Preview
+    # ── Per-column filters ────────────────────────────────────────────────────
+    inst_filters: dict = {}
+    if selected:
+        iodb_bytes2 = get_iodb_bytes()
+        df_full, err2 = cached_iodb_df(iodb_bytes2)
+        if not err2 and df_full is not None:
+            with st.expander("🔽 Column Filters", expanded=False):
+                st.caption("Select one or more values to keep (leave empty = no filter on that column).")
+                filter_cols = st.columns(min(len(selected), 3))
+                for i, col_name in enumerate(selected):
+                    if col_name in df_full.columns:
+                        unique_vals = sorted(
+                            df_full[col_name].dropna().astype(str).unique().tolist()
+                        )
+                        if unique_vals:
+                            chosen = filter_cols[i % 3].multiselect(
+                                col_name,
+                                options=unique_vals,
+                                default=[],
+                                key=f"inst_filter_{col_name}",
+                            )
+                            if chosen:
+                                inst_filters[col_name] = chosen
+
+    # ── Preview ───────────────────────────────────────────────────────────────
     if selected:
         with st.expander("👁️ Preview (first 20 rows)", expanded=False):
-            iodb_bytes2 = get_iodb_bytes()
-            df, err2 = cached_iodb_df(iodb_bytes2)
-            if not err2:
-                avail = [c for c in selected if c in df.columns]
+            iodb_bytes3 = get_iodb_bytes()
+            df_prev, err3 = cached_iodb_df(iodb_bytes3)
+            if not err3 and df_prev is not None:
+                avail = [c for c in selected if c in df_prev.columns]
                 if avail:
-                    st.dataframe(df[avail].head(20), use_container_width=True)
+                    preview = df_prev[avail].copy()
+                    for col_name, vals in inst_filters.items():
+                        if col_name in preview.columns:
+                            preview = preview[preview[col_name].astype(str).isin(vals)]
+                    st.dataframe(preview.head(20), use_container_width=True)
 
     st.markdown("---")
     if st.button("⚡ Generate Instrument List", key="gen_inst", type="primary"):
@@ -278,7 +317,12 @@ def render_instrument_list():
             return
         with st.spinner("Generating…"):
             iodb_snap = io.BytesIO(iodb_raw)
-            out_bytes, filename, err = process_instrument_list(iodb_snap, selected)
+            tmpl_snap = io.BytesIO(tmpl_raw) if tmpl_raw is not None else None
+            out_bytes, filename, err = process_instrument_list(
+                iodb_snap, selected,
+                filters=inst_filters if inst_filters else None,
+                template_file=tmpl_snap,
+            )
         if err:
             st.error(f"Error: {err}")
         else:
@@ -298,13 +342,21 @@ def render_instrument_list():
 def render_io_list():
     st.markdown('<div class="section-title">🔌 Input / Output List Generator</div>', unsafe_allow_html=True)
     st.markdown(
-        "Select columns from the IODB and export them as an **I/O List** Excel file."
+        "Select columns, apply per-column filters, and export as an **I/O List** Excel file."
     )
 
-    iodb_raw = _file_section(
-        "📊 Upload IODB Source File", "iodb_upload",
-        "Main IODB source Excel file (sheet name: IODB)",
-    )
+    col_left, col_right = st.columns(2)
+    with col_left:
+        iodb_raw = _file_section(
+            "📊 Upload IODB Source File", "iodb_upload",
+            "Main IODB source Excel file (sheet name: IODB)",
+        )
+    with col_right:
+        tmpl_raw = _file_section(
+            "📎 Upload Template (optional)", "io_template_upload",
+            "If provided, the output will be appended as a new sheet to this workbook.",
+        )
+
     if iodb_raw is None:
         return
 
@@ -320,6 +372,7 @@ def render_io_list():
     io_keywords = ["signal", "i/o", "io", "type", "tag", "loop", "rack", "slot", "channel", "panel"]
     suggested = [c for c in columns if any(k in c.lower() for k in io_keywords)]
 
+    # ── Column selection ──────────────────────────────────────────────────────
     with st.expander("📋 Column Selection", expanded=True):
         col1, col2 = st.columns([3, 1])
         with col2:
@@ -332,15 +385,43 @@ def render_io_list():
             key="io_col_select",
         )
 
-    # Preview
+    # ── Per-column filters ────────────────────────────────────────────────────
+    io_filters: dict = {}
+    if selected:
+        iodb_bytes2 = get_iodb_bytes()
+        df_full, err2 = cached_iodb_df(iodb_bytes2)
+        if not err2 and df_full is not None:
+            with st.expander("🔽 Column Filters", expanded=False):
+                st.caption("Select one or more values to keep (leave empty = no filter on that column).")
+                filter_cols = st.columns(min(len(selected), 3))
+                for i, col_name in enumerate(selected):
+                    if col_name in df_full.columns:
+                        unique_vals = sorted(
+                            df_full[col_name].dropna().astype(str).unique().tolist()
+                        )
+                        if unique_vals:
+                            chosen = filter_cols[i % 3].multiselect(
+                                col_name,
+                                options=unique_vals,
+                                default=[],
+                                key=f"io_filter_{col_name}",
+                            )
+                            if chosen:
+                                io_filters[col_name] = chosen
+
+    # ── Preview ───────────────────────────────────────────────────────────────
     if selected:
         with st.expander("👁️ Preview (first 20 rows)", expanded=False):
-            iodb_bytes2 = get_iodb_bytes()
-            df, err2 = cached_iodb_df(iodb_bytes2)
-            if not err2:
-                avail = [c for c in selected if c in df.columns]
+            iodb_bytes3 = get_iodb_bytes()
+            df_prev, err3 = cached_iodb_df(iodb_bytes3)
+            if not err3 and df_prev is not None:
+                avail = [c for c in selected if c in df_prev.columns]
                 if avail:
-                    st.dataframe(df[avail].head(20), use_container_width=True)
+                    preview = df_prev[avail].copy()
+                    for col_name, vals in io_filters.items():
+                        if col_name in preview.columns:
+                            preview = preview[preview[col_name].astype(str).isin(vals)]
+                    st.dataframe(preview.head(20), use_container_width=True)
 
     st.markdown("---")
     if st.button("⚡ Generate I/O List", key="gen_io", type="primary"):
@@ -349,7 +430,12 @@ def render_io_list():
             return
         with st.spinner("Generating…"):
             iodb_snap = io.BytesIO(iodb_raw)
-            out_bytes, filename, err = process_io_list(iodb_snap, selected)
+            tmpl_snap = io.BytesIO(tmpl_raw) if tmpl_raw is not None else None
+            out_bytes, filename, err = process_io_list(
+                iodb_snap, selected,
+                filters=io_filters if io_filters else None,
+                template_file=tmpl_snap,
+            )
         if err:
             st.error(f"Error: {err}")
         else:

@@ -32,18 +32,32 @@ _HEADER_FONT = Font(name='Calibri', size=14, bold=True)
 def generate_instrument_list(
     df: pd.DataFrame,
     selected_columns: list[str],
+    filters: dict | None = None,
+    template_wb: openpyxl.Workbook | None = None,
 ) -> tuple[bytes | None, str | None, str | None]:
     """
     Extract selected columns from the IODB DataFrame and produce a formatted Excel file.
-    Applies Calibri 14pt, center+wrap alignment to all cells, and auto-fits column widths.
+    Optional `filters` dict: {column_name: [allowed_values]} applied before output.
+    Optional `template_wb`: if provided, the filtered data is appended as a new sheet
+    named 'Instrument List' at the end of the template workbook.
     """
     try:
         available = [c for c in selected_columns if c in df.columns]
         if not available:
             return None, None, "None of the selected columns were found in the IODB file."
         result = df[available].copy()
-        out_bytes = _build_formatted_list(result, "Sheet1")
-        return out_bytes, "Instrument_List.xlsx", None
+        # Apply per-column filters
+        if filters:
+            for col, allowed in filters.items():
+                if col in result.columns and allowed:
+                    result = result[result[col].astype(str).isin([str(v) for v in allowed])]
+        if result.empty:
+            return None, None, "No rows remain after applying filters."
+        if template_wb is not None:
+            out_bytes = _append_sheet_to_workbook(result, template_wb, "Instrument List")
+        else:
+            out_bytes = _build_formatted_list(result, "Sheet1")
+        return out_bytes, "Instrument List.xlsx", None
     except Exception as e:
         return None, None, f"Instrument List generation failed: {e}"
 
@@ -55,20 +69,82 @@ def generate_instrument_list(
 def generate_io_list(
     df: pd.DataFrame,
     selected_columns: list[str],
+    filters: dict | None = None,
+    template_wb: openpyxl.Workbook | None = None,
 ) -> tuple[bytes | None, str | None, str | None]:
     """
     Same logic as Instrument List but outputs IO_List.xlsx.
-    Applies Calibri 14pt, center+wrap alignment to all cells, and auto-fits column widths.
+    Optional `filters` dict: {column_name: [allowed_values]} applied before output.
+    Optional `template_wb`: if provided, the filtered data is appended as a new sheet
+    named 'IO List' at the end of the template workbook.
     """
     try:
         available = [c for c in selected_columns if c in df.columns]
         if not available:
             return None, None, "None of the selected columns were found in the IODB file."
         result = df[available].copy()
-        out_bytes = _build_formatted_list(result, "Sheet1")
+        # Apply per-column filters
+        if filters:
+            for col, allowed in filters.items():
+                if col in result.columns and allowed:
+                    result = result[result[col].astype(str).isin([str(v) for v in allowed])]
+        if result.empty:
+            return None, None, "No rows remain after applying filters."
+        if template_wb is not None:
+            out_bytes = _append_sheet_to_workbook(result, template_wb, "IO List")
+        else:
+            out_bytes = _build_formatted_list(result, "Sheet1")
         return out_bytes, "IO_List.xlsx", None
     except Exception as e:
         return None, None, f"I/O List generation failed: {e}"
+
+
+def _append_sheet_to_workbook(
+    df: pd.DataFrame,
+    wb: openpyxl.Workbook,
+    sheet_name: str,
+) -> bytes:
+    """
+    Append `df` as a formatted sheet at the end of an existing openpyxl Workbook.
+    If a sheet with `sheet_name` already exists it is removed first to avoid duplicates.
+    Returns raw xlsx bytes of the modified workbook.
+    """
+    if sheet_name in wb.sheetnames:
+        del wb[sheet_name]
+    ws = wb.create_sheet(title=sheet_name)
+
+    headers = list(df.columns)
+    col_widths: dict[int, int] = {}
+
+    # Write header row
+    for col_idx, header in enumerate(headers, start=1):
+        cell = ws.cell(row=1, column=col_idx, value=header)
+        cell.font = _HEADER_FONT
+        cell.alignment = _LIST_ALIGNMENT
+        line_len = max((len(line) for line in str(header).split('\n')), default=0)
+        col_widths[col_idx] = max(col_widths.get(col_idx, 0), line_len)
+
+    # Write data rows
+    for row_idx, (_, row_data) in enumerate(df.iterrows(), start=2):
+        for col_idx, col_name in enumerate(headers, start=1):
+            val = row_data[col_name]
+            if pd.isna(val) if not isinstance(val, str) else False:
+                val = None
+            cell = ws.cell(row=row_idx, column=col_idx, value=val)
+            cell.font = _LIST_FONT
+            cell.alignment = _LIST_ALIGNMENT
+            if val is not None:
+                line_len = max((len(line) for line in str(val).split('\n')), default=0)
+                col_widths[col_idx] = max(col_widths.get(col_idx, 0), line_len)
+
+    # Auto-fit column widths
+    for col_idx, width in col_widths.items():
+        ws.column_dimensions[get_column_letter(col_idx)].width = min(max(width + 4, 10), 60)
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return buf.read()
 
 
 def _build_formatted_list(df: pd.DataFrame, sheet_name: str) -> bytes:

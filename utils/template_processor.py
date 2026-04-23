@@ -33,16 +33,26 @@ from utils.generators import (
 def process_instrument_list(
     iodb_file,
     selected_columns: list[str],
+    filters: dict | None = None,
+    template_file=None,
 ) -> tuple[bytes | None, str | None, str | None]:
     """
-    Full pipeline: read IODB → generate instrument list.
+    Full pipeline: read IODB → (optionally filter) → generate instrument list.
+    If `template_file` is provided, output is appended as a new sheet to that workbook.
 
     Returns (bytes, filename, error)
     """
     df, err = read_iodb(iodb_file)
     if err:
         return None, None, f"Failed to read IODB: {err}"
-    return generate_instrument_list(df, selected_columns)
+
+    template_wb = None
+    if template_file is not None:
+        template_wb, _, err = load_workbook_from_upload(template_file)
+        if err:
+            return None, None, f"Failed to load template: {err}"
+
+    return generate_instrument_list(df, selected_columns, filters=filters, template_wb=template_wb)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -52,16 +62,26 @@ def process_instrument_list(
 def process_io_list(
     iodb_file,
     selected_columns: list[str],
+    filters: dict | None = None,
+    template_file=None,
 ) -> tuple[bytes | None, str | None, str | None]:
     """
-    Full pipeline: read IODB → generate I/O list.
+    Full pipeline: read IODB → (optionally filter) → generate I/O list.
+    If `template_file` is provided, output is appended as a new sheet to that workbook.
 
     Returns (bytes, filename, error)
     """
     df, err = read_iodb(iodb_file)
     if err:
         return None, None, f"Failed to read IODB: {err}"
-    return generate_io_list(df, selected_columns)
+
+    template_wb = None
+    if template_file is not None:
+        template_wb, _, err = load_workbook_from_upload(template_file)
+        if err:
+            return None, None, f"Failed to load template: {err}"
+
+    return generate_io_list(df, selected_columns, filters=filters, template_wb=template_wb)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -412,6 +412,24 @@ _CS_FONT      = Font(name='Arial', size=12)
 _CS_FONT_BOLD = Font(name='Arial', size=12, bold=True)
 _CS_ALIGN     = Alignment(horizontal='center', vertical='center', wrap_text=True)
 
+# Explicit IODB-column-name → template-header-name aliases.
+# These are checked BEFORE fuzzy matching so that partial-string ambiguity
+# (e.g. template "TAG" being a substring of IODB "TAG NO") cannot cause
+# wrong column assignments.  Keys and values are lower-cased for comparison.
+_CS_IODB_TO_TEMPLATE_ALIASES: dict[str, str] = {
+    "tag no":                "tag number",
+    "tag number":            "tag number",
+    "junction box":          "junction box no.",
+    "jb":                    "junction box no.",
+    "signal i/o type":       "signal type",
+    "signal type":           "signal type",
+    "inst range":            "instrument range",
+    "instrument range":      "instrument range",
+    "calibration range":     "calibration range",
+    "cable tag no":          "cable tag no.",
+    "cable tag number":      "cable tag no.",
+}
+
 
 def _adjust_formula_row(formula: str, src_row: int, dst_row: int) -> str:
     """
@@ -516,18 +534,63 @@ def generate_cable_schedule(
         # Reverse: normalised text → col_idx
         rev_hdr: dict[str, int] = {v: k for k, v in header_map.items()}
 
-        # ── Match IODB columns → template column indices (fuzzy) ─────────────
+        # ── Match IODB columns → template column indices ──────────────────────
+        # Priority order:
+        #   1. Explicit alias table (_CS_IODB_TO_TEMPLATE_ALIASES)
+        #   2. Exact normalised name match
+        #   3. Fuzzy substring match (both directions)
         iodb_norm: dict[str, str] = {str(c).strip().lower(): str(c) for c in df.columns}
         col_match: dict[str, int] = {}  # iodb_col_original → template_col_idx
         for iodb_n, iodb_orig in iodb_norm.items():
+            # 1) Explicit alias
+            alias_target = _CS_IODB_TO_TEMPLATE_ALIASES.get(iodb_n)
+            if alias_target and alias_target in rev_hdr:
+                col_match[iodb_orig] = rev_hdr[alias_target]
+                continue
+            # 2) Exact match
             if iodb_n in rev_hdr:
                 col_match[iodb_orig] = rev_hdr[iodb_n]
-            else:
-                for h_txt, h_col in rev_hdr.items():
-                    if (iodb_n in h_txt or h_txt in iodb_n) and len(iodb_n) >= 3:
-                        if iodb_orig not in col_match:
-                            col_match[iodb_orig] = h_col
-                        break
+                continue
+            # 3) Fuzzy: require the match string to be at least 4 chars and use
+            #    word-boundary logic — the shorter token must be a complete word
+            #    fragment to prevent "tag" matching "tag number" when "tag no" is
+            #    the true target.
+            for h_txt, h_col in rev_hdr.items():
+                if len(iodb_n) < 4:
+                    continue
+                # Only match if the shorter string ends at a word boundary in
+                # the longer string (avoids "tag" matching inside "tag number").
+                shorter, longer = (iodb_n, h_txt) if len(iodb_n) <= len(h_txt) else (h_txt, iodb_n)
+                # Accept only if shorter == longer (already handled above) OR
+                # if shorter appears as a prefix of longer followed by space/end
+                match_pos = longer.find(shorter)
+                if match_pos == -1:
+                    continue
+                end_pos = match_pos + len(shorter)
+                boundary_ok = (end_pos == len(longer)) or (longer[end_pos] in ' /_-.()')
+                if boundary_ok:
+                    if iodb_orig not in col_match:
+                        col_match[iodb_orig] = h_col
+                    break
+
+        # ── Hard-override: ensure tag_column always maps to the "TAG NUMBER"
+        #    column in the template.  Find it by scanning for any header cell
+        #    whose text (normalised) contains both "tag" and "number" or matches
+        #    the alias table for "tag number".
+        tag_number_col_idx: int | None = None
+        for h_txt, h_col in rev_hdr.items():
+            if h_txt in ("tag number", "tag no.", "tag no"):
+                tag_number_col_idx = h_col
+                break
+        if tag_number_col_idx is None:
+            # Fallback: first header column whose text contains "tag" and
+            # ("number" or "no")
+            for h_txt, h_col in rev_hdr.items():
+                if "tag" in h_txt and ("number" in h_txt or h_txt.endswith("no") or h_txt.endswith("no.")):
+                    tag_number_col_idx = h_col
+                    break
+        if tag_number_col_idx is not None:
+            col_match[tag_column] = tag_number_col_idx
 
         # ── Snapshot prototype block (template rows 9-11, ALL columns) ───────
         # proto[row_offset][col_idx] = cell_value_or_formula_string
@@ -610,10 +673,12 @@ def generate_cable_schedule(
                         pass
 
         # ── Write data rows ───────────────────────────────────────────────────
-        current_row = CABLE_SCHEDULE_FIRST_DATA_ROW
-        sl_no       = 1
-        jb_order    = list(dict.fromkeys(work_df[jb_column]))  # preserves sort order, deduped
-        total       = len(jb_order)
+        current_row  = CABLE_SCHEDULE_FIRST_DATA_ROW
+        sl_no        = 1
+        jb_order     = list(dict.fromkeys(work_df[jb_column]))  # preserves sort order, deduped
+        total        = len(jb_order)
+        seen_tags: dict[str, int] = {}   # tag_value → first output row (dedup log)
+        tag_warnings: list[str]   = []   # empty-TAG-NO warnings
 
         for jb_idx, jb_name in enumerate(jb_order):
             if progress_callback:
@@ -622,6 +687,28 @@ def generate_cable_schedule(
             tag_entries = work_df[work_df[jb_column] == jb_name].to_dict('records')
 
             for entry in tag_entries:
+                # ── Validate TAG NO for this row ───────────────────────────
+                raw_tag = entry.get(tag_column)
+                if raw_tag is None or (not isinstance(raw_tag, str) and pd.isna(raw_tag)):
+                    tag_warnings.append(
+                        f"Row {current_row}: '{tag_column}' is empty in IODB — writing TBA."
+                    )
+                    raw_tag = "TBA"
+                else:
+                    raw_tag = str(raw_tag).strip()
+                    if raw_tag in ("", "nan"):
+                        tag_warnings.append(
+                            f"Row {current_row}: '{tag_column}' is blank in IODB — writing TBA."
+                        )
+                        raw_tag = "TBA"
+                    elif raw_tag in seen_tags:
+                        tag_warnings.append(
+                            f"Row {current_row}: duplicate TAG NO '{raw_tag}' "
+                            f"(first seen at output row {seen_tags[raw_tag]})."
+                        )
+                if raw_tag != "TBA":
+                    seen_tags.setdefault(raw_tag, current_row)
+
                 # 1. Copy the prototype block (all 3 rows) with formula adjustment
                 for row_off in range(ROWS_PER_TAG):
                     dst_r = current_row + row_off
@@ -639,7 +726,9 @@ def generate_cable_schedule(
                         c.font      = _CS_FONT
                         c.alignment = _CS_ALIGN
 
-                # 2. Fill IODB values in main row (row_off=0); preserve formulas
+                # 2. Fill IODB values in main row (row_off=0); preserve formulas.
+                #    TAG NO is written DIRECTLY from raw_tag (validated above) to
+                #    guarantee 1:1 row-wise mapping — no carry-forward, no reuse.
                 dst_main = current_row
 
                 # Serial number in column A (if not a formula)
@@ -656,13 +745,18 @@ def generate_cable_schedule(
                         continue
                     if isinstance(c.value, str) and c.value.startswith('='):
                         continue  # keep formula
-                    raw = entry.get(iodb_col)
-                    if raw is None or (isinstance(raw, float) and pd.isna(raw)):
-                        c.value = "TBA"
-                    elif str(raw).strip() in ("", "nan"):
-                        c.value = "TBA"
+
+                    # For TAG NO: always use raw_tag (already validated above)
+                    if iodb_col == tag_column:
+                        c.value = raw_tag
                     else:
-                        c.value = str(raw).strip() if isinstance(raw, str) else raw
+                        raw = entry.get(iodb_col)
+                        if raw is None or (not isinstance(raw, str) and pd.isna(raw)):
+                            c.value = "TBA"
+                        elif str(raw).strip() in ("", "nan"):
+                            c.value = "TBA"
+                        else:
+                            c.value = str(raw).strip() if isinstance(raw, str) else raw
                     c.font      = _CS_FONT
                     c.alignment = _CS_ALIGN
 
@@ -725,6 +819,10 @@ def generate_cable_schedule(
             pass
 
         out_bytes = workbook_to_bytes(out_wb)
+        if tag_warnings:
+            import sys
+            for w in tag_warnings:
+                print(f"[Cable Schedule TAG warning] {w}", file=sys.stderr)
         return out_bytes, "Cable_Schedule.xlsx", None
 
     except Exception as e:

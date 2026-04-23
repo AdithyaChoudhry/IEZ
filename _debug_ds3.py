@@ -1,36 +1,24 @@
-"""Direct test: call generate_datasheets directly without catching exceptions."""
+"""Inspect IODB and template heading/value structure"""
 import sys, io
 sys.path.insert(0, '/Users/adithyachoudhrym/ProjectIEZ')
+import openpyxl
+from openpyxl.utils import get_column_letter
 
-import pandas as pd
-from utils.file_handler import load_workbook_from_upload
-from utils.generators import generate_datasheets
+# IODB columns
+wb = openpyxl.load_workbook('/Users/adithyachoudhrym/ProjectIEZ/IODB.xlsx')
+print("IODB sheets:", wb.sheetnames)
+ws = wb[wb.sheetnames[0]]
+print("\nFirst 3 rows of IODB:")
+for row in ws.iter_rows(min_row=1, max_row=3):
+    cols = [(cell.coordinate, repr(cell.value)) for cell in row if cell.value is not None]
+    print(" ", cols)
 
-TMPL = 'Pressure Transmitter.xlsx'
-IODB = 'IODB Source File.xlsx'
-
-with open(IODB, 'rb') as f:
-    iodb_data = f.read()
-with open(TMPL, 'rb') as f:
-    tmpl_data = f.read()
-
-df = pd.read_excel(io.BytesIO(iodb_data), sheet_name='IODB', header=0).dropna(how='all')
-tags = df['TAG NO'].dropna().astype(str).str.strip().unique()[:2].tolist()
-print(f"Tags: {tags}")
-
-wb, buf_ref, err = load_workbook_from_upload(io.BytesIO(tmpl_data))
-assert err is None and wb is not None, f"load failed: {err}"
-print(f"Template loaded. Sheets: {wb.sheetnames}")
-
-# Call WITHOUT the try/except wrapper so we see the real traceback
-import traceback
-try:
-    results, err = generate_datasheets(df, wb, 'TAG NO', tags)
-    if err:
-        print(f"returned error: {err}")
-    else:
-        print(f"OK: {len(results)} datasheets generated")
-        print(f"  first: {results[0][1]} ({len(results[0][0])} bytes)")
-except Exception:
-    print("EXCEPTION:")
-    traceback.print_exc()
+print("\n--- Template DS NEW WWTP: all rows with Refer Annexure ---")
+wb2 = openpyxl.load_workbook('/Users/adithyachoudhrym/ProjectIEZ/Pressure Transmitter.xlsx')
+ws2 = wb2['DS NEW WWTP']
+for row in ws2.iter_rows(min_row=1, max_row=45):
+    ra_cells = [c for c in row if isinstance(c.value, str) and 'annexure' in c.value.lower()]
+    if ra_cells:
+        non_empty = [(get_column_letter(c.column), repr(c.value))
+                     for c in row if c.value is not None and c.__class__.__name__ != 'MergedCell']
+        print(f"  Row {row[0].row}: {non_empty}")

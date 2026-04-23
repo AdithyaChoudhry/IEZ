@@ -15,7 +15,7 @@ import pandas as pd
 import openpyxl
 from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter, column_index_from_string
-from openpyxl.styles import Alignment, Font, PatternFill, Border
+from openpyxl.styles import Alignment, Font, PatternFill, Border, Side
 
 from utils.file_handler import workbook_to_bytes, dataframe_to_bytes
 
@@ -818,6 +818,21 @@ def generate_cable_schedule(
             # non-fatal
             pass
 
+        # ── Apply full-cell borders to the output workbook's sheets ───────
+        thin = Side(border_style="thin", color="000000")
+        full_border = Border(left=thin, right=thin, top=thin, bottom=thin)
+        for sheet in out_wb.worksheets:
+            max_r = sheet.max_row or 1
+            max_c = sheet.max_column or 1
+            for r in range(1, max_r + 1):
+                for c in range(1, max_c + 1):
+                    try:
+                        cell = sheet.cell(row=r, column=c)
+                        # preserve existing border where possible by overriding
+                        cell.border = full_border
+                    except Exception:
+                        continue
+
         out_bytes = workbook_to_bytes(out_wb)
         if tag_warnings:
             import sys
@@ -1375,15 +1390,20 @@ def generate_iodb_validation(
     df: pd.DataFrame,
     wb: openpyxl.Workbook,
     auto_correct_spelling: bool = False,
+    dynamic_rules=None,          # list[DynamicRule] | None
 ) -> tuple[bytes | None, bytes | None, bytes | None, list[dict], str | None]:
     """
-    Run all 12 IODB validation rules on *df* and return:
+    Run all 12 predefined IODB validation rules *and* any active user-defined
+    dynamic rules on *df* and return:
 
       error_log_bytes   — Formatted Excel validation report
       highlighted_bytes — Original workbook with error cells highlighted
       tba_bytes         — Excel listing every cell whose value is "TBA"
       errors            — List of error dicts for Streamlit display
       error_message     — None on success; string description on failure
+
+    Each error dict contains a `source` key: "predefined" or "dynamic".
+    Dynamic rule errors have `rule` = "D:<id>" and `rule_name` = rule.name.
 
     Assumes:  df row i  →  workbook row (i + 2)
               (row 1 = header, row 2 = first data row)
@@ -1469,6 +1489,7 @@ def generate_iodb_validation(
                 "cell":    _val_addr(ci, row_idx),
                 "message": msg,
                 "rule":    rule,
+                "source":  "predefined",
             }
 
         # ══════════════════════════════════════════════════════════════════════
@@ -1750,89 +1771,6 @@ def generate_iodb_validation(
         highlighted_bytes = workbook_to_bytes(wb)
 
         # ══════════════════════════════════════════════════════════════════════
-        # BUILD ERROR LOG EXCEL
-        # Sheet 1: full error table  |  Sheet 2: summary
-        # ══════════════════════════════════════════════════════════════════════
-        from collections import Counter
-
-        log_wb = openpyxl.Workbook()
-        rpt_ws = log_wb.active
-        rpt_ws.title = "Validation Report"
-
-        _hfont   = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
-        _dfont   = Font(name="Calibri", size=11)
-        _c_aln   = Alignment(horizontal="center", vertical="center", wrap_text=True)
-        _l_aln   = Alignment(horizontal="left",   vertical="center", wrap_text=True)
-
-        # Remove 'Row #' and 'Rule' columns per user request
-        log_cols   = ["S.NO", "TAG NO", "Column", "Cell", "Error Message"]
-        log_widths = [12, 24, 28, 12, 90]
-
-        for ci, (hdr_txt, w) in enumerate(zip(log_cols, log_widths), start=1):
-            c = rpt_ws.cell(row=1, column=ci, value=hdr_txt)
-            c.fill = _VAL_HDR_FILL
-            c.font = _hfont
-            c.alignment = _c_aln
-            rpt_ws.column_dimensions[get_column_letter(ci)].width = w
-        rpt_ws.row_dimensions[1].height = 22
-
-        for ri, e in enumerate(errors, start=2):
-            rfill = _VAL_ROW_FILL_A if ri % 2 == 0 else _VAL_ROW_FILL_B
-            vals  = [
-                e["sno"], e["tag"],
-                e["column"], e["cell"],
-                e["message"],
-            ]
-            for ci2, val in enumerate(vals, start=1):
-                c = rpt_ws.cell(row=ri, column=ci2, value=val)
-                c.font  = _dfont
-                c.fill  = rfill
-                # Centre all columns including the Error Message column
-                c.alignment = _c_aln
-            rpt_ws.row_dimensions[ri].height = 20
-
-        # Freeze header row
-        rpt_ws.freeze_panes = "A2"
-
-        # Summary sheet
-        sum_ws = log_wb.create_sheet("Summary")
-        sum_ws.column_dimensions["A"].width = 42
-        sum_ws.column_dimensions["B"].width = 10
-
-        title_font = Font(name="Calibri", size=14, bold=True, color="1B5EA7")
-        h2_font    = Font(name="Calibri", size=11, bold=True)
-        d_font     = Font(name="Calibri", size=11)
-
-        sum_ws.cell(row=1, column=1, value="IODB Validation Summary").font = title_font
-        sum_ws.cell(row=2, column=1, value=f"Total Errors:      {len(errors)}").font = h2_font
-        rows_with_err = len({e["row"] for e in errors})
-        sum_ws.cell(row=3, column=1, value=f"Rows with Errors:  {rows_with_err}").font = d_font
-
-        _rule_labels = {
-            1:  "Empty Cell Validation",
-            2:  "Area Classification vs IS/NIS",
-            3:  "Scope of Supply vs Vendor Package",
-            4:  "TAG NO vs Instrument Type / Capitalisation",
-            5:  "Power Supply Logic",
-            6:  "Signal Type vs Junction Box",
-            7:  "Range Validation",
-            8:  "Unit Match",
-            9:  "Fail Action",
-            10: "Alarm Setpoint Order",
-            11: "S.NO Order",
-            12: "Spelling Check",
-        }
-        rule_ct = Counter(e["rule"] for e in errors)
-        sum_ws.cell(row=5, column=1, value="Errors by Rule").font = h2_font
-        sum_ws.cell(row=5, column=2, value="Count").font = h2_font
-        for sri, rn in enumerate(sorted(rule_ct), start=6):
-            sum_ws.cell(row=sri, column=1,
-                        value=f"Rule {rn}: {_rule_labels.get(rn, '')}").font = d_font
-            sum_ws.cell(row=sri, column=2, value=rule_ct[rn]).font = d_font
-
-        log_bytes = workbook_to_bytes(log_wb)
-
-        # ══════════════════════════════════════════════════════════════════════
         # BUILD TBA DETAILS EXCEL
         # Scan every cell for the literal value "TBA" and list them.
         # ══════════════════════════════════════════════════════════════════════
@@ -1886,6 +1824,115 @@ def generate_iodb_validation(
             tba_ws.row_dimensions[ri].height = 20
         tba_ws.freeze_panes = "A2"
         tba_bytes = workbook_to_bytes(tba_wb)
+
+        # ══════════════════════════════════════════════════════════════════════
+        # DYNAMIC RULES — run active user-defined rules and merge results
+        # ══════════════════════════════════════════════════════════════════════
+        if dynamic_rules:
+            from utils.dynamic_rules import run_dynamic_rules
+            dyn_errors = run_dynamic_rules(
+                df, dynamic_rules,
+                sno_col=sno_col,
+                tag_col=tag_col,
+            )
+            errors.extend(dyn_errors)
+
+            # Highlight dynamic-rule error cells with the logic fill colour
+            for e in dyn_errors:
+                ci_d   = _val_col_idx(col_names, e["column"])
+                cell_d = ws_hl.cell(row=e["row"], column=ci_d)
+                cell_d.fill = _VAL_FILL_LOGIC
+            # Rebuild highlighted bytes with dynamic fills applied
+            highlighted_bytes = workbook_to_bytes(wb)
+
+        # ══════════════════════════════════════════════════════════════════════
+        # BUILD ERROR LOG EXCEL  (includes both predefined + dynamic errors)
+        # Sheet 1: full error table  |  Sheet 2: summary
+        # ══════════════════════════════════════════════════════════════════════
+        _rule_labels = {
+            1:  "Empty Cell Validation",
+            2:  "Area Classification vs IS/NIS",
+            3:  "Scope of Supply vs Vendor Package",
+            4:  "TAG NO vs Instrument Type / Capitalisation",
+            5:  "Power Supply Logic",
+            6:  "Signal Type vs Junction Box",
+            7:  "Range Validation",
+            8:  "Unit Match",
+            9:  "Fail Action",
+            10: "Alarm Setpoint Order",
+            11: "S.NO Order",
+            12: "Spelling Check",
+        }
+
+        log_wb = openpyxl.Workbook()
+        rpt_ws = log_wb.active
+        rpt_ws.title = "Validation Report"
+
+        _hfont = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+        _dfont = Font(name="Calibri", size=11)
+        _c_aln = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+        log_cols   = ["S.NO", "TAG NO", "Column", "Cell", "Source", "Error Message"]
+        log_widths = [12, 24, 28, 12, 14, 80]
+
+        for ci, (hdr_txt, w) in enumerate(zip(log_cols, log_widths), start=1):
+            c = rpt_ws.cell(row=1, column=ci, value=hdr_txt)
+            c.fill = _VAL_HDR_FILL
+            c.font = _hfont
+            c.alignment = _c_aln
+            rpt_ws.column_dimensions[get_column_letter(ci)].width = w
+        rpt_ws.row_dimensions[1].height = 22
+
+        for ri, e in enumerate(errors, start=2):
+            rfill = _VAL_ROW_FILL_A if ri % 2 == 0 else _VAL_ROW_FILL_B
+            src_label = "Dynamic" if e.get("source") == "dynamic" else "Predefined"
+            vals = [
+                e["sno"], e["tag"], e["column"], e["cell"],
+                src_label, e["message"],
+            ]
+            for ci2, val in enumerate(vals, start=1):
+                c = rpt_ws.cell(row=ri, column=ci2, value=val)
+                c.font      = _dfont
+                c.fill      = rfill
+                c.alignment = _c_aln
+            rpt_ws.row_dimensions[ri].height = 20
+        rpt_ws.freeze_panes = "A2"
+
+        # Summary sheet
+        sum_ws = log_wb.create_sheet("Summary")
+        sum_ws.column_dimensions["A"].width = 48
+        sum_ws.column_dimensions["B"].width = 10
+
+        title_font = Font(name="Calibri", size=14, bold=True, color="1B5EA7")
+        h2_font    = Font(name="Calibri", size=11, bold=True)
+        d_font     = Font(name="Calibri", size=11)
+
+        pred_ct = len([e for e in errors if e.get("source") != "dynamic"])
+        dyn_ct  = len([e for e in errors if e.get("source") == "dynamic"])
+        rows_with_err = len({e["row"] for e in errors})
+
+        sum_ws.cell(row=1, column=1, value="IODB Validation Summary").font = title_font
+        sum_ws.cell(row=2, column=1, value=f"Total Errors:           {len(errors)}").font = h2_font
+        sum_ws.cell(row=3, column=1, value=f"  Predefined:           {pred_ct}").font = d_font
+        sum_ws.cell(row=4, column=1, value=f"  Dynamic (user rules): {dyn_ct}").font  = d_font
+        sum_ws.cell(row=5, column=1, value=f"Rows with Errors:       {rows_with_err}").font = d_font
+
+        from collections import Counter
+        rule_ct: dict = {}
+        for e in errors:
+            if e.get("source") == "dynamic":
+                key = f"[Dynamic] {e.get('rule_name', e['rule'])}"
+            else:
+                key = f"Rule {e['rule']}: {_rule_labels.get(e['rule'], '')}"
+            rule_ct[key] = rule_ct.get(key, 0) + 1
+
+        sum_ws.cell(row=7, column=1, value="Errors by Rule").font = h2_font
+        sum_ws.cell(row=7, column=2, value="Count").font = h2_font
+        for sri, (rn, cnt) in enumerate(sorted(rule_ct.items(), key=lambda x: str(x[0])), start=8):
+            sum_ws.cell(row=sri, column=1, value=str(rn)).font = d_font
+            sum_ws.cell(row=sri, column=2, value=cnt).font = d_font
+
+        log_bytes = workbook_to_bytes(log_wb)
 
         return log_bytes, highlighted_bytes, tba_bytes, errors, None
 

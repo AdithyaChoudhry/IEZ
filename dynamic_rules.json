@@ -1,0 +1,21 @@
+[
+  {
+    "id": "acb934f2",
+    "name": "check",
+    "rule_type": "DUPLICATE",
+    "conditions": [
+      {
+        "column": "TAG NO",
+        "operator": "==",
+        "value": "",
+        "logical_operator": "AND"
+      }
+    ],
+    "target_column": "",
+    "error_message": "duplicate",
+    "case_sensitive": false,
+    "is_active": true,
+    "priority": 1,
+    "source": "dynamic"
+  }
+]

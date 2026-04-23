@@ -126,6 +126,55 @@ def process_datasheets(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Data Sheet v2  (two-row header · AI filter · Column-D heading mapping · rapidfuzz)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def process_datasheets_v2(
+    iodb_file,
+    template_file,
+    selected_tags: list[str],
+    two_row_header: bool = True,
+    fuzzy_threshold: int = 70,
+    progress_callback=None,
+) -> tuple[bytes | None, str | None, str | None, list[dict]]:
+    """
+    New datasheet pipeline using the datasheet_generator module.
+
+    Reads IODB with optional two-row combined header, populates the template's
+    "Datasheet" (Sheet 2) by fuzzy-matching Column D headings to IODB columns,
+    and returns all files as a ZIP.
+
+    Returns (zip_bytes, "Datasheets.zip", error_or_None, mapping_logs)
+    """
+    from utils.datasheet_generator import batch_generate_zip  # local import to avoid circular deps
+
+    zip_bytes, filename, err, logs = batch_generate_zip(
+        iodb_file=iodb_file,
+        template_file=template_file,
+        selected_tags=selected_tags,
+        two_row_header=two_row_header,
+        threshold=fuzzy_threshold,
+        progress_callback=progress_callback,
+    )
+    return zip_bytes, filename, err, logs
+
+
+def get_ai_tags_from_iodb(
+    iodb_file,
+    two_row_header: bool = True,
+) -> tuple[list[str], str | None]:
+    """
+    Return (ai_tag_list, error) using the new datasheet_generator loader.
+    Used by the Streamlit UI to populate the tag selector with AI-only tags.
+    """
+    from utils.datasheet_generator import load_iodb, get_ai_tags  # local import
+    df, col_names, err = load_iodb(iodb_file, two_row_header=two_row_header)
+    if err:
+        return [], err
+    return get_ai_tags(df, col_names)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Cable Schedule
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -287,6 +336,7 @@ def get_iodb_dataframe(iodb_file) -> tuple[pd.DataFrame | None, str | None]:
 def process_iodb_validation(
     raw_bytes: bytes,
     auto_correct_spelling: bool = False,
+    dynamic_rules=None,          # list[DynamicRule] | None
 ) -> tuple[bytes | None, bytes | None, bytes | None, list[dict], str | None]:
     """
     Drive the full IODB validation pipeline.
@@ -314,7 +364,7 @@ def process_iodb_validation(
         if err:
             return None, None, [], err
 
-        return generate_iodb_validation(df, wb, auto_correct_spelling)
+        return generate_iodb_validation(df, wb, auto_correct_spelling, dynamic_rules=dynamic_rules)
     except Exception as exc:
         import traceback
         return None, None, None, [], f"Failed to process file: {exc}\n{traceback.format_exc()}"

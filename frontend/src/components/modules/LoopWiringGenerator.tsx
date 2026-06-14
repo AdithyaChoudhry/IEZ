@@ -23,6 +23,21 @@ interface GenerateResponse {
   sheet_count: number;
 }
 
+interface GenerateJob {
+  job_id: string;
+  status: string;
+}
+
+interface GenerateStatus {
+  job_id: string;
+  status: 'processing' | 'done' | 'error';
+  result?: GenerateResponse;
+  error?: string;
+}
+
+const POLL_INTERVAL_MS = 3000;
+const MAX_POLL_ATTEMPTS = 200; // ~10 minutes
+
 export default function LoopWiringGenerator() {
   const [inputFile, setInputFile] = useState<File | null>(null);
   const [templateFile, setTemplateFile] = useState<File | null>(null);
@@ -58,16 +73,35 @@ export default function LoopWiringGenerator() {
     if (!inputFile || !templateFile) return;
     setGenerating(true);
     setError(null);
+    setResult(null);
 
     const formData = new FormData();
     formData.append('loop_input_file', inputFile);
     formData.append('template_file', templateFile);
 
     try {
-      const response = await api.post<GenerateResponse>('/loop-wiring/generate', formData, {
+      const kickoff = await api.post<GenerateJob>('/loop-wiring/generate', formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
-      setResult(response.data);
+      const jobId = kickoff.data.job_id;
+
+      for (let attempt = 0; attempt < MAX_POLL_ATTEMPTS; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+
+        const statusResponse = await api.get<GenerateStatus>(`/loop-wiring/generate/status/${jobId}`);
+        const { status: jobStatus, result: jobResult, error: jobError } = statusResponse.data;
+
+        if (jobStatus === 'done') {
+          setResult(jobResult!);
+          return;
+        }
+        if (jobStatus === 'error') {
+          setError(jobError || 'Generation failed');
+          return;
+        }
+      }
+
+      setError('Generation is taking longer than expected. Please try again later.');
     } catch (err: any) {
       setError(err.response?.data?.detail || 'Generation failed');
     } finally {

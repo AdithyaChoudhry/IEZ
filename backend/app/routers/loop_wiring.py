@@ -1,14 +1,20 @@
 """
 Loop Wiring Generator router.
 """
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile, File, status
 from fastapi.responses import StreamingResponse
 import io
+import uuid
 import pandas as pd
 
 from ..deps import get_current_user
 from ..auth.models import User
-from ..models.loop_wiring import LoopWiringPreviewResponse, LoopWiringGenerateResponse
+from ..models.loop_wiring import (
+    LoopWiringPreviewResponse,
+    LoopWiringGenerateResponse,
+    LoopWiringJobResponse,
+    LoopWiringStatusResponse,
+)
 
 # Import existing business logic
 import sys
@@ -20,6 +26,7 @@ from utils.generators import generate_loop_wiring as _generate_loop_wiring
 router = APIRouter(prefix="/loop-wiring", tags=["Loop Wiring"])
 
 loop_wiring_cache: dict = {}
+loop_wiring_jobs: dict = {}
 
 
 def _find_tag_column(df: pd.DataFrame) -> str | None:
@@ -63,41 +70,96 @@ async def preview_loop_wiring(
     )
 
 
-@router.post("/generate", response_model=LoopWiringGenerateResponse)
+def _run_generate_job(
+    job_id: str,
+    loop_input_bytes: bytes,
+    template_bytes: bytes,
+    user_id: int,
+):
+    """Run loop wiring generation in the background and store the result/status."""
+    try:
+        df, err = read_loop_wiring_input(io.BytesIO(loop_input_bytes))
+        if err:
+            loop_wiring_jobs[job_id] = {"status": "error", "error": err}
+            return
+
+        tag_col = _find_tag_column(df)
+        sheet_count = len(df[tag_col].dropna().astype(str).str.strip().unique()) if tag_col else 0
+
+        wb, tmpl_buf, err = load_workbook_from_upload(io.BytesIO(template_bytes))
+        if err:
+            loop_wiring_jobs[job_id] = {"status": "error", "error": f"Failed to load Loop Wiring template: {err}"}
+            return
+
+        tmpl_buf.seek(0)
+        tmpl_bytes = tmpl_buf.read()
+
+        out_bytes, filename, err = _generate_loop_wiring(df, wb, template_bytes=tmpl_bytes)
+        if err:
+            loop_wiring_jobs[job_id] = {"status": "error", "error": err}
+            return
+
+        cache_key = f"{user_id}_loop_wiring"
+        loop_wiring_cache[cache_key] = {"bytes": out_bytes, "filename": filename}
+
+        loop_wiring_jobs[job_id] = {
+            "status": "done",
+            "result": LoopWiringGenerateResponse(
+                filename=filename,
+                message=f"Loop Wiring generated successfully ({sheet_count} sheet(s))",
+                sheet_count=sheet_count,
+            ),
+        }
+    except Exception as exc:
+        loop_wiring_jobs[job_id] = {"status": "error", "error": str(exc)}
+
+
+@router.post("/generate", response_model=LoopWiringJobResponse, status_code=status.HTTP_202_ACCEPTED)
 async def generate_loop_wiring(
+    background_tasks: BackgroundTasks,
     loop_input_file: UploadFile = File(...),
     template_file: UploadFile = File(...),
     current_user: User = Depends(get_current_user),
 ):
+    """
+    Kick off Loop Wiring generation. Generation runs in the background —
+    poll GET /loop-wiring/generate/status/{job_id} for the result.
+    """
     loop_input_bytes = await loop_input_file.read()
     template_bytes = await template_file.read()
 
-    df, err = read_loop_wiring_input(io.BytesIO(loop_input_bytes))
-    if err:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=err)
+    job_id = str(uuid.uuid4())
+    loop_wiring_jobs[job_id] = {"status": "processing"}
 
-    tag_col = _find_tag_column(df)
-    sheet_count = len(df[tag_col].dropna().astype(str).str.strip().unique()) if tag_col else 0
+    background_tasks.add_task(
+        _run_generate_job,
+        job_id,
+        loop_input_bytes,
+        template_bytes,
+        current_user.id,
+    )
 
-    wb, tmpl_buf, err = load_workbook_from_upload(io.BytesIO(template_bytes))
-    if err:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Failed to load Loop Wiring template: {err}")
+    return LoopWiringJobResponse(job_id=job_id, status="processing")
 
-    tmpl_buf.seek(0)
-    tmpl_bytes = tmpl_buf.read()
 
-    out_bytes, filename, err = _generate_loop_wiring(df, wb, template_bytes=tmpl_bytes)
+@router.get("/generate/status/{job_id}", response_model=LoopWiringStatusResponse)
+async def get_generate_status(
+    job_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    """Poll the status/result of a loop wiring generation job."""
+    job = loop_wiring_jobs.get(job_id)
+    if not job:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Generation job not found"
+        )
 
-    if err:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=err)
-
-    cache_key = f"{current_user.id}_loop_wiring"
-    loop_wiring_cache[cache_key] = {"bytes": out_bytes, "filename": filename}
-
-    return LoopWiringGenerateResponse(
-        filename=filename,
-        message=f"Loop Wiring generated successfully ({sheet_count} sheet(s))",
-        sheet_count=sheet_count,
+    return LoopWiringStatusResponse(
+        job_id=job_id,
+        status=job["status"],
+        result=job.get("result"),
+        error=job.get("error"),
     )
 
 

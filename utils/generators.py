@@ -1420,6 +1420,16 @@ def generate_iodb_validation(
         errors: list[dict] = []
         col_names = list(df.columns)
 
+        # Precompute column arrays for O(1) cell access — _cell(i, col) in a
+        # tight loop over a wide dataframe (e.g. 3000+ rows x 160 cols) is
+        # extremely slow due to per-call row-Series construction overhead.
+        _col_arrays = {c: df[c].to_numpy() for c in col_names}
+
+        def _cell(i: int, col, default=""):
+            if col is None:
+                return default
+            return _col_arrays[col][i]
+
         # ── Locate key columns ────────────────────────────────────────────────
         sno_col    = _val_find_col(df, "S.NO", "S NO", "SNO", "S.NO.", "SERIAL NO", "SR NO", "SL NO")
         tag_col    = _val_find_col(df, "TAG NO", "TAG NUMBER", "TAG_NO", "TAG_NUMBER", "TAG")
@@ -1472,7 +1482,7 @@ def generate_iodb_validation(
             sno_v   = "UNKNOWN"
             tag_v   = "UNKNOWN"
             if sno_col:
-                sv = df.iloc[i].get(sno_col, "")
+                sv = _cell(i, sno_col, "")
                 if not _val_empty(sv):
                     # Format S.NO without trailing .0 when numeric
                     try:
@@ -1484,7 +1494,7 @@ def generate_iodb_validation(
                     except Exception:
                         sno_v = str(sv).strip()
             if tag_col:
-                tv = df.iloc[i].get(tag_col, "")
+                tv = _cell(i, tag_col, "")
                 if not _val_empty(tv):
                     tag_v = str(tv).strip()
             return {
@@ -1504,8 +1514,13 @@ def generate_iodb_validation(
         for col in col_names:
             if col.strip().upper() in SKIP_EMPTY:
                 continue
+            # Columns left blank for every row are treated as unused by this
+            # project (the IODB schema has many type-specific/optional
+            # columns) and are excluded from Rule 1 entirely.
+            if all(_val_empty(v) for v in _col_arrays[col]):
+                continue
             for i in range(len(df)):
-                if _val_empty(df.iloc[i][col]):
+                if _val_empty(_cell(i, col)):
                     errors.append(_err(i, col, "Cell cannot be empty", 1))
 
         # ══════════════════════════════════════════════════════════════════════
@@ -1513,8 +1528,8 @@ def generate_iodb_validation(
         # ══════════════════════════════════════════════════════════════════════
         if area_col and isnis_col:
             for i in range(len(df)):
-                area  = _val_norm(df.iloc[i][area_col])
-                isnis = _val_norm(df.iloc[i][isnis_col])
+                area  = _val_norm(_cell(i, area_col))
+                isnis = _val_norm(_cell(i, isnis_col))
                 if area == "HAZARDOUS" and isnis != "IS":
                     errors.append(_err(i, isnis_col,
                         "Instrument under Hazardous area should be IS type only", 2))
@@ -1527,8 +1542,8 @@ def generate_iodb_validation(
         # ══════════════════════════════════════════════════════════════════════
         if scope_col and vendor_col:
             for i in range(len(df)):
-                scope  = _val_norm(df.iloc[i][scope_col])
-                vendor = df.iloc[i][vendor_col]
+                scope  = _val_norm(_cell(i, scope_col))
+                vendor = _cell(i, vendor_col)
                 if scope != "WABAG" and (_val_empty(vendor) or _val_norm(vendor) == "-"):
                     errors.append(_err(i, vendor_col,
                         "Instrument is under Vendor package scope so Vendor package name should be mentioned", 3))
@@ -1538,8 +1553,8 @@ def generate_iodb_validation(
         # ══════════════════════════════════════════════════════════════════════
         if tag_col and iname_col:
             for i in range(len(df)):
-                tag_v  = _val_norm(df.iloc[i][tag_col])
-                iname  = _val_norm(df.iloc[i][iname_col])
+                tag_v  = _val_norm(_cell(i, tag_col))
+                iname  = _val_norm(_cell(i, iname_col))
                 if not tag_v or not iname:
                     continue
                 for key in _TAG_KEYS_SORTED:
@@ -1556,7 +1571,7 @@ def generate_iodb_validation(
         # ══════════════════════════════════════════════════════════════════════
         if tag_col:
             for i in range(len(df)):
-                tv = df.iloc[i][tag_col]
+                tv = _cell(i, tag_col)
                 if not _val_empty(tv):
                     ts = str(tv).strip()
                     if ts != ts.upper():
@@ -1568,8 +1583,8 @@ def generate_iodb_validation(
         # ══════════════════════════════════════════════════════════════════════
         if power_col and wire_col:
             for i in range(len(df)):
-                power = _val_norm(df.iloc[i][power_col])
-                wire  = _val_norm(df.iloc[i][wire_col])
+                power = _val_norm(_cell(i, power_col))
+                wire  = _val_norm(_cell(i, wire_col))
                 if power not in ("24V DC", "-", "") and wire != "4 WIRE - EXT POWER":
                     errors.append(_err(i, wire_col,
                         "2 wire instrument is Loop powered and 24 V DC and "
@@ -1582,9 +1597,9 @@ def generate_iodb_validation(
             jb_msg = ("All AI signals should be connected to AJB and "
                       "All DI or DO signals should be connected to DJB")
             for i in range(len(df)):
-                signal = _val_norm(df.iloc[i][signal_col])
-                jb     = _val_norm(df.iloc[i][jb_col])
-                subsys = _val_norm(df.iloc[i][subsys_col]) if subsys_col else ""
+                signal = _val_norm(_cell(i, signal_col))
+                jb     = _val_norm(_cell(i, jb_col))
+                subsys = _val_norm(_cell(i, subsys_col)) if subsys_col else ""
                 # Only apply when instrument is NOT routed via a sub-system
                 if subsys not in ("-", ""):
                     continue
@@ -1598,8 +1613,8 @@ def generate_iodb_validation(
         # ══════════════════════════════════════════════════════════════════════
         if calr_col and instr_col:
             for i in range(len(df)):
-                cal_r  = _val_parse_range(df.iloc[i][calr_col])
-                inst_r = _val_parse_range(df.iloc[i][instr_col])
+                cal_r  = _val_parse_range(_cell(i, calr_col))
+                inst_r = _val_parse_range(_cell(i, instr_col))
                 if cal_r and inst_r and cal_r[1] > inst_r[1]:
                     errors.append(_err(i, calr_col,
                         f"Calibration range ({cal_r[0]}-{cal_r[1]}) exceeds "
@@ -1610,8 +1625,8 @@ def generate_iodb_validation(
         # ══════════════════════════════════════════════════════════════════════
         if calu_col and instu_col:
             for i in range(len(df)):
-                cu = _val_norm(df.iloc[i][calu_col])
-                iu = _val_norm(df.iloc[i][instu_col])
+                cu = _val_norm(_cell(i, calu_col))
+                iu = _val_norm(_cell(i, instu_col))
                 if cu and iu and cu != iu:
                     errors.append(_err(i, calu_col,
                         f"Calibration Range unit '{cu}' should be same as "
@@ -1624,7 +1639,7 @@ def generate_iodb_validation(
             _valid_fa = {"FO", "FC", "LAST POS", "-", "NA", "N/A",
                          "FAIL OPEN", "FAIL CLOSE"}
             for i in range(len(df)):
-                fa = _val_norm(df.iloc[i][fail_col])
+                fa = _val_norm(_cell(i, fail_col))
                 if fa and fa not in _valid_fa:
                     errors.append(_err(i, fail_col,
                         f"Fail action '{fa}' is invalid — allowed: "
@@ -1644,8 +1659,8 @@ def generate_iodb_validation(
             for i in range(len(df)):
                 for lower_col, upper_col in _sp_pairs:
                     try:
-                        lv = df.iloc[i][lower_col]
-                        uv = df.iloc[i][upper_col]
+                        lv = _cell(i, lower_col)
+                        uv = _cell(i, upper_col)
                         if (_val_empty(lv) or _val_empty(uv)
                                 or _val_norm(lv) in _SP_SKIP
                                 or _val_norm(uv) in _SP_SKIP):
@@ -1667,7 +1682,7 @@ def generate_iodb_validation(
         if sno_col:
             prev_sno: float | None = None
             for i in range(len(df)):
-                sv = df.iloc[i][sno_col]
+                sv = _cell(i, sno_col)
                 if _val_empty(sv):
                     continue
                 try:
@@ -1687,7 +1702,7 @@ def generate_iodb_validation(
         # used for the auto-correct feature in the highlighted output.
         spell_corrections: dict[tuple[int, str], list[tuple[str, str]]] = {}
 
-        if _SPELL_AVAILABLE:
+        if _SPELL_AVAILABLE and auto_correct_spelling:
             spell = _SpellChecker()
             # Load domain-specific terms to prevent false positives
             spell.word_frequency.load_words([
@@ -1718,7 +1733,7 @@ def generate_iodb_validation(
                 if col.strip().upper() in _SKIP_SPELL:
                     continue
                 for i in range(len(df)):
-                    v = df.iloc[i][col]
+                    v = _cell(i, col)
                     if _val_empty(v):
                         continue
                     # Only check plain alphabetic words (4+ chars, not all-caps,
@@ -1784,13 +1799,13 @@ def generate_iodb_validation(
         for col in col_names:
             ci_tba = _val_col_idx(col_names, col)
             for i in range(len(df)):
-                v = df.iloc[i][col]
+                v = _cell(i, col)
                 if not _val_empty(v) and str(v).strip().upper() == "TBA":
                     orig_row = int(df.index[i]) + 2
                     sno_v_t = "UNKNOWN"
                     tag_v_t = "UNKNOWN"
                     if sno_col:
-                        sv = df.iloc[i].get(sno_col, "")
+                        sv = _cell(i, sno_col, "")
                         if not _val_empty(sv):
                             try:
                                 fsv = float(sv)
@@ -1798,7 +1813,7 @@ def generate_iodb_validation(
                             except Exception:
                                 sno_v_t = str(sv).strip()
                     if tag_col:
-                        tv = df.iloc[i].get(tag_col, "")
+                        tv = _cell(i, tag_col, "")
                         if not _val_empty(tv):
                             tag_v_t = str(tv).strip()
                     tba_rows.append({

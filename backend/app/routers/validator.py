@@ -1,11 +1,12 @@
 """
 IODB Validator router - validation and dynamic rules management.
 """
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile, File, Form, status
 from fastapi.responses import StreamingResponse
 from typing import List, Optional
 import io
 import json
+import uuid
 
 from ..deps import get_current_user
 from ..auth.models import User
@@ -13,6 +14,8 @@ from ..models.validator import (
     ValidationRequest,
     ValidationResponse,
     ValidationErrorDetail,
+    ValidationJobResponse,
+    ValidationStatusResponse,
     DynamicRuleCreate,
     DynamicRuleUpdate,
     DynamicRuleResponse,
@@ -37,63 +40,111 @@ router = APIRouter(prefix="/validator", tags=["IODB Validator"])
 # Store validation results temporarily (in production, use Redis or database)
 validation_cache: dict = {}
 
+# Store validation job status/results temporarily (in production, use Redis or database)
+validation_jobs: dict = {}
 
-@router.post("/validate", response_model=ValidationResponse)
+# Cap the number of error details sent back in the JSON response — with
+# wide/sparse IODB files this can reach 100K+ entries, which is far too
+# large to serialize and render in the browser. The full list is still
+# available in the downloadable error-log workbook.
+MAX_ERRORS_IN_RESPONSE = 2000
+
+
+def _run_validation_job(
+    job_id: str,
+    file_bytes: bytes,
+    auto_correct_spelling: bool,
+    dynamic_rules,
+    user_id: int,
+):
+    """Run validation in the background and store the result/status."""
+    try:
+        log_bytes, hl_bytes, tba_bytes, errors, err_msg = process_iodb_validation(
+            file_bytes,
+            auto_correct_spelling=auto_correct_spelling,
+            dynamic_rules=dynamic_rules if dynamic_rules else None,
+        )
+
+        if err_msg:
+            validation_jobs[job_id] = {"status": "error", "error": err_msg}
+            return
+
+        # Store results in cache (keyed by user ID) for the download endpoints
+        cache_key = f"{user_id}_validation"
+        validation_cache[cache_key] = {
+            "log_bytes": log_bytes,
+            "highlighted_bytes": hl_bytes,
+            "tba_bytes": tba_bytes,
+        }
+
+        error_details = [
+            ValidationErrorDetail(**error) for error in errors[:MAX_ERRORS_IN_RESPONSE]
+        ]
+
+        validation_jobs[job_id] = {
+            "status": "done",
+            "result": ValidationResponse(
+                errors=error_details,
+                error_count=len(errors),
+                errors_truncated=len(errors) > MAX_ERRORS_IN_RESPONSE,
+                has_error_log=log_bytes is not None,
+                has_highlighted=hl_bytes is not None,
+                has_tba=tba_bytes is not None,
+                message=f"Validation complete: {len(errors)} error(s) found" if errors else "No errors found",
+            ),
+        }
+    except Exception as exc:
+        validation_jobs[job_id] = {"status": "error", "error": str(exc)}
+
+
+@router.post("/validate", response_model=ValidationJobResponse, status_code=status.HTTP_202_ACCEPTED)
 async def validate_iodb(
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     auto_correct_spelling: bool = Form(False),
     current_user: User = Depends(get_current_user),
 ):
     """
-    Validate an IODB Excel file with predefined and dynamic rules.
-    
-    Args:
-        file: IODB Excel file
-        auto_correct_spelling: Enable spell-check corrections
-        current_user: Authenticated user
-        
-    Returns:
-        Validation results with errors
+    Kick off validation of an IODB Excel file with predefined and dynamic
+    rules. Validation runs in the background — poll
+    GET /validator/validate/status/{job_id} for the result.
     """
-    # Read file bytes
     file_bytes = await file.read()
-    
-    # Load dynamic rules
     dynamic_rules = load_rules()
-    
-    # Process validation
-    log_bytes, hl_bytes, tba_bytes, errors, err_msg = process_iodb_validation(
+
+    job_id = str(uuid.uuid4())
+    validation_jobs[job_id] = {"status": "processing"}
+
+    background_tasks.add_task(
+        _run_validation_job,
+        job_id,
         file_bytes,
-        auto_correct_spelling=auto_correct_spelling,
-        dynamic_rules=dynamic_rules if dynamic_rules else None,
+        auto_correct_spelling,
+        dynamic_rules,
+        current_user.id,
     )
-    
-    if err_msg:
+
+    return ValidationJobResponse(job_id=job_id, status="processing")
+
+
+@router.get("/validate/status/{job_id}", response_model=ValidationStatusResponse)
+async def get_validation_status(
+    job_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    """Poll the status/result of a validation job."""
+    job = validation_jobs.get(job_id)
+    if not job:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=err_msg
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Validation job not found"
         )
-    
-    # Store results in cache (keyed by user ID)
-    cache_key = f"{current_user.id}_validation"
-    validation_cache[cache_key] = {
-        "log_bytes": log_bytes,
-        "highlighted_bytes": hl_bytes,
-        "tba_bytes": tba_bytes,
-    }
-    
-    # Convert errors to response format
-    error_details = [
-        ValidationErrorDetail(**error) for error in errors
-    ]
-    
-    return ValidationResponse(
-        errors=error_details,
-        error_count=len(error_details),
-        has_error_log=log_bytes is not None,
-        has_highlighted=hl_bytes is not None,
-        has_tba=tba_bytes is not None,
-        message=f"Validation complete: {len(errors)} error(s) found" if errors else "No errors found"
+
+    return ValidationStatusResponse(
+        job_id=job_id,
+        status=job["status"],
+        result=job.get("result"),
+        error=job.get("error"),
     )
 
 

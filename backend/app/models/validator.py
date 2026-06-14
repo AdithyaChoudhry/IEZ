@@ -28,10 +28,25 @@ class ValidationResponse(BaseModel):
     """Response from validation."""
     errors: List[ValidationErrorDetail]
     error_count: int
+    errors_truncated: bool = False
     has_error_log: bool
     has_highlighted: bool
     has_tba: bool
     message: Optional[str] = None
+
+
+class ValidationJobResponse(BaseModel):
+    """Response when a validation job is kicked off."""
+    job_id: str
+    status: str
+
+
+class ValidationStatusResponse(BaseModel):
+    """Status/result of an in-progress or completed validation job."""
+    job_id: str
+    status: str  # "processing" | "done" | "error"
+    result: Optional[ValidationResponse] = None
+    error: Optional[str] = None
 
 
 class DynamicRuleCondition(BaseModel):

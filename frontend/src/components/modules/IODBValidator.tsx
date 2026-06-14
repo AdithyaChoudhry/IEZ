@@ -33,11 +33,27 @@ interface ValidationError {
 interface ValidationResult {
   errors: ValidationError[];
   error_count: number;
+  errors_truncated: boolean;
   has_error_log: boolean;
   has_highlighted: boolean;
   has_tba: boolean;
   message?: string;
 }
+
+interface ValidationJob {
+  job_id: string;
+  status: string;
+}
+
+interface ValidationStatus {
+  job_id: string;
+  status: 'processing' | 'done' | 'error';
+  result?: ValidationResult;
+  error?: string;
+}
+
+const POLL_INTERVAL_MS = 3000;
+const MAX_POLL_ATTEMPTS = 200; // ~10 minutes
 
 export default function IODBValidator() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -61,15 +77,34 @@ export default function IODBValidator() {
 
     setValidating(true);
     setError(null);
+    setResult(null);
     const formData = new FormData();
     formData.append('file', selectedFile);
     formData.append('auto_correct_spelling', autoCorrect.toString());
 
     try {
-      const response = await api.post<ValidationResult>('/validator/validate', formData, {
+      const kickoff = await api.post<ValidationJob>('/validator/validate', formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
-      setResult(response.data);
+      const jobId = kickoff.data.job_id;
+
+      for (let attempt = 0; attempt < MAX_POLL_ATTEMPTS; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+
+        const statusResponse = await api.get<ValidationStatus>(`/validator/validate/status/${jobId}`);
+        const { status: jobStatus, result: jobResult, error: jobError } = statusResponse.data;
+
+        if (jobStatus === 'done') {
+          setResult(jobResult!);
+          return;
+        }
+        if (jobStatus === 'error') {
+          setError(jobError || 'Validation failed');
+          return;
+        }
+      }
+
+      setError('Validation is taking longer than expected. Please try again later.');
     } catch (error: any) {
       setError(error.response?.data?.detail || 'Validation failed');
     } finally {
@@ -240,6 +275,12 @@ export default function IODBValidator() {
 
               {/* Errors by Row */}
               <Card title={`Errors by Row (${Object.keys(errorsByRow || {}).length} rows affected)`}>
+                {result.errors_truncated && (
+                  <p className="mb-3 text-sm text-orange-700 bg-orange-50 border border-orange-200 rounded-lg px-3 py-2">
+                    Showing the first {result.errors.length.toLocaleString()} of {result.error_count.toLocaleString()} errors.
+                    Download the Error Log (Excel) below for the full list.
+                  </p>
+                )}
                 <div className="space-y-3 max-h-96 overflow-y-auto">
                   {Object.entries(errorsByRow || {})
                     .sort(([a], [b]) => Number(a) - Number(b))

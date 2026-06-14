@@ -1,0 +1,412 @@
+"""
+Smart Datasheet Intelligence Engine (SDIE) — Phase 1: OCR extraction.
+
+Pipeline:
+    file bytes (PDF/JPG/PNG/TIFF)
+        -> extract_pages()     : render each page to a PIL Image
+        -> ocr_page()           : pytesseract word-level OCR -> lines with confidence
+        -> parse_specifications(): regex "label : value" extraction per line
+        -> normalize_specifications(): fuzzy-match labels to canonical WABAG fields
+"""
+from __future__ import annotations
+
+import io
+import re
+from typing import Any
+
+from PIL import Image
+import pytesseract
+from pytesseract import Output
+
+import logging
+
+from openpyxl import load_workbook
+from openpyxl.utils import get_column_letter
+
+from .datasheet_generator import (
+    normalize,
+    fuzzy_match,
+    _get_datasheet_ws,
+    _is_explicit_placeholder,
+    FUZZY_THRESHOLD,
+)
+
+logger = logging.getLogger(__name__)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Limits (keep memory/CPU bounded on Render's free tier)
+# ─────────────────────────────────────────────────────────────────────────────
+MAX_PAGES = 10
+PDF_DPI = 150
+
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp"}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Canonical WABAG datasheet fields + synonym dictionary
+# ─────────────────────────────────────────────────────────────────────────────
+CANONICAL_FIELDS = [
+    "INSTRUMENT TYPE",
+    "MODEL NUMBER",
+    "MEASURING RANGE",
+    "ACCURACY",
+    "OUTPUT SIGNAL",
+    "SUPPLY VOLTAGE",
+    "PROCESS TEMPERATURE",
+    "PROCESS PRESSURE",
+    "WETTED MATERIAL",
+    "ENCLOSURE PROTECTION",
+    "HAZARDOUS AREA CERTIFICATION",
+    "COMMUNICATION PROTOCOL",
+    "MOUNTING TYPE",
+    "PROCESS CONNECTION",
+]
+
+SYNONYMS: dict[str, list[str]] = {
+    "INSTRUMENT TYPE": ["instrument type", "type", "device type", "transmitter type"],
+    "MODEL NUMBER": ["model number", "model no", "model", "part number", "part no", "type number"],
+    "MEASURING RANGE": [
+        "measuring range", "range", "measurement range", "operating range",
+        "span", "calibration range",
+    ],
+    "ACCURACY": ["accuracy", "accuracy class", "precision", "measurement accuracy"],
+    "OUTPUT SIGNAL": [
+        "output signal", "output", "signal output", "electrical output",
+        "output type",
+    ],
+    "SUPPLY VOLTAGE": [
+        "supply voltage", "power supply", "power", "voltage supply",
+        "operating voltage", "input voltage",
+    ],
+    "PROCESS TEMPERATURE": [
+        "process temperature", "operating temperature", "temperature range",
+        "ambient temperature", "temperature",
+    ],
+    "PROCESS PRESSURE": [
+        "process pressure", "operating pressure", "pressure rating",
+        "pressure range", "pressure",
+    ],
+    "WETTED MATERIAL": [
+        "wetted material", "wetted parts", "material of construction",
+        "wetted parts material", "body material",
+    ],
+    "ENCLOSURE PROTECTION": [
+        "enclosure protection", "ingress protection", "protection class",
+        "ip rating", "enclosure rating", "housing protection",
+    ],
+    "HAZARDOUS AREA CERTIFICATION": [
+        "hazardous area certification", "hazardous area approval",
+        "explosion protection", "ex certification", "area classification",
+        "certification",
+    ],
+    "COMMUNICATION PROTOCOL": [
+        "communication protocol", "communication", "protocol",
+        "digital communication", "fieldbus",
+    ],
+    "MOUNTING TYPE": ["mounting type", "mounting", "mounting style", "installation type"],
+    "PROCESS CONNECTION": [
+        "process connection", "connection type", "process connection size",
+        "fitting", "connection",
+    ],
+}
+
+# Build a flat list of (synonym, canonical_field) for fuzzy matching.
+_SYNONYM_CHOICES: list[str] = []
+_SYNONYM_TO_CANONICAL: dict[str, str] = {}
+for _canonical, _terms in SYNONYMS.items():
+    for _term in [_canonical] + _terms:
+        norm_term = normalize(_term)
+        _SYNONYM_CHOICES.append(norm_term)
+        _SYNONYM_TO_CANONICAL[norm_term] = _canonical
+
+MATCH_THRESHOLD = 80
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Step 1 — page extraction
+# ─────────────────────────────────────────────────────────────────────────────
+def extract_pages(file_bytes: bytes, filename: str) -> list[Image.Image]:
+    """Render an uploaded PDF/image into a list of PIL Images (one per page)."""
+    ext = ""
+    if "." in filename:
+        ext = "." + filename.rsplit(".", 1)[-1].lower()
+
+    if ext == ".pdf":
+        from pdf2image import convert_from_bytes
+        pages = convert_from_bytes(file_bytes, dpi=PDF_DPI, fmt="png")
+        return pages[:MAX_PAGES]
+
+    # Treat everything else as a single-page image (JPG/PNG/TIFF/BMP/...)
+    img = Image.open(io.BytesIO(file_bytes))
+    # TIFF files may contain multiple frames/pages
+    pages: list[Image.Image] = []
+    try:
+        while True:
+            pages.append(img.convert("RGB"))
+            img.seek(img.tell() + 1)
+    except EOFError:
+        pass
+    if not pages:
+        pages = [img.convert("RGB")]
+    return pages[:MAX_PAGES]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Step 2 — OCR a single page into lines with per-line confidence
+# ─────────────────────────────────────────────────────────────────────────────
+def ocr_page(image: Image.Image) -> list[dict[str, Any]]:
+    """
+    Run OCR on a page image and group words into lines.
+
+    Returns a list of {"text": str, "confidence": float} — confidence is the
+    average of the OCR word-level confidences (0-100) for that line.
+    """
+    data = pytesseract.image_to_data(image, output_type=Output.DICT)
+
+    lines: dict[tuple[int, int, int], dict[str, Any]] = {}
+    n = len(data.get("text", []))
+    for i in range(n):
+        word = data["text"][i].strip()
+        if not word:
+            continue
+        conf_raw = data["conf"][i]
+        try:
+            conf = float(conf_raw)
+        except (TypeError, ValueError):
+            conf = -1.0
+        if conf < 0:
+            continue
+
+        key = (data["block_num"][i], data["par_num"][i], data["line_num"][i])
+        entry = lines.setdefault(key, {"words": [], "confs": []})
+        entry["words"].append(word)
+        entry["confs"].append(conf)
+
+    result = []
+    for entry in lines.values():
+        text = " ".join(entry["words"]).strip()
+        if not text:
+            continue
+        avg_conf = sum(entry["confs"]) / len(entry["confs"])
+        result.append({"text": text, "confidence": round(avg_conf, 1)})
+
+    return result
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Step 3 — parse "label : value" style specifications from OCR'd lines
+# ─────────────────────────────────────────────────────────────────────────────
+# Matches "Label : Value", "Label - Value", "Label = Value", or a label
+# followed by 2+ spaces and a value (common in tabular vendor datasheets).
+_SPEC_LINE_RE = re.compile(
+    r"^\s*([A-Za-z][A-Za-z0-9/().,\- ]{1,60}?)\s*(?:[:=]|-{1,2}|\s{2,})\s*(\S.*)$"
+)
+
+
+def parse_specifications(pages: list[list[dict[str, Any]]]) -> list[dict[str, Any]]:
+    """
+    Extract {raw_label, value, confidence, page} dicts from OCR'd page lines.
+
+    `pages` is a list of per-page line lists, as returned by ocr_page().
+    """
+    specs: list[dict[str, Any]] = []
+    for page_idx, lines in enumerate(pages, start=1):
+        for line in lines:
+            text = line["text"]
+            m = _SPEC_LINE_RE.match(text)
+            if not m:
+                continue
+            raw_label = m.group(1).strip(" :-=")
+            value = m.group(2).strip()
+            if not raw_label or not value:
+                continue
+            # Skip labels that are themselves just numbers/symbols (false positives)
+            if not re.search(r"[A-Za-z]", raw_label):
+                continue
+            specs.append({
+                "raw_label": raw_label,
+                "value": value,
+                "confidence": line["confidence"],
+                "page": page_idx,
+            })
+    return specs
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Step 4 — normalize extracted labels to canonical WABAG fields
+# ─────────────────────────────────────────────────────────────────────────────
+def normalize_specifications(specs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """
+    Attach `canonical_field` (or None) and `match_score` to each extracted spec
+    by fuzzy-matching the raw label against the synonym dictionary.
+    """
+    normalized = []
+    for spec in specs:
+        norm_label = normalize(spec["raw_label"])
+        canonical_field: str | None = None
+        match_score = 0.0
+
+        if norm_label in _SYNONYM_TO_CANONICAL:
+            canonical_field = _SYNONYM_TO_CANONICAL[norm_label]
+            match_score = 100.0
+        else:
+            best, score = fuzzy_match(norm_label, _SYNONYM_CHOICES, MATCH_THRESHOLD)
+            if best is not None:
+                canonical_field = _SYNONYM_TO_CANONICAL[best]
+                match_score = float(score)
+
+        normalized.append({
+            **spec,
+            "canonical_field": canonical_field,
+            "match_score": round(match_score, 1),
+        })
+    return normalized
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Orchestration
+# ─────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# Step 5 — map normalized specs onto a WABAG template
+# ─────────────────────────────────────────────────────────────────────────────
+def _best_specs_by_canonical_field(specs: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """For each canonical field, keep the spec with the highest OCR confidence."""
+    best: dict[str, dict[str, Any]] = {}
+    for spec in specs:
+        field = spec.get("canonical_field")
+        if not field:
+            continue
+        current = best.get(field)
+        if current is None or spec["confidence"] > current["confidence"]:
+            best[field] = spec
+    return best
+
+
+def map_specs_to_template(
+    ws,
+    specs: list[dict[str, Any]],
+    threshold: int = FUZZY_THRESHOLD,
+    log: list[dict] | None = None,
+) -> None:
+    """
+    Populate a WABAG "Datasheet" worksheet in-place using extracted vendor specs.
+
+    Mirrors the inverted-scan strategy of
+    `datasheet_generator.map_data_to_template`: scans the sheet for explicit
+    "Refer Annexure …" placeholder cells, walks leftward along the row to find
+    the heading text, fuzzy-matches that heading against the SDIE synonym
+    dictionary to resolve a canonical field, and fills the placeholder with the
+    matching extracted spec's value (if any).
+    """
+    specs_by_field = _best_specs_by_canonical_field(specs)
+
+    for row in ws.iter_rows():
+        for cell in row:
+            if not _is_explicit_placeholder(cell.value):
+                continue
+            if isinstance(cell.value, str) and cell.value.strip().startswith("="):
+                continue
+            if cell.__class__.__name__ == "MergedCell":
+                continue
+
+            # Collect non-empty, non-placeholder labels to the left (left-to-right order)
+            left_labels: list[str] = []
+            for check_col in range(cell.column - 1, 0, -1):
+                check_cell = ws.cell(row=cell.row, column=check_col)
+                if check_cell.__class__.__name__ == "MergedCell":
+                    continue
+                cv = check_cell.value
+                if cv is None or not str(cv).strip():
+                    continue
+                cv_str = str(cv).strip()
+                if cv_str.startswith("=") or _is_explicit_placeholder(cv_str):
+                    continue
+                left_labels.insert(0, cv_str)
+
+            if not left_labels:
+                logger.debug(
+                    "map_specs_to_template: no heading found left of %s%d — skipping",
+                    get_column_letter(cell.column), cell.row,
+                )
+                continue
+
+            heading_candidates = [" ".join(left_labels[start:]) for start in range(len(left_labels))]
+            heading_text = heading_candidates[0]
+
+            # ── Resolve canonical field — try each heading candidate ───────────
+            canonical_field: str | None = None
+            match_score = 0.0
+            for candidate in heading_candidates:
+                nc = normalize(candidate)
+                if nc in _SYNONYM_TO_CANONICAL:
+                    canonical_field = _SYNONYM_TO_CANONICAL[nc]
+                    match_score = 100.0
+                    break
+                best, score = fuzzy_match(nc, _SYNONYM_CHOICES, threshold)
+                if best is not None and score > match_score:
+                    canonical_field = _SYNONYM_TO_CANONICAL[best]
+                    match_score = float(score)
+
+            spec = specs_by_field.get(canonical_field) if canonical_field else None
+
+            if spec is None:
+                if log is not None:
+                    log.append({
+                        "heading": heading_text,
+                        "canonical_field": canonical_field,
+                        "score": match_score,
+                        "value": "N/A",
+                        "status": "UNMATCHED",
+                    })
+                continue
+
+            cell.value = spec["value"]
+            if log is not None:
+                log.append({
+                    "heading": heading_text,
+                    "canonical_field": canonical_field,
+                    "score": match_score,
+                    "value": spec["value"],
+                    "status": "MATCHED",
+                })
+
+
+def generate_populated_datasheet(
+    template_bytes: bytes,
+    specs: list[dict[str, Any]],
+    threshold: int = FUZZY_THRESHOLD,
+) -> tuple[bytes, list[dict], str | None]:
+    """
+    Populate a WABAG datasheet template with extracted vendor specs.
+
+    Returns (excel_bytes, mapping_log, error). On error, excel_bytes is b"".
+    """
+    wb = load_workbook(io.BytesIO(template_bytes))
+
+    ws, err = _get_datasheet_ws(wb)
+    if err:
+        return b"", [], err
+
+    mapping_log: list[dict] = []
+    map_specs_to_template(ws, specs, threshold, mapping_log)
+
+    out = io.BytesIO()
+    wb.save(out)
+    out.seek(0)
+    return out.read(), mapping_log, None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Orchestration
+# ─────────────────────────────────────────────────────────────────────────────
+def extract_specifications(file_bytes: bytes, filename: str) -> tuple[list[dict[str, Any]], int]:
+    """
+    Run the full extraction pipeline on an uploaded vendor datasheet.
+
+    Returns (specs, page_count) where each spec is:
+        {raw_label, value, confidence, page, canonical_field, match_score}
+    """
+    pages = extract_pages(file_bytes, filename)
+    page_lines = [ocr_page(p) for p in pages]
+    specs = parse_specifications(page_lines)
+    specs = normalize_specifications(specs)
+    return specs, len(pages)

@@ -15,6 +15,7 @@ import InstrumentListGenerator from './components/modules/InstrumentListGenerato
 import IOListGenerator from './components/modules/IOListGenerator';
 import CableScheduleGenerator from './components/modules/CableScheduleGenerator';
 import LoopWiringGenerator from './components/modules/LoopWiringGenerator';
+import SmartDatasheetExtractor from './components/modules/SmartDatasheetExtractor';
 
 // Create React Query client
 const queryClient = new QueryClient({
@@ -105,6 +106,7 @@ function AppRoutes() {
         <Route path="cover-sheet" element={<CoverSheetGenerator />} />
         <Route path="cable-schedule" element={<CableScheduleGenerator />} />
         <Route path="loop-wiring" element={<LoopWiringGenerator />} />
+        <Route path="smart-datasheet" element={<SmartDatasheetExtractor />} />
       </Route>
 
       {/* Catch all - redirect to home */}

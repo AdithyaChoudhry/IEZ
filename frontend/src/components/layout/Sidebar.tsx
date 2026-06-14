@@ -11,6 +11,7 @@ import {
   Cable,
   GitBranch,
   Layers,
+  ScanSearch,
 } from 'lucide-react';
 import clsx from 'clsx';
 
@@ -40,6 +41,10 @@ const navSections = [
   {
     label: 'Document Control',
     items: [{ path: '/cover-sheet', icon: Layers, label: 'Cover Sheet' }],
+  },
+  {
+    label: 'Smart Tools',
+    items: [{ path: '/smart-datasheet', icon: ScanSearch, label: 'Smart Datasheet (AI)' }],
   },
 ];
 

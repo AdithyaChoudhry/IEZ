@@ -1,0 +1,223 @@
+"""
+Smart Datasheet Intelligence Engine (SDIE) router.
+
+Phase 1: upload a vendor datasheet (PDF/image), OCR it, extract label/value
+specifications with confidence scores, and normalize labels to canonical
+WABAG field names.
+"""
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile, File, status
+from fastapi.responses import StreamingResponse
+import io
+import uuid
+
+from ..deps import get_current_user
+from ..auth.models import User
+from ..models.sdie import (
+    ExtractedSpec,
+    ExtractionResponse,
+    ExtractionJobResponse,
+    ExtractionStatusResponse,
+    MappingLogEntry,
+    GenerateResponse,
+    GenerateJobResponse,
+    GenerateStatusResponse,
+)
+
+# Import existing business logic
+import sys
+sys.path.insert(0, '/app')
+from utils.sdie_extractor import extract_specifications, generate_populated_datasheet
+
+
+router = APIRouter(prefix="/sdie", tags=["Smart Datasheet Intelligence"])
+
+# Store extraction job status/results temporarily (in production, use Redis or database)
+extraction_jobs: dict = {}
+
+# Store generation job status/results temporarily (in production, use Redis or database)
+generation_jobs: dict = {}
+
+# Store the populated datasheet bytes for download (in production, use Redis or database)
+generation_cache: dict = {}
+
+ALLOWED_EXTENSIONS = {".pdf", ".jpg", ".jpeg", ".png", ".tif", ".tiff"}
+ALLOWED_TEMPLATE_EXTENSIONS = {".xlsx", ".xlsm"}
+
+
+def _run_extraction_job(job_id: str, file_bytes: bytes, filename: str):
+    """Run OCR extraction in the background and store the result/status."""
+    try:
+        specs, page_count = extract_specifications(file_bytes, filename)
+        extraction_jobs[job_id] = {
+            "status": "done",
+            "result": ExtractionResponse(
+                specs=[ExtractedSpec(**s) for s in specs],
+                page_count=page_count,
+                message=f"Extracted {len(specs)} specification(s) from {page_count} page(s)",
+            ),
+        }
+    except Exception as exc:
+        extraction_jobs[job_id] = {"status": "error", "error": str(exc)}
+
+
+@router.post("/extract", response_model=ExtractionJobResponse, status_code=status.HTTP_202_ACCEPTED)
+async def extract_datasheet(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Kick off OCR extraction of a vendor datasheet. Extraction runs in the
+    background — poll GET /sdie/extract/status/{job_id} for the result.
+    """
+    filename = file.filename or ""
+    ext = ""
+    if "." in filename:
+        ext = "." + filename.rsplit(".", 1)[-1].lower()
+    if ext not in ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported file type '{ext}'. Allowed: {', '.join(sorted(ALLOWED_EXTENSIONS))}",
+        )
+
+    file_bytes = await file.read()
+
+    job_id = str(uuid.uuid4())
+    extraction_jobs[job_id] = {"status": "processing"}
+
+    background_tasks.add_task(_run_extraction_job, job_id, file_bytes, filename)
+
+    return ExtractionJobResponse(job_id=job_id, status="processing")
+
+
+@router.get("/extract/status/{job_id}", response_model=ExtractionStatusResponse)
+async def get_extraction_status(
+    job_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    """Poll the status/result of a datasheet extraction job."""
+    job = extraction_jobs.get(job_id)
+    if not job:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Extraction job not found",
+        )
+
+    return ExtractionStatusResponse(
+        job_id=job_id,
+        status=job["status"],
+        result=job.get("result"),
+        error=job.get("error"),
+    )
+
+
+def _run_generation_job(job_id: str, file_bytes: bytes, filename: str, template_bytes: bytes, user_id: int):
+    """Run OCR extraction + WABAG template population in the background."""
+    try:
+        specs, page_count = extract_specifications(file_bytes, filename)
+
+        out_bytes, mapping_log, err = generate_populated_datasheet(template_bytes, specs)
+        if err:
+            generation_jobs[job_id] = {"status": "error", "error": err}
+            return
+
+        out_filename = "Datasheet_Populated.xlsx"
+        generation_cache[f"{user_id}_sdie_generate"] = {"bytes": out_bytes, "filename": out_filename}
+
+        matched = sum(1 for e in mapping_log if e["status"] == "MATCHED")
+        generation_jobs[job_id] = {
+            "status": "done",
+            "result": GenerateResponse(
+                specs=[ExtractedSpec(**s) for s in specs],
+                page_count=page_count,
+                mapping_log=[MappingLogEntry(**e) for e in mapping_log],
+                filename=out_filename,
+                message=f"Mapped {matched}/{len(mapping_log)} template field(s) from {len(specs)} extracted specification(s)",
+            ),
+        }
+    except Exception as exc:
+        generation_jobs[job_id] = {"status": "error", "error": str(exc)}
+
+
+@router.post("/generate", response_model=GenerateJobResponse, status_code=status.HTTP_202_ACCEPTED)
+async def generate_datasheet(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    template_file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Kick off OCR extraction of a vendor datasheet AND population of a WABAG
+    datasheet template with the extracted specs. Runs in the background —
+    poll GET /sdie/generate/status/{job_id} for the result, then
+    GET /sdie/download to retrieve the populated workbook.
+    """
+    filename = file.filename or ""
+    ext = ""
+    if "." in filename:
+        ext = "." + filename.rsplit(".", 1)[-1].lower()
+    if ext not in ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported file type '{ext}'. Allowed: {', '.join(sorted(ALLOWED_EXTENSIONS))}",
+        )
+
+    template_filename = template_file.filename or ""
+    template_ext = ""
+    if "." in template_filename:
+        template_ext = "." + template_filename.rsplit(".", 1)[-1].lower()
+    if template_ext not in ALLOWED_TEMPLATE_EXTENSIONS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported template file type '{template_ext}'. Allowed: {', '.join(sorted(ALLOWED_TEMPLATE_EXTENSIONS))}",
+        )
+
+    file_bytes = await file.read()
+    template_bytes = await template_file.read()
+
+    job_id = str(uuid.uuid4())
+    generation_jobs[job_id] = {"status": "processing"}
+
+    background_tasks.add_task(
+        _run_generation_job, job_id, file_bytes, filename, template_bytes, current_user.id
+    )
+
+    return GenerateJobResponse(job_id=job_id, status="processing")
+
+
+@router.get("/generate/status/{job_id}", response_model=GenerateStatusResponse)
+async def get_generation_status(
+    job_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    """Poll the status/result of a datasheet generation job."""
+    job = generation_jobs.get(job_id)
+    if not job:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Generation job not found",
+        )
+
+    return GenerateStatusResponse(
+        job_id=job_id,
+        status=job["status"],
+        result=job.get("result"),
+        error=job.get("error"),
+    )
+
+
+@router.get("/download")
+async def download_populated_datasheet(current_user: User = Depends(get_current_user)):
+    """Download the most recently populated WABAG datasheet for this user."""
+    cached = generation_cache.get(f"{current_user.id}_sdie_generate")
+    if not cached:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No populated datasheet found. Please generate it first.",
+        )
+
+    return StreamingResponse(
+        io.BytesIO(cached["bytes"]),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename={cached['filename']}"},
+    )

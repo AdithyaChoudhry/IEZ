@@ -19,3 +19,15 @@ _inspect_*.py
 Cable_Schedule.xlsx
 Loop_Wiring.xlsx
 Datasheets.zip
+LT_DS_coversheet.xlsx
+
+# Node
+node_modules/
+frontend/dist/
+
+# Env files
+.env
+.env.local
+
+# Claude local settings
+.claude/

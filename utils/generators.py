@@ -717,14 +717,14 @@ def generate_cable_schedule(
                     for col_idx, proto_val in proto[row_off].items():
                         try:
                             c = out_ws.cell(row=dst_r, column=col_idx)
+                            if isinstance(proto_val, str) and proto_val.startswith('='):
+                                c.value = _adjust_formula_row(proto_val, src_r, dst_r)
+                            else:
+                                c.value = proto_val
+                            c.font      = _CS_FONT
+                            c.alignment = _CS_ALIGN
                         except Exception:
                             continue
-                        if isinstance(proto_val, str) and proto_val.startswith('='):
-                            c.value = _adjust_formula_row(proto_val, src_r, dst_r)
-                        else:
-                            c.value = proto_val
-                        c.font      = _CS_FONT
-                        c.alignment = _CS_ALIGN
 
                 # 2. Fill IODB values in main row (row_off=0); preserve formulas.
                 #    TAG NO is written DIRECTLY from raw_tag (validated above) to
@@ -732,33 +732,36 @@ def generate_cable_schedule(
                 dst_main = current_row
 
                 # Serial number in column A (if not a formula)
-                sn = out_ws.cell(row=dst_main, column=1)
-                if not (isinstance(sn.value, str) and sn.value.startswith('=')):
-                    sn.value     = sl_no
-                    sn.font      = _CS_FONT
-                    sn.alignment = _CS_ALIGN
+                try:
+                    sn = out_ws.cell(row=dst_main, column=1)
+                    if not (isinstance(sn.value, str) and sn.value.startswith('=')):
+                        sn.value     = sl_no
+                        sn.font      = _CS_FONT
+                        sn.alignment = _CS_ALIGN
+                except Exception:
+                    pass
 
                 for iodb_col, tmpl_col_idx in col_match.items():
                     try:
                         c = out_ws.cell(row=dst_main, column=tmpl_col_idx)
+                        if isinstance(c.value, str) and c.value.startswith('='):
+                            continue  # keep formula
+
+                        # For TAG NO: always use raw_tag (already validated above)
+                        if iodb_col == tag_column:
+                            c.value = raw_tag
+                        else:
+                            raw = entry.get(iodb_col)
+                            if raw is None or (not isinstance(raw, str) and pd.isna(raw)):
+                                c.value = "TBA"
+                            elif str(raw).strip() in ("", "nan"):
+                                c.value = "TBA"
+                            else:
+                                c.value = str(raw).strip() if isinstance(raw, str) else raw
+                        c.font      = _CS_FONT
+                        c.alignment = _CS_ALIGN
                     except Exception:
                         continue
-                    if isinstance(c.value, str) and c.value.startswith('='):
-                        continue  # keep formula
-
-                    # For TAG NO: always use raw_tag (already validated above)
-                    if iodb_col == tag_column:
-                        c.value = raw_tag
-                    else:
-                        raw = entry.get(iodb_col)
-                        if raw is None or (not isinstance(raw, str) and pd.isna(raw)):
-                            c.value = "TBA"
-                        elif str(raw).strip() in ("", "nan"):
-                            c.value = "TBA"
-                        else:
-                            c.value = str(raw).strip() if isinstance(raw, str) else raw
-                    c.font      = _CS_FONT
-                    c.alignment = _CS_ALIGN
 
                 sl_no      += 1
                 current_row += ROWS_PER_TAG
@@ -806,13 +809,16 @@ def generate_cable_schedule(
                         for cidx in range(1, max_col + 1):
                             src_cell = out_ws.cell(row=src + off, column=cidx)
                             dst_cell = out_ws.cell(row=dest + off, column=cidx)
-                            dst_cell.value = src_cell.value
                             try:
+                                dst_cell.value = src_cell.value
                                 dst_cell.font = _CS_FONT
                                 dst_cell.alignment = _CS_ALIGN
                             except Exception:
                                 pass
-                            src_cell.value = None
+                            try:
+                                src_cell.value = None
+                            except Exception:
+                                pass
                 dest += ROWS_PER_TAG
         except Exception:
             # non-fatal

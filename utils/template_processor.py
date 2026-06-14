@@ -329,6 +329,63 @@ def get_iodb_dataframe(iodb_file) -> tuple[pd.DataFrame | None, str | None]:
     return read_iodb(iodb_file)
 
 
+def get_iodb_preview(iodb_file, max_unique: int = 200, preview_rows: int = 20):
+    """
+    Read IODB and return everything the column-selection/filter UI needs:
+
+    Returns (columns, unique_values, preview, error)
+      - columns: list[str]
+      - unique_values: dict[col_name, list[str]] (capped at `max_unique` per column)
+      - preview: list[dict] (first `preview_rows` rows, JSON-safe)
+      - error: None on success, error string on failure
+    """
+    df, err = read_iodb(iodb_file)
+    if err:
+        return None, None, None, err
+
+    columns = list(df.columns)
+
+    unique_values: dict[str, list[str]] = {}
+    for col in columns:
+        vals = sorted(df[col].dropna().astype(str).unique().tolist())
+        unique_values[col] = vals[:max_unique]
+
+    preview_df = df.head(preview_rows).astype(object).where(pd.notnull(df.head(preview_rows)), None)
+    preview = preview_df.to_dict(orient="records")
+
+    return columns, unique_values, preview, None
+
+
+def get_jb_summary(iodb_file, jb_column: str, tag_column: str):
+    """
+    Group IODB rows by junction box column and return tag counts per JB,
+    for the Cable Schedule preview step.
+
+    Returns (rows, error)
+      - rows: list[dict] with keys "junction_box" and "tag_count"
+      - error: None on success, error string on failure
+    """
+    df, err = read_iodb(iodb_file)
+    if err:
+        return None, err
+
+    if jb_column not in df.columns:
+        return None, f"Column '{jb_column}' not found in IODB. Available: {list(df.columns)}"
+    if tag_column not in df.columns:
+        return None, f"Column '{tag_column}' not found in IODB. Available: {list(df.columns)}"
+
+    summary = (
+        df[df[jb_column].notna()]
+        .groupby(jb_column)[tag_column]
+        .count()
+        .reset_index()
+        .rename(columns={jb_column: "junction_box", tag_column: "tag_count"})
+        .sort_values("junction_box")
+    )
+
+    return summary.to_dict(orient="records"), None
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # IODB Validation
 # ─────────────────────────────────────────────────────────────────────────────

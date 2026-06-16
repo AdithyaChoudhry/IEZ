@@ -171,13 +171,13 @@ export default function SmartDatasheetExtractor() {
     }
   };
 
-  const handleDownload = async () => {
+  const downloadFile = async (endpoint: string, fallbackName: string) => {
     try {
-      const response = await api.get('/sdie/download', { responseType: 'blob' });
+      const response = await api.get(endpoint, { responseType: 'blob' });
       const url = window.URL.createObjectURL(new Blob([response.data]));
       const link = document.createElement('a');
       link.href = url;
-      link.setAttribute('download', generateResult?.filename || 'Datasheet_Populated.xlsx');
+      link.setAttribute('download', fallbackName);
       document.body.appendChild(link);
       link.click();
       link.remove();
@@ -185,6 +185,12 @@ export default function SmartDatasheetExtractor() {
       setError(err.response?.data?.detail || 'Download failed');
     }
   };
+
+  const handleDownload = () =>
+    downloadFile('/sdie/download', generateResult?.filename || 'Datasheet_Populated.xlsx');
+
+  const handleDownloadSpecs = () =>
+    downloadFile('/sdie/extract/download', 'Extracted_Specifications.xlsx');
 
   return (
     <div className="space-y-6">
@@ -303,9 +309,17 @@ export default function SmartDatasheetExtractor() {
 
       {result && (
         <Card title={`Extracted Specifications (${result.specs.length})`}>
-          <div className="flex items-start gap-3 mb-4 bg-green-50 border border-green-200 rounded-lg p-4">
+          <div className="flex items-start gap-4 mb-4 bg-green-50 border border-green-200 rounded-lg p-4">
             <CheckCircle2 className="w-6 h-6 text-green-500 flex-shrink-0" />
-            <p className="text-green-700">{result.message}</p>
+            <div className="flex-1">
+              <p className="text-green-700 mb-3">{result.message}</p>
+              {result.specs.length > 0 && (
+                <Button onClick={handleDownloadSpecs} className="bg-green-600 hover:bg-green-700">
+                  <Download className="w-5 h-5" />
+                  Download Extracted Specs (Excel)
+                </Button>
+              )}
+            </div>
           </div>
 
           {result.specs.length > 0 ? (

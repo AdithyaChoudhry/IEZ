@@ -5,10 +5,12 @@ Phase 1: upload a vendor datasheet (PDF/image), OCR it, extract label/value
 specifications with confidence scores, and normalize labels to canonical
 WABAG field names.
 """
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile, File, status
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status
 from fastapi.responses import StreamingResponse
 import io
 import uuid
+import logging
+import threading
 
 from ..deps import get_current_user
 from ..auth.models import User
@@ -26,8 +28,13 @@ from ..models.sdie import (
 # Import existing business logic
 import sys
 sys.path.insert(0, '/app')
-from utils.sdie_extractor import extract_specifications, generate_populated_datasheet
+from utils.sdie_extractor import (
+    extract_specifications,
+    generate_populated_datasheet,
+    specs_to_excel_bytes,
+)
 
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/sdie", tags=["Smart Datasheet Intelligence"])
 
@@ -37,17 +44,25 @@ extraction_jobs: dict = {}
 # Store generation job status/results temporarily (in production, use Redis or database)
 generation_jobs: dict = {}
 
-# Store the populated datasheet bytes for download (in production, use Redis or database)
+# Store downloadable output bytes per user (in production, use Redis or database)
+extraction_cache: dict = {}
 generation_cache: dict = {}
 
 ALLOWED_EXTENSIONS = {".pdf", ".jpg", ".jpeg", ".png", ".tif", ".tiff"}
 ALLOWED_TEMPLATE_EXTENSIONS = {".xlsx", ".xlsm"}
 
 
-def _run_extraction_job(job_id: str, file_bytes: bytes, filename: str):
-    """Run OCR extraction in the background and store the result/status."""
+def _run_extraction_job(job_id: str, file_bytes: bytes, filename: str, user_id: int):
+    """Run OCR extraction in a background thread and store the result/status."""
     try:
         specs, page_count = extract_specifications(file_bytes, filename)
+
+        # Cache an Excel export of the extracted specs for download
+        extraction_cache[f"{user_id}_sdie_extract"] = {
+            "bytes": specs_to_excel_bytes(specs),
+            "filename": "Extracted_Specifications.xlsx",
+        }
+
         extraction_jobs[job_id] = {
             "status": "done",
             "result": ExtractionResponse(
@@ -56,19 +71,20 @@ def _run_extraction_job(job_id: str, file_bytes: bytes, filename: str):
                 message=f"Extracted {len(specs)} specification(s) from {page_count} page(s)",
             ),
         }
+        logger.info("SDIE extract job %s done: %d specs", job_id, len(specs))
     except Exception as exc:
+        logger.exception("SDIE extract job %s failed", job_id)
         extraction_jobs[job_id] = {"status": "error", "error": str(exc)}
 
 
 @router.post("/extract", response_model=ExtractionJobResponse, status_code=status.HTTP_202_ACCEPTED)
 async def extract_datasheet(
-    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     current_user: User = Depends(get_current_user),
 ):
     """
-    Kick off OCR extraction of a vendor datasheet. Extraction runs in the
-    background — poll GET /sdie/extract/status/{job_id} for the result.
+    Kick off OCR extraction of a tender document. Extraction runs in a
+    background thread — poll GET /sdie/extract/status/{job_id} for the result.
     """
     filename = file.filename or ""
     ext = ""
@@ -85,7 +101,11 @@ async def extract_datasheet(
     job_id = str(uuid.uuid4())
     extraction_jobs[job_id] = {"status": "processing"}
 
-    background_tasks.add_task(_run_extraction_job, job_id, file_bytes, filename)
+    threading.Thread(
+        target=_run_extraction_job,
+        args=(job_id, file_bytes, filename, current_user.id),
+        daemon=True,
+    ).start()
 
     return ExtractionJobResponse(job_id=job_id, status="processing")
 
@@ -111,8 +131,25 @@ async def get_extraction_status(
     )
 
 
+@router.get("/extract/download")
+async def download_extracted_specs(current_user: User = Depends(get_current_user)):
+    """Download the most recently extracted specifications as an Excel file."""
+    cached = extraction_cache.get(f"{current_user.id}_sdie_extract")
+    if not cached:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No extracted specifications found. Please extract first.",
+        )
+
+    return StreamingResponse(
+        io.BytesIO(cached["bytes"]),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename={cached['filename']}"},
+    )
+
+
 def _run_generation_job(job_id: str, file_bytes: bytes, filename: str, template_bytes: bytes, user_id: int):
-    """Run OCR extraction + WABAG template population in the background."""
+    """Run OCR extraction + WABAG template population in a background thread."""
     try:
         specs, page_count = extract_specifications(file_bytes, filename)
 
@@ -123,6 +160,10 @@ def _run_generation_job(job_id: str, file_bytes: bytes, filename: str, template_
 
         out_filename = "Datasheet_Populated.xlsx"
         generation_cache[f"{user_id}_sdie_generate"] = {"bytes": out_bytes, "filename": out_filename}
+        extraction_cache[f"{user_id}_sdie_extract"] = {
+            "bytes": specs_to_excel_bytes(specs),
+            "filename": "Extracted_Specifications.xlsx",
+        }
 
         matched = sum(1 for e in mapping_log if e["status"] == "MATCHED")
         generation_jobs[job_id] = {
@@ -135,13 +176,14 @@ def _run_generation_job(job_id: str, file_bytes: bytes, filename: str, template_
                 message=f"Mapped {matched}/{len(mapping_log)} template field(s) from {len(specs)} extracted specification(s)",
             ),
         }
+        logger.info("SDIE generate job %s done: %d specs, %d matched", job_id, len(specs), matched)
     except Exception as exc:
+        logger.exception("SDIE generate job %s failed", job_id)
         generation_jobs[job_id] = {"status": "error", "error": str(exc)}
 
 
 @router.post("/generate", response_model=GenerateJobResponse, status_code=status.HTTP_202_ACCEPTED)
 async def generate_datasheet(
-    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     template_file: UploadFile = File(...),
     current_user: User = Depends(get_current_user),
@@ -178,9 +220,11 @@ async def generate_datasheet(
     job_id = str(uuid.uuid4())
     generation_jobs[job_id] = {"status": "processing"}
 
-    background_tasks.add_task(
-        _run_generation_job, job_id, file_bytes, filename, template_bytes, current_user.id
-    )
+    threading.Thread(
+        target=_run_generation_job,
+        args=(job_id, file_bytes, filename, template_bytes, current_user.id),
+        daemon=True,
+    ).start()
 
     return GenerateJobResponse(job_id=job_id, status="processing")
 

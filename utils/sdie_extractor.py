@@ -56,10 +56,10 @@ from .datasheet_generator import (
 logger = logging.getLogger(__name__)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Limits (keep memory/CPU bounded on Render's free tier)
+# Limits (keep memory/CPU bounded on Render's free tier — 512MB RAM, throttled CPU)
 # ─────────────────────────────────────────────────────────────────────────────
-MAX_PAGES = 10
-PDF_DPI = 150
+MAX_PAGES = 5
+PDF_DPI = 120
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp"}
 
@@ -432,8 +432,48 @@ def extract_specifications(file_bytes: bytes, filename: str) -> tuple[list[dict[
     Returns (specs, page_count) where each spec is:
         {raw_label, value, confidence, page, canonical_field, match_score}
     """
+    logger.info("SDIE: extracting from '%s' (%d bytes), tesseract=%s", filename, len(file_bytes), _tess)
     pages = extract_pages(file_bytes, filename)
-    page_lines = [ocr_page(p) for p in pages]
+    logger.info("SDIE: rendered %d page(s)", len(pages))
+
+    page_lines = []
+    for idx, page in enumerate(pages, start=1):
+        lines = ocr_page(page)
+        logger.info("SDIE: OCR page %d/%d -> %d line(s)", idx, len(pages), len(lines))
+        page_lines.append(lines)
+
     specs = parse_specifications(page_lines)
     specs = normalize_specifications(specs)
+    logger.info("SDIE: parsed %d specification(s)", len(specs))
     return specs, len(pages)
+
+
+def specs_to_excel_bytes(specs: list[dict[str, Any]]) -> bytes:
+    """Export extracted specifications to a single-sheet .xlsx workbook."""
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Extracted Specs"
+
+    headers = ["Raw Label", "Value", "Mapped Field", "Match Score (%)", "OCR Confidence (%)", "Page"]
+    ws.append(headers)
+    for spec in specs:
+        ws.append([
+            spec.get("raw_label", ""),
+            spec.get("value", ""),
+            spec.get("canonical_field") or "Other technical specification",
+            round(float(spec.get("match_score", 0)), 1),
+            round(float(spec.get("confidence", 0)), 1),
+            spec.get("page", ""),
+        ])
+
+    # Reasonable column widths
+    widths = [32, 40, 30, 16, 18, 6]
+    for col_idx, width in enumerate(widths, start=1):
+        ws.column_dimensions[get_column_letter(col_idx)].width = width
+
+    out = io.BytesIO()
+    wb.save(out)
+    out.seek(0)
+    return out.read()

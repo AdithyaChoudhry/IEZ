@@ -14,6 +14,9 @@ class FieldSpecModel(BaseModel):
     defaults: list[str]
     source_note: str
     color: str             # yellow | red | green | none | other
+    input_type: str = "text"          # "iodb" | "dropdown" | "text"
+    options: list[str] = []
+    mandatory: bool = False
 
 
 class DatasheetInfoModel(BaseModel):
@@ -26,6 +29,15 @@ class AnalyzeResponse(BaseModel):
     datasheets: list[DatasheetInfoModel]
     instrument_types: list[str]
     message: str
+
+
+class InstrumentTypesResponse(BaseModel):
+    instrument_types: list[str]
+    count: int
+
+
+class DatasheetsResponse(BaseModel):
+    datasheets: list[DatasheetInfoModel]
 
 
 class FieldsResponse(BaseModel):

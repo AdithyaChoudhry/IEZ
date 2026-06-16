@@ -1,0 +1,21 @@
+{
+  "type": ["Non Contact Radar", "FMCW Radar", "Pulse Radar", "Guided Wave Radar"],
+  "sensor type": ["Non Contact Radar", "FMCW Radar", "Pulse Radar", "Guided Wave Radar"],
+  "frequency range": ["26 GHz", "80 GHz", "6 GHz"],
+  "beam angle": ["CONE SIZE:19°(2\"),14°(3\"),9°(4\")", "8°", "10°", "4°"],
+  "housing moc": ["Aluminium", "SS304", "SS316"],
+  "enclosure class": ["IP 66", "IP 67", "IP 68", "IP 65"],
+  "enclosure protection class": ["IP 66", "IP 67", "IP 68", "IP 65"],
+  "temperature compensation": ["INBUILT", "EXTERNAL", "NA"],
+  "process connection moc": ["FLANGED ANSI B 16.5", "SS316", "SS304", "Hastelloy"],
+  "mounting position": ["TOP MOUNTED", "SIDE MOUNTED", "BOTTOM MOUNTED"],
+  "power supply": ["24 VDC", "110 VAC", "230 VAC"],
+  "output": ["4-20 mA", "4-20 mA HART", "Foundation Fieldbus", "Profibus PA"],
+  "accuracy": ["±1 mm", "±2 mm", "±3 mm"],
+  "repeatability": ["±1 mm", "±2 mm", "±3 mm"],
+  "cable entry": ["1/2\" NPT(F)", "3/4\" NPT(F)", "M20 x 1.5", "M25 x 1.5"],
+  "display": ["DIGITAL LCD DISPLAY", "LCD", "LED", "NA"],
+  "area certification": ["Safe Area", "ATEX", "IECEx", "FM", "CSA", "PROVIDED"],
+  "ss tag plate": ["PROVIDED", "NOT PROVIDED"],
+  "make": ["EMERSON", "ROSEMOUNT", "ENDRESS+HAUSER", "VEGA", "SIEMENS", "ABB", "KROHNE"]
+}

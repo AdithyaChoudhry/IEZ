@@ -21,6 +21,8 @@ from ..models.sop_datasheet import (
     FieldSpecModel,
     DatasheetInfoModel,
     AnalyzeResponse,
+    InstrumentTypesResponse,
+    DatasheetsResponse,
     FieldsResponse,
     TagsResponse,
     GenerateJobResponse,
@@ -92,6 +94,35 @@ async def analyze(
     )
 
 
+@router.post("/instrument-types", response_model=InstrumentTypesResponse)
+async def instrument_types(
+    iodb_file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+):
+    """Read the IODB and return distinct instrument types (IODB-first workflow)."""
+    _check_ext(iodb_file.filename or "", ALLOWED_IODB_EXTENSIONS)
+    iodb_bytes = await iodb_file.read()
+    types, err = get_iodb_instrument_types(iodb_bytes)
+    if err:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=err)
+    return InstrumentTypesResponse(instrument_types=types, count=len(types))
+
+
+@router.post("/datasheets", response_model=DatasheetsResponse)
+async def datasheets(
+    sop_file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+):
+    """Read the SOP workbook and return available instrument datasheet sheets."""
+    _check_ext(sop_file.filename or "", ALLOWED_SOP_EXTENSIONS)
+    sop_bytes = await sop_file.read()
+    try:
+        sheets = read_workbook(sop_bytes, sop_file.filename or "")
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Failed to read SOP workbook: {exc}")
+    return DatasheetsResponse(datasheets=[DatasheetInfoModel(**asdict(d)) for d in list_datasheet_sheets(sheets)])
+
+
 @router.post("/fields", response_model=FieldsResponse)
 async def fields(
     sop_file: UploadFile = File(...),
@@ -112,9 +143,12 @@ async def fields(
 
     infos = {d.sheet: d for d in list_datasheet_sheets(sheets)}
     info = infos.get(datasheet_sheet)
-    eg_model = sheets.get(info.eg_sheet) if (info and info.eg_sheet) else None
+    # Parse the EG example sheet (rows 9–60) so the popup fields + defaults match
+    # exactly what generation will fill.
+    target_name = info.eg_sheet if (info and info.eg_sheet) else datasheet_sheet
+    target_model = sheets.get(target_name) or sheets[datasheet_sheet]
 
-    specs = parse_field_spec(sheets[datasheet_sheet], eg_model)
+    specs = parse_field_spec(target_model, target_model)
     return FieldsResponse(
         datasheet=datasheet_sheet,
         title=info.title if info else datasheet_sheet,

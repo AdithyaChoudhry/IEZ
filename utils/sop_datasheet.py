@@ -29,7 +29,9 @@ Public API (Phase 1)
 from __future__ import annotations
 
 import io
+import os
 import re
+import json
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -53,6 +55,29 @@ SOURCE_NOTE_COL = 11
 
 IODB_TYPE_KEYS = ("instrument type", "instrument_type", "type")
 IODB_TAG_KEYS = ("tag no", "tag number", "tag_no", "tag_number", "tag")
+
+# Field region in the EG example sheet (1-based rows 9–60 → 0-based 8–59).
+DEFAULT_START_ROW = 8
+DEFAULT_END_ROW = 60
+
+CUSTOM_VALUE = "Custom Value"
+
+# ── Dropdown knowledge base ─────────────────────────────────────────────────────
+_KB_PATH = os.path.join(os.path.dirname(__file__), "datasheet_kb.json")
+_kb_cache: dict | None = None
+
+
+def load_kb() -> dict[str, list[str]]:
+    """Load the dropdown knowledge base (normalized label -> option list)."""
+    global _kb_cache
+    if _kb_cache is None:
+        try:
+            with open(_KB_PATH, "r", encoding="utf-8") as fh:
+                raw = json.load(fh)
+            _kb_cache = {normalize(k): v for k, v in raw.items()}
+        except Exception:
+            _kb_cache = {}
+    return _kb_cache
 
 
 # ── Uniform cell model ─────────────────────────────────────────────────────────
@@ -89,6 +114,9 @@ class FieldSpec:
     defaults: list[str]            # default value(s); aligned with value_cols
     source_note: str               # the EG "SOURCE" annotation, if any
     color: str                     # template fill color name: yellow/red/green/none
+    input_type: str = "text"       # "iodb" | "dropdown" | "text"
+    options: list[str] = field(default_factory=list)  # dropdown options (incl "Custom Value")
+    mandatory: bool = False        # blocks generation until filled (only when no default)
 
 
 @dataclass
@@ -343,16 +371,34 @@ def _section_at(sm: SheetModel, r: int) -> str:
     return sm.value(r, 0).strip()
 
 
-def parse_field_spec(template: SheetModel, eg: SheetModel | None) -> list[FieldSpec]:
+def parse_field_spec(
+    template: SheetModel,
+    eg: SheetModel | None,
+    start_row: int = DEFAULT_START_ROW,
+    end_row: int = DEFAULT_END_ROW,
+) -> list[FieldSpec]:
     """
     Build the ordered list of spec fields for a datasheet, using the EG example
     as the source of truth for defaults and IODB-vs-predefined classification.
+
+    Each field is further classified into an input_type for the config popup:
+      * "iodb"     — value comes from the IODB per tag (yellow)
+      * "dropdown" — label found in the knowledge base (green); options + default
+      * "text"     — free-text mandatory input (red); blocking only when no default
+
+    `start_row`/`end_row` bound the spec region (0-based, end exclusive) so the
+    EG example sheet's data table (rows 9–60) is targeted precisely.
     """
+    kb = load_kb()
     fields: list[FieldSpec] = []
     section = ""
 
-    # Bound the table: start at first row carrying a section header, stop at NOTES/footer.
-    start, end = _table_bounds(template)
+    # Bound to the requested region, but never run past a NOTES/footer marker.
+    auto_start, auto_end = _table_bounds(template)
+    start = max(start_row, 0)
+    end = min(end_row, template.nrows, auto_end if auto_end > start else template.nrows)
+    if start >= end:
+        start, end = auto_start, auto_end
 
     for r in range(start, end):
         sec = _section_at(template, r)
@@ -379,15 +425,41 @@ def parse_field_spec(template: SheetModel, eg: SheetModel | None) -> list[FieldS
         is_iodb = all((not d) or bool(_PLACEHOLDER_RE.search(d)) for d in defaults)
         source = "iodb" if is_iodb else "predefined"
 
-        color = _classify_color(template.fill(r, value_cols[0]))
         note = template.value(r, SOURCE_NOTE_COL).strip() or (
             eg_sheet.value(r, SOURCE_NOTE_COL).strip()
         )
+
+        # Classify input_type for the configuration popup.
+        primary_default = next((d for d in defaults if d), "")
+        kb_options = kb.get(normalize(label))
+        if is_iodb:
+            input_type = "iodb"
+            options: list[str] = []
+            mandatory = False
+            color = "yellow"
+        elif kb_options:
+            input_type = "dropdown"
+            # Move the template default to the front, then append remaining options + Custom Value.
+            opts = [o for o in kb_options]
+            if primary_default and primary_default not in opts:
+                opts = [primary_default] + opts
+            elif primary_default in opts:
+                opts = [primary_default] + [o for o in opts if o != primary_default]
+            options = opts + [CUSTOM_VALUE]
+            mandatory = False
+            color = "green"
+        else:
+            input_type = "text"
+            options = []
+            # Blocking only when there is no EG default to fall back on.
+            mandatory = not bool(primary_default)
+            color = "red"
 
         fields.append(FieldSpec(
             section=section, label=label, row=r,
             value_cols=value_cols, sub_labels=sub_labels,
             source=source, defaults=defaults, source_note=note, color=color,
+            input_type=input_type, options=options, mandatory=mandatory,
         ))
     return fields
 
@@ -547,21 +619,18 @@ def build_datasheet_xlsx(template: SheetModel, fields: list[FieldSpec],
     for r, h in template.row_heights.items():
         ws.row_dimensions[r + 1].height = h
 
-    # Write every cell that has a value or a style.
+    # Write every cell that has a value or a style. Only the VALUE changes for
+    # resolved cells — the template's own fill/formatting is preserved (the
+    # red/green/yellow scheme is a UI concept, not applied to the output).
     coords = set(template.values.keys()) | set(template.styles.keys())
     for (r, c) in coords:
         cell = ws.cell(row=r + 1, column=c + 1)
         if (r, c) in resolved:
-            value, source = resolved[(r, c)]
-            cell.value = value
-            if source == "iodb":
-                fill = _FILL_YELLOW
-            else:
-                fill = _FILL_GREEN if str(value).strip() else _FILL_RED
+            cell.value = resolved[(r, c)][0]
         else:
             cell.value = template.value(r, c) or None
-            rgb = template.fill(r, c)
-            fill = ("%02X%02X%02X" % rgb) if rgb else None
+        rgb = template.fill(r, c)
+        fill = ("%02X%02X%02X" % rgb) if rgb else None
         _apply_cell_style(cell, template.style(r, c), fill)
 
     # Merge ranges (after values/styles are set).
@@ -619,17 +688,54 @@ def _resolve_values_for_tag(
     return resolved
 
 
+def _generate_xlsx_inplace(sop_bytes: bytes, sheet_name: str,
+                           resolved: dict[tuple[int, int], tuple[str, str]]) -> bytes:
+    """
+    Fill ONLY the resolved value cells of `sheet_name` in the original .xlsx,
+    keeping just that sheet — preserving logos/images/formulas/page setup/
+    borders/merged cells exactly (nothing else is touched).
+    """
+    from openpyxl import load_workbook
+
+    wb = load_workbook(io.BytesIO(sop_bytes))   # formulas + images preserved
+    if sheet_name not in wb.sheetnames:
+        raise ValueError(f"Sheet '{sheet_name}' not found")
+    ws = wb[sheet_name]
+
+    for (r, c), (value, _src) in resolved.items():
+        try:
+            ws.cell(row=r + 1, column=c + 1).value = value
+        except (AttributeError, ValueError):
+            # Merged non-anchor cell — skip (anchor already written).
+            pass
+
+    # Keep only the target datasheet for a clean per-tag output.
+    for sn in list(wb.sheetnames):
+        if sn != sheet_name:
+            del wb[sn]
+
+    out = io.BytesIO()
+    wb.save(out)
+    out.seek(0)
+    return out.read()
+
+
 def generate(
     sop_bytes: bytes, sop_filename: str, datasheet_sheet: str,
     iodb_bytes: bytes, instrument_type: str, selected_tags: list[str],
     overrides: dict[str, list[str]] | None = None,
 ) -> tuple[bytes | None, str, str | None]:
     """
-    Generate one styled datasheet (.xlsx) per selected tag, zipped.
+    Generate one datasheet (.xlsx) per selected tag, zipped.
+
+    For .xlsx SOPs the original workbook is loaded and only value cells are
+    written (full formatting/logo/formula preservation). For .xls SOPs the
+    sheet is rebuilt from the parsed model (best-effort; no logos/images).
 
     Returns (zip_bytes, filename, error).
     """
     overrides = overrides or {}
+    is_xlsx = (sop_filename.rsplit(".", 1)[-1].lower() in ("xlsx", "xlsm")) if "." in sop_filename else False
 
     try:
         sheets = read_workbook(sop_bytes, sop_filename)
@@ -638,16 +744,16 @@ def generate(
     if datasheet_sheet not in sheets:
         return None, "Datasheets.zip", f"Sheet '{datasheet_sheet}' not found in SOP workbook."
 
+    # Target the EG example sheet (it carries the predefined defaults + formatting).
     infos = {d.sheet: d for d in list_datasheet_sheets(sheets)}
     info = infos.get(datasheet_sheet)
-    eg_model = sheets.get(info.eg_sheet) if (info and info.eg_sheet) else None
-    template = sheets[datasheet_sheet]
-    fields = parse_field_spec(template, eg_model)
+    target_name = info.eg_sheet if (info and info.eg_sheet) else datasheet_sheet
+    target_model = sheets.get(target_name) or sheets[datasheet_sheet]
+    fields = parse_field_spec(target_model, target_model)
 
     df, err = _load_iodb_df(iodb_bytes)
     if err:
         return None, "Datasheets.zip", f"Failed to load IODB: {err}"
-    type_col = _find_column(df, IODB_TYPE_KEYS)
     tag_col = _find_column(df, IODB_TAG_KEYS)
     if tag_col is None:
         return None, "Datasheets.zip", "No 'TAG NO' column found in IODB."
@@ -659,19 +765,23 @@ def generate(
     with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
         for tag in selected_tags:
             iodb_row = None
-            if tag_col is not None:
-                match = df[df[tag_col].astype(str).str.strip() == str(tag).strip()]
-                if not match.empty:
-                    iodb_row = match.iloc[0]
+            match = df[df[tag_col].astype(str).str.strip() == str(tag).strip()]
+            if not match.empty:
+                iodb_row = match.iloc[0]
 
             resolved = _resolve_values_for_tag(fields, overrides, iodb_row, iodb_colmap, tag)
-            wb = build_datasheet_xlsx(template, fields, resolved)
 
-            out = io.BytesIO()
-            wb.save(out)
-            out.seek(0)
+            if is_xlsx:
+                file_bytes = _generate_xlsx_inplace(sop_bytes, target_name, resolved)
+            else:
+                wb = build_datasheet_xlsx(target_model, fields, resolved)
+                buf = io.BytesIO()
+                wb.save(buf)
+                buf.seek(0)
+                file_bytes = buf.read()
+
             safe_tag = re.sub(r'[\\/*?:\[\]]', "_", str(tag))
-            zf.writestr(f"{safe_tag}.xlsx", out.read())
+            zf.writestr(f"{safe_tag} Datasheet.xlsx", file_bytes)
             written += 1
 
     if written == 0:

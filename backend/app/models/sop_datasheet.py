@@ -38,3 +38,21 @@ class TagsResponse(BaseModel):
     instrument_type: str
     tags: list[str]
     count: int
+
+
+class GenerateJobResponse(BaseModel):
+    job_id: str
+    status: str
+
+
+class GenerateResult(BaseModel):
+    filename: str
+    tag_count: int
+    message: str
+
+
+class GenerateStatusResponse(BaseModel):
+    job_id: str
+    status: str  # "processing" | "done" | "error"
+    result: GenerateResult | None = None
+    error: str | None = None

@@ -18,6 +18,7 @@ from .routers.io_list import router as io_list_router
 from .routers.cable_schedule import router as cable_schedule_router
 from .routers.loop_wiring import router as loop_wiring_router
 from .routers.sdie import router as sdie_router
+from .routers.sop_datasheet import router as sop_datasheet_router
 
 
 @asynccontextmanager
@@ -75,6 +76,7 @@ app.include_router(io_list_router, prefix="/api")
 app.include_router(cable_schedule_router, prefix="/api")
 app.include_router(loop_wiring_router, prefix="/api")
 app.include_router(sdie_router, prefix="/api")
+app.include_router(sop_datasheet_router, prefix="/api")
 
 
 @app.get("/")

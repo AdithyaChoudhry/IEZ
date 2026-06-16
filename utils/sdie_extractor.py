@@ -425,6 +425,41 @@ def generate_populated_datasheet(
 # ─────────────────────────────────────────────────────────────────────────────
 # Orchestration
 # ─────────────────────────────────────────────────────────────────────────────
+def _enhance_with_ai(specs: list[dict[str, Any]], ocr_text: str) -> list[dict[str, Any]]:
+    """Try to enhance OCR specs with AI model. Falls back silently if unavailable."""
+    hf_token = os.environ.get("HF_TOKEN", "")
+    if not hf_token:
+        return specs
+    try:
+        import sys
+        sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+        from ai_training.hf_inference import extract_specifications as ai_extract
+        ai_result = ai_extract(ocr_text)
+        if not ai_result:
+            return specs
+        # Merge AI results into specs — AI fields take priority if confidence > 80
+        existing_fields = {s.get("canonical_field", "").lower() for s in specs}
+        for field, data in ai_result.items():
+            val = data.get("value") if isinstance(data, dict) else data
+            conf = data.get("confidence", 90) if isinstance(data, dict) else 90
+            if not val or field.lower() in ("instrument type",):
+                continue
+            if field.lower() not in existing_fields and conf > 60:
+                specs.append({
+                    "raw_label": field,
+                    "value": str(val),
+                    "confidence": conf,
+                    "page": 1,
+                    "canonical_field": field,
+                    "match_score": conf,
+                    "source": "ai",
+                })
+        logger.info("SDIE: AI enhanced specs, total now %d", len(specs))
+    except Exception as exc:
+        logger.warning("SDIE: AI enhancement failed (non-fatal): %s", exc)
+    return specs
+
+
 def extract_specifications(file_bytes: bytes, filename: str) -> tuple[list[dict[str, Any]], int]:
     """
     Run the full extraction pipeline on an uploaded vendor datasheet.
@@ -437,14 +472,22 @@ def extract_specifications(file_bytes: bytes, filename: str) -> tuple[list[dict[
     logger.info("SDIE: rendered %d page(s)", len(pages))
 
     page_lines = []
+    ocr_text_parts = []
     for idx, page in enumerate(pages, start=1):
         lines = ocr_page(page)
         logger.info("SDIE: OCR page %d/%d -> %d line(s)", idx, len(pages), len(lines))
         page_lines.append(lines)
+        for line in lines:
+            ocr_text_parts.append(line.get("text", ""))
 
     specs = parse_specifications(page_lines)
     specs = normalize_specifications(specs)
     logger.info("SDIE: parsed %d specification(s)", len(specs))
+
+    # AI enhancement — runs only if HF_TOKEN is set
+    ocr_text = "\n".join(ocr_text_parts)
+    specs = _enhance_with_ai(specs, ocr_text)
+
     return specs, len(pages)
 
 

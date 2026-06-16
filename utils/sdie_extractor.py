@@ -14,9 +14,31 @@ import io
 import re
 from typing import Any
 
+import os
+import shutil
+
 from PIL import Image
 import pytesseract
 from pytesseract import Output
+
+# Resolve tesseract binary: prefer explicit env var, then common Linux path (Docker/Render),
+# then macOS Homebrew path, then whatever is on PATH.
+def _find_tesseract() -> str | None:
+    if env := os.environ.get("TESSERACT_CMD"):
+        return env
+    for candidate in (
+        "/usr/bin/tesseract",           # apt (Debian/Ubuntu Docker image)
+        "/usr/local/bin/tesseract",     # some Linux builds
+        "/opt/homebrew/bin/tesseract",  # macOS Homebrew (Apple Silicon)
+        "/usr/local/homebrew/bin/tesseract",
+    ):
+        if os.path.isfile(candidate):
+            return candidate
+    return shutil.which("tesseract")
+
+_tess = _find_tesseract()
+if _tess:
+    pytesseract.pytesseract.tesseract_cmd = _tess
 
 import logging
 
@@ -160,6 +182,11 @@ def ocr_page(image: Image.Image) -> list[dict[str, Any]]:
     Returns a list of {"text": str, "confidence": float} — confidence is the
     average of the OCR word-level confidences (0-100) for that line.
     """
+    if not _tess:
+        raise RuntimeError(
+            "Tesseract OCR binary not found. "
+            "Install it with: apt-get install tesseract-ocr (Linux) or brew install tesseract (macOS)."
+        )
     data = pytesseract.image_to_data(image, output_type=Output.DICT)
 
     lines: dict[tuple[int, int, int], dict[str, Any]] = {}

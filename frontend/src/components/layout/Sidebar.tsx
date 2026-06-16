@@ -44,7 +44,7 @@ const navSections = [
   },
   {
     label: 'Smart Tools',
-    items: [{ path: '/smart-datasheet', icon: ScanSearch, label: 'Smart Datasheet (AI)' }],
+    items: [{ path: '/smart-datasheet', icon: ScanSearch, label: 'Specification Extraction' }],
   },
 ];
 

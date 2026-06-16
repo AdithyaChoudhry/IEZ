@@ -191,15 +191,15 @@ export default function SmartDatasheetExtractor() {
       <PageHeader
         icon={ScanSearch}
         iconClassName="text-purple-500"
-        title="Smart Datasheet Intelligence"
-        description="Upload a vendor datasheet (PDF/JPG/PNG/TIFF) to OCR-extract specifications and map them to WABAG field names."
+        title="Specification Extraction for Datasheet"
+        description="Upload a tender document (PDF/JPG/PNG/TIFF) to OCR-extract specifications and map them to WABAG datasheet field names."
       />
 
       {error && <Alert variant="error" title="Error" onClose={() => setError(null)}>{error}</Alert>}
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <FileUploadCard
-          title="Vendor Datasheet"
+          title="Tender Document"
           icon={Upload}
           file={file}
           accept=".pdf,.jpg,.jpeg,.png,.tif,.tiff"
@@ -223,7 +223,7 @@ export default function SmartDatasheetExtractor() {
         </FileUploadCard>
 
         <FileUploadCard
-          title="WABAG Datasheet Template (Optional)"
+          title="WABAG Datasheet Template"
           icon={FileSpreadsheet}
           file={templateFile}
           accept=".xlsx,.xlsm"
@@ -231,7 +231,7 @@ export default function SmartDatasheetExtractor() {
             setTemplateFile(f);
             setGenerateResult(null);
           }}
-          hint="Provide a WABAG template to auto-fill its 'Refer Annexure' placeholders with the extracted specs."
+          hint="Provide a WABAG template to auto-fill its 'Refer Annexure' placeholders with extracted specs."
         >
           <Button
             onClick={handleGenerate}

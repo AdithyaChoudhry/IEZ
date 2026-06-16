@@ -75,6 +75,7 @@ export default function RegisterPage() {
                 id="email"
                 type="email"
                 required
+                autoComplete="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500"
@@ -90,6 +91,7 @@ export default function RegisterPage() {
                 id="username"
                 type="text"
                 required
+                autoComplete="username"
                 minLength={3}
                 maxLength={50}
                 value={username}
@@ -107,6 +109,7 @@ export default function RegisterPage() {
                 id="password"
                 type="password"
                 required
+                autoComplete="new-password"
                 minLength={8}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
@@ -123,6 +126,7 @@ export default function RegisterPage() {
                 id="confirmPassword"
                 type="password"
                 required
+                autoComplete="new-password"
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
                 className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500"

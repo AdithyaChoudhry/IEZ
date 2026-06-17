@@ -7,7 +7,7 @@ from pydantic import BaseModel
 class ExtractedSpec(BaseModel):
     raw_label: str
     value: str
-    values: list[str] = []  # all candidate values found in document
+    values: list[str] = []
     canonical_field: str | None
     match_score: float
     confidence: float
@@ -15,21 +15,25 @@ class ExtractedSpec(BaseModel):
     source: str = "ocr"  # "ocr" | "ai"
 
 
-class ExtractionResponse(BaseModel):
+class InstrumentSection(BaseModel):
+    heading: str
+    instrument_type: str
     specs: list[ExtractedSpec]
+
+
+class ExtractionResponse(BaseModel):
+    sections: list[InstrumentSection]
     page_count: int
     message: str
-    instrument_type: str = ""
+    instrument_type: str = ""  # comma-joined summary of all detected types
 
 
 class ExtractionJobResponse(BaseModel):
-    """Response when an extraction job is kicked off."""
     job_id: str
     status: str
 
 
 class ExtractionStatusResponse(BaseModel):
-    """Status/result of an in-progress or completed extraction job."""
     job_id: str
     status: str  # "processing" | "done" | "error"
     result: ExtractionResponse | None = None
@@ -54,13 +58,11 @@ class GenerateResponse(BaseModel):
 
 
 class GenerateJobResponse(BaseModel):
-    """Response when a datasheet generation job is kicked off."""
     job_id: str
     status: str
 
 
 class GenerateStatusResponse(BaseModel):
-    """Status/result of an in-progress or completed generation job."""
     job_id: str
     status: str  # "processing" | "done" | "error"
     result: GenerateResponse | None = None

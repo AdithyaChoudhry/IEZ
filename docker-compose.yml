@@ -32,9 +32,11 @@ services:
       - SECRET_KEY=${SECRET_KEY:-change-this-to-a-secure-random-string}
       - DEBUG=${DEBUG:-True}
       - CORS_ORIGINS=http://localhost:3000,http://localhost:5173,http://localhost:8080
+      - GROQ_API_KEY=${GROQ_API_KEY:-}
     volumes:
       - ./backend:/app
       - ./utils:/app/utils
+      - ./ai_training:/app/ai_training
       - upload_temp:/tmp/iez_uploads
     ports:
       - "8000:8000"

@@ -423,46 +423,130 @@ def generate_populated_datasheet(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Orchestration
+# Few-shot examples (one per common WABAG instrument type)
+# These teach Groq the exact output format and field vocabulary without training.
 # ─────────────────────────────────────────────────────────────────────────────
-_GROQ_SYSTEM = """You are an Instrumentation Engineering Expert for EPC Water/Wastewater/Desalination projects (WABAG standard).
+_FEW_SHOT_EXAMPLES = """\
+=== EXAMPLE 1: Pressure Transmitter ===
+Input: "PT-201 | Pressure Transmitter | Raw Water | Range: 0-10 bar | Output: 4-20mA HART | 24 VDC | Accuracy: ±0.075% | IP67 | Safe Area | SS316 | Yokogawa EJA110E"
+Output:
+{"_instrument_type":"Pressure Transmitter","Tag Number":{"values":["PT-201"],"confidence":100},"Instrument Type":{"values":["Pressure Transmitter"],"confidence":99},"Fluid":{"values":["Raw Water"],"confidence":98},"Measuring Range":{"values":["0-10 bar"],"confidence":98},"Output Signal":{"values":["4-20mA HART"],"confidence":99},"Supply Voltage":{"values":["24 VDC"],"confidence":99},"Accuracy":{"values":["±0.075%"],"confidence":99},"Enclosure Protection":{"values":["IP67"],"confidence":99},"Area Classification":{"values":["Safe Area"],"confidence":97},"Wetted Material":{"values":["SS316"],"confidence":98},"Make":{"values":["Yokogawa"],"confidence":92},"Model Number":{"values":["EJA110E"],"confidence":90}}
 
-Extract ALL technical specifications from the text and return ONLY a JSON object.
-Format: {"Field Name": {"value": "extracted value", "confidence": <0-100>}}
-Confidence: 95-100 explicitly stated, 80-94 clearly implied, 60-79 inferred.
+=== EXAMPLE 2: Non-Contact Radar Level Transmitter ===
+Input: "LT-101 | Non Contact Radar | Raw Water Tank | FMCW | 80 GHz | Beam 3° | Tank Ht: 6000mm | Max Level: 5500mm | SG: 1.0 | 24 VDC | 4-20mA+HART | ±3mm | IP67 | ATEX | Endress+Hauser FMR60B"
+Output:
+{"_instrument_type":"Non Contact Radar Level Transmitter","Tag Number":{"values":["LT-101"],"confidence":100},"Instrument Type":{"values":["Non Contact Radar Level Transmitter"],"confidence":99},"Location":{"values":["Raw Water Tank"],"confidence":98},"Fluid":{"values":["Raw Water"],"confidence":98},"Sensor Type":{"values":["FMCW Radar"],"confidence":98},"Frequency":{"values":["80 GHz"],"confidence":99},"Beam Angle":{"values":["3°"],"confidence":96},"Tank Height":{"values":["6000 mm"],"confidence":96},"Maximum Fluid Level":{"values":["5500 mm"],"confidence":95},"Specific Gravity":{"values":["1.0"],"confidence":95},"Supply Voltage":{"values":["24 VDC"],"confidence":99},"Output Signal":{"values":["4-20mA + HART"],"confidence":99},"Accuracy":{"values":["±3 mm"],"confidence":98},"Enclosure Protection":{"values":["IP67"],"confidence":99},"Area Certification":{"values":["ATEX"],"confidence":97},"Make":{"values":["Endress+Hauser"],"confidence":92},"Model Number":{"values":["FMR60B"],"confidence":90}}
 
-Extract EVERY field you find — including but not limited to:
-Instrument Type, Tag Number, Service Description, Fluid/Medium, Line Size, Nominal Pipe Bore,
-Measuring Range, Full Scale Range, Calibration Range, Turndown Ratio, Set Point,
-Output Signal, Loop Power, Supply Voltage, Power Consumption,
-Accuracy, Repeatability, Linearity, Hysteresis, Resolution, Response Time,
-Process Temperature, Ambient Temperature, Process Pressure, Design Pressure, Design Temperature,
-Enclosure Protection (IP Rating), Area Classification, Zone, Group, Ex Protection Standard,
-Certificate Number, Approvals, SIL Rating,
-Manufacturer, Make, Model Number, Series, Part Number,
-Material of Construction, Body Material, Wetted Parts Material, Diaphragm Material,
-Float Material, Electrode Material, Tube Material, Housing Material,
-Process Connection, Connection Size, Flange Rating, Connection Standard (ASME/DIN/BS),
-Cable Entry Size, Number of Cable Entries, Conduit Entry,
-Communication Protocol, Digital Output, Fieldbus Type, HART Revision,
-Mounting Type, Installation Type, Position, Orientation,
-Sensor Type, Sensing Element, Detector Type, Probe Length, Insertion Depth,
-Display Type, Local Indicator, LCD/LED, Scale Units,
-Wiring Terminals, Terminal Block, Cable Gland,
-Any other specification present in the document.
+=== EXAMPLE 3: Magnetic Flow Meter ===
+Input: "FIT-101 | Magnetic Flow Meter | Treated Water | 250 m³/hr | DN300 | Conductivity >20µS/cm | Lining PTFE | Electrodes SS316L | Accuracy ±0.5% | 4-20mA HART | ABB ProcessMaster FEP300"
+Output:
+{"_instrument_type":"Magnetic Flow Meter","Tag Number":{"values":["FIT-101"],"confidence":100},"Instrument Type":{"values":["Magnetic Flow Meter"],"confidence":99},"Fluid":{"values":["Treated Water"],"confidence":98},"Flow Rate":{"values":["250 m³/hr"],"confidence":97},"Pipe Size":{"values":["DN300"],"confidence":98},"Conductivity":{"values":[">20 µS/cm"],"confidence":95},"Lining Material":{"values":["PTFE"],"confidence":98},"Electrode Material":{"values":["SS316L"],"confidence":98},"Accuracy":{"values":["±0.5%"],"confidence":99},"Output Signal":{"values":["4-20mA HART"],"confidence":99},"Make":{"values":["ABB"],"confidence":92},"Model Number":{"values":["ProcessMaster FEP300"],"confidence":90}}
 
-Return ONLY valid JSON. No explanation, no markdown, no prefix."""
+=== EXAMPLE 4: Differential Pressure Transmitter ===
+Input: "PDT-101 | DP Transmitter | Range 0-250 mbar | Accuracy ±0.05% | Rangeability 150:1 | 4-20mA+HART | 24VDC | Process Connection 1/2 NPT(F) | Wetted SS316 | Emerson Rosemount 3051CD"
+Output:
+{"_instrument_type":"Differential Pressure Transmitter","Tag Number":{"values":["PDT-101"],"confidence":100},"Instrument Type":{"values":["Differential Pressure Transmitter"],"confidence":99},"Pressure Range":{"values":["0-250 mbar"],"confidence":98},"Accuracy":{"values":["±0.05%"],"confidence":99},"Rangeability":{"values":["150:1"],"confidence":97},"Output Signal":{"values":["4-20mA + HART"],"confidence":99},"Supply Voltage":{"values":["24 VDC"],"confidence":99},"Process Connection":{"values":["1/2\" NPT(F)"],"confidence":97},"Wetted Material":{"values":["SS316"],"confidence":98},"Make":{"values":["Emerson"],"confidence":92},"Model Number":{"values":["Rosemount 3051CD"],"confidence":91}}
+
+=== EXAMPLE 5: Ultrasonic Flow Meter ===
+Input: "FIT-102 | Ultrasonic | Raw Water | DN500 | Clamp On | Carbon Steel pipe | Accuracy ±1% | Modbus RTU | 24VDC | FLEXIM FLUXUS F721"
+Output:
+{"_instrument_type":"Ultrasonic Flow Meter","Tag Number":{"values":["FIT-102"],"confidence":100},"Instrument Type":{"values":["Ultrasonic Flow Meter"],"confidence":99},"Fluid":{"values":["Raw Water"],"confidence":98},"Pipe Size":{"values":["DN500"],"confidence":97},"Sensor Type":{"values":["Clamp On"],"confidence":98},"Pipe Material":{"values":["Carbon Steel"],"confidence":96},"Accuracy":{"values":["±1%"],"confidence":97},"Output Signal":{"values":["Modbus RTU"],"confidence":96},"Supply Voltage":{"values":["24 VDC"],"confidence":99},"Make":{"values":["FLEXIM"],"confidence":91},"Model Number":{"values":["FLUXUS F721"],"confidence":89}}
+"""
+
+_GROQ_SYSTEM = f"""You are an Instrumentation Engineering Expert for EPC Water/Wastewater/Desalination projects (WABAG standard).
+
+TASK:
+1. Identify the instrument type from the document.
+2. Extract ALL technical specifications found anywhere in the text.
+
+Return ONLY valid JSON — no explanation, no markdown, no prefix text:
+{{
+  "_instrument_type": "detected instrument type name",
+  "Field Name": {{"values": ["primary value", "alternate value if found elsewhere"], "confidence": 95}},
+  ...
+}}
+
+RULES:
+- "_instrument_type" is always the first key.
+- If the same field appears multiple times in the document with DIFFERENT values, list ALL values in the array.
+- If only one value found, the array has one element.
+- Confidence: 95-100 = explicitly stated, 80-94 = clearly implied, 60-79 = inferred.
+- Extract EVERY field present: tag number, service description, fluid, measuring range, set point,
+  output signal, supply voltage, accuracy, repeatability, response time, IP rating, area classification,
+  certifications, make, model, materials (body/wetted/diaphragm/electrode/lining/probe), process connection,
+  pipe size, flow rate, frequency, beam angle, sensor type, communication protocol, cable entry,
+  mounting type, rangeability, turndown ratio, tank height, specific gravity — and everything else found.
+- Omit fields where value is N/A, empty, unknown, or not mentioned.
+
+FEW-SHOT EXAMPLES (follow this exact format):
+{_FEW_SHOT_EXAMPLES}"""
 
 
-def _run_ai_extraction(ocr_text: str) -> list[dict[str, Any]]:
-    """Call Groq API — primary extraction pipeline."""
+def extract_template_fields(template_bytes: bytes) -> list[str]:
+    """
+    Read the target field names from a WABAG datasheet template (sheet 2 or 3).
+    Scans for 'Refer Annexure' placeholder cells and collects the heading text
+    to their left — these are the fields the template expects to be filled.
+    Returns an empty list if template cannot be parsed.
+    """
+    try:
+        wb = load_workbook(io.BytesIO(template_bytes), data_only=True)
+        # Try the standard datasheet worksheet first, then fall back to sheets 2/3
+        ws, err = _get_datasheet_ws(wb)
+        if err:
+            sheets = wb.sheetnames
+            candidates = [wb[s] for s in sheets[1:3]]  # sheets 2 and 3
+            ws = candidates[0] if candidates else None
+        if ws is None:
+            return []
+
+        fields: list[str] = []
+        seen: set[str] = set()
+        for row in ws.iter_rows():
+            for cell in row:
+                if not _is_explicit_placeholder(cell.value):
+                    continue
+                # Walk left to find the heading
+                for col in range(cell.column - 1, 0, -1):
+                    c = ws.cell(row=cell.row, column=col)
+                    cv = c.value
+                    if cv and str(cv).strip() and not _is_explicit_placeholder(str(cv)):
+                        label = str(cv).strip()
+                        if label not in seen:
+                            fields.append(label)
+                            seen.add(label)
+                        break
+        logger.info("SDIE: extracted %d template fields", len(fields))
+        return fields
+    except Exception as exc:
+        logger.warning("SDIE: template field extraction failed: %s", exc)
+        return []
+
+
+def _run_ai_extraction(
+    ocr_text: str,
+    template_fields: list[str] | None = None,
+) -> tuple[list[dict[str, Any]], str]:
+    """
+    Call Groq API — primary extraction pipeline.
+    Returns (specs, instrument_type).
+    """
     groq_key = os.environ.get("GROQ_API_KEY", "")
     if not groq_key:
         logger.warning("SDIE: GROQ_API_KEY not set — AI extraction skipped")
-        return []
+        return [], ""
 
     import json as _json
     import requests as _requests
+
+    # Build user message: OCR text + template field hints if available
+    user_content = ocr_text[:8000]
+    if template_fields:
+        field_list = ", ".join(template_fields[:40])  # cap at 40 fields to avoid token overflow
+        user_content = (
+            f"TARGET FIELDS TO EXTRACT (from the datasheet template):\n{field_list}\n\n"
+            f"DOCUMENT TEXT:\n{ocr_text[:7500]}"
+        )
 
     try:
         resp = _requests.post(
@@ -475,7 +559,7 @@ def _run_ai_extraction(ocr_text: str) -> list[dict[str, Any]]:
                 "model": "llama-3.3-70b-versatile",
                 "messages": [
                     {"role": "system", "content": _GROQ_SYSTEM},
-                    {"role": "user", "content": ocr_text[:8000]},
+                    {"role": "user", "content": user_content},
                 ],
                 "temperature": 0.1,
                 "max_tokens": 2048,
@@ -486,7 +570,7 @@ def _run_ai_extraction(ocr_text: str) -> list[dict[str, Any]]:
         raw = resp.json()["choices"][0]["message"]["content"].strip()
     except Exception as exc:
         logger.error("SDIE: Groq API call failed: %s", exc)
-        return []
+        return [], ""
 
     try:
         ai_result = _json.loads(raw)
@@ -495,49 +579,66 @@ def _run_ai_extraction(ocr_text: str) -> list[dict[str, Any]]:
         m = _re.search(r"\{.*\}", raw, _re.DOTALL)
         if not m:
             logger.error("SDIE: Could not parse JSON from Groq response")
-            return []
+            return [], ""
         try:
             ai_result = _json.loads(m.group())
         except _json.JSONDecodeError as e:
             logger.error("SDIE: JSON decode failed: %s", e)
-            return []
+            return [], ""
+
+    _SKIP_VALUES = {"", "n/a", "na", "none", "null", "not specified", "unknown", "-", "—"}
+    instrument_type = str(ai_result.pop("_instrument_type", "")).strip()
 
     specs = []
     for field, data in ai_result.items():
-        val = data.get("value") if isinstance(data, dict) else data
-        conf = data.get("confidence", 90) if isinstance(data, dict) else 90
-        if not val or str(val).strip() in ("", "N/A", "n/a", "None", "null"):
+        if isinstance(data, dict):
+            raw_vals = data.get("values") or [data.get("value", "")]
+            conf = int(data.get("confidence", 90))
+        elif isinstance(data, list):
+            raw_vals = data
+            conf = 85
+        else:
+            raw_vals = [str(data)]
+            conf = 85
+
+        # Clean and deduplicate values
+        values = []
+        seen_vals: set[str] = set()
+        for v in raw_vals:
+            s = str(v).strip()
+            if s.lower() not in _SKIP_VALUES and s not in seen_vals:
+                values.append(s)
+                seen_vals.add(s)
+
+        if not values:
             continue
+
         specs.append({
             "raw_label": field,
-            "value": str(val).strip(),
-            "confidence": int(conf),
+            "values": values,
+            "value": values[0],
+            "confidence": min(100, max(0, conf)),
             "page": 1,
             "canonical_field": field,
-            "match_score": int(conf),
+            "match_score": conf,
             "source": "ai",
         })
-    logger.info("SDIE: AI extracted %d spec(s)", len(specs))
-    return specs
+
+    logger.info("SDIE: AI extracted %d spec(s), instrument_type=%r", len(specs), instrument_type)
+    return specs, instrument_type
 
 
-def _merge_ocr_into_ai(ai_specs: list[dict[str, Any]], ocr_specs: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Add OCR specs that AI missed."""
-    ai_fields = {(s.get("canonical_field") or "").lower() for s in ai_specs}
-    for spec in ocr_specs:
-        if (spec.get("canonical_field") or "").lower() not in ai_fields:
-            spec["source"] = "ocr"
-            ai_specs.append(spec)
-    return ai_specs
-
-
-def extract_specifications(file_bytes: bytes, filename: str) -> tuple[list[dict[str, Any]], int]:
+def extract_specifications(
+    file_bytes: bytes,
+    filename: str,
+    template_bytes: bytes | None = None,
+) -> tuple[list[dict[str, Any]], int, str]:
     """
     Run the full extraction pipeline on an uploaded vendor datasheet.
 
-    Renders pages → OCR text → Groq AI extraction.
-    Returns (specs, page_count) where each spec is:
-        {raw_label, value, confidence, page, canonical_field, match_score, source}
+    Renders pages → OCR text → (optional template field targeting) → Groq AI.
+    Returns (specs, page_count, instrument_type).
+    Each spec: {raw_label, values[], value, confidence, page, canonical_field, match_score, source}
     """
     logger.info("SDIE: extracting from '%s' (%d bytes)", filename, len(file_bytes))
     pages = extract_pages(file_bytes, filename)
@@ -554,9 +655,14 @@ def extract_specifications(file_bytes: bytes, filename: str) -> tuple[list[dict[
     ocr_text = "\n".join(line for line in ocr_text_parts if len(line.strip()) > 3)
     logger.info("SDIE: sending %d chars to Groq AI", len(ocr_text))
 
-    specs = _run_ai_extraction(ocr_text)
-    logger.info("SDIE: final %d specification(s)", len(specs))
-    return specs, len(pages)
+    # Read template target fields if a template was supplied
+    template_fields: list[str] = []
+    if template_bytes:
+        template_fields = extract_template_fields(template_bytes)
+
+    specs, instrument_type = _run_ai_extraction(ocr_text, template_fields or None)
+    logger.info("SDIE: final %d specification(s), type=%r", len(specs), instrument_type)
+    return specs, len(pages), instrument_type
 
 
 def specs_to_excel_bytes(specs: list[dict[str, Any]]) -> bytes:

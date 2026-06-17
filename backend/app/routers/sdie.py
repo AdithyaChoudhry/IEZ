@@ -52,12 +52,11 @@ ALLOWED_EXTENSIONS = {".pdf", ".jpg", ".jpeg", ".png", ".tif", ".tiff"}
 ALLOWED_TEMPLATE_EXTENSIONS = {".xlsx", ".xlsm"}
 
 
-def _run_extraction_job(job_id: str, file_bytes: bytes, filename: str, user_id: int):
+def _run_extraction_job(job_id: str, file_bytes: bytes, filename: str, user_id: int, template_bytes: bytes | None = None):
     """Run OCR extraction in a background thread and store the result/status."""
     try:
-        specs, page_count = extract_specifications(file_bytes, filename)
+        specs, page_count, instrument_type = extract_specifications(file_bytes, filename, template_bytes)
 
-        # Cache an Excel export of the extracted specs for download
         extraction_cache[f"{user_id}_sdie_extract"] = {
             "bytes": specs_to_excel_bytes(specs),
             "filename": "Extracted_Specifications.xlsx",
@@ -69,9 +68,10 @@ def _run_extraction_job(job_id: str, file_bytes: bytes, filename: str, user_id: 
                 specs=[ExtractedSpec(**s) for s in specs],
                 page_count=page_count,
                 message=f"Extracted {len(specs)} specification(s) from {page_count} page(s)",
+                instrument_type=instrument_type,
             ),
         }
-        logger.info("SDIE extract job %s done: %d specs", job_id, len(specs))
+        logger.info("SDIE extract job %s done: %d specs, type=%r", job_id, len(specs), instrument_type)
     except Exception as exc:
         logger.exception("SDIE extract job %s failed", job_id)
         extraction_jobs[job_id] = {"status": "error", "error": str(exc)}
@@ -80,11 +80,13 @@ def _run_extraction_job(job_id: str, file_bytes: bytes, filename: str, user_id: 
 @router.post("/extract", response_model=ExtractionJobResponse, status_code=status.HTTP_202_ACCEPTED)
 async def extract_datasheet(
     file: UploadFile = File(...),
+    template_file: UploadFile | None = File(default=None),
     current_user: User = Depends(get_current_user),
 ):
     """
-    Kick off OCR extraction of a tender document. Extraction runs in a
-    background thread — poll GET /sdie/extract/status/{job_id} for the result.
+    Kick off AI extraction of a tender document.
+    Optionally upload a WABAG template alongside for template-aware field targeting.
+    Poll GET /sdie/extract/status/{job_id} for the result.
     """
     filename = file.filename or ""
     ext = ""
@@ -97,13 +99,14 @@ async def extract_datasheet(
         )
 
     file_bytes = await file.read()
+    template_bytes = await template_file.read() if template_file else None
 
     job_id = str(uuid.uuid4())
     extraction_jobs[job_id] = {"status": "processing"}
 
     threading.Thread(
         target=_run_extraction_job,
-        args=(job_id, file_bytes, filename, current_user.id),
+        args=(job_id, file_bytes, filename, current_user.id, template_bytes),
         daemon=True,
     ).start()
 
@@ -151,7 +154,7 @@ async def download_extracted_specs(current_user: User = Depends(get_current_user
 def _run_generation_job(job_id: str, file_bytes: bytes, filename: str, template_bytes: bytes, user_id: int):
     """Run OCR extraction + WABAG template population in a background thread."""
     try:
-        specs, page_count = extract_specifications(file_bytes, filename)
+        specs, page_count, instrument_type = extract_specifications(file_bytes, filename, template_bytes)
 
         out_bytes, mapping_log, err = generate_populated_datasheet(template_bytes, specs)
         if err:
@@ -174,6 +177,7 @@ def _run_generation_job(job_id: str, file_bytes: bytes, filename: str, template_
                 mapping_log=[MappingLogEntry(**e) for e in mapping_log],
                 filename=out_filename,
                 message=f"Mapped {matched}/{len(mapping_log)} template field(s) from {len(specs)} extracted specification(s)",
+                instrument_type=instrument_type,
             ),
         }
         logger.info("SDIE generate job %s done: %d specs, %d matched", job_id, len(specs), matched)

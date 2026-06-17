@@ -7,9 +7,10 @@ from pydantic import BaseModel
 class ExtractedSpec(BaseModel):
     raw_label: str
     value: str
+    values: list[str] = []  # all candidate values found in document
     canonical_field: str | None
     match_score: float
-    confidence: float  # OCR confidence 0-100
+    confidence: float
     page: int
     source: str = "ocr"  # "ocr" | "ai"
 
@@ -18,6 +19,7 @@ class ExtractionResponse(BaseModel):
     specs: list[ExtractedSpec]
     page_count: int
     message: str
+    instrument_type: str = ""
 
 
 class ExtractionJobResponse(BaseModel):
@@ -48,6 +50,7 @@ class GenerateResponse(BaseModel):
     mapping_log: list[MappingLogEntry]
     filename: str
     message: str
+    instrument_type: str = ""
 
 
 class GenerateJobResponse(BaseModel):

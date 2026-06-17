@@ -506,9 +506,9 @@ def _run_ai_extraction(ocr_text: str) -> list[dict[str, Any]]:
 
 def _merge_ocr_into_ai(ai_specs: list[dict[str, Any]], ocr_specs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Add OCR specs that AI missed."""
-    ai_fields = {s.get("canonical_field", "").lower() for s in ai_specs}
+    ai_fields = {(s.get("canonical_field") or "").lower() for s in ai_specs}
     for spec in ocr_specs:
-        if spec.get("canonical_field", "").lower() not in ai_fields:
+        if (spec.get("canonical_field") or "").lower() not in ai_fields:
             spec["source"] = "ocr"
             ai_specs.append(spec)
     return ai_specs
@@ -535,7 +535,9 @@ def extract_specifications(file_bytes: bytes, filename: str) -> tuple[list[dict[
         for line in lines:
             ocr_text_parts.append(line.get("text", ""))
 
-    ocr_text = "\n".join(ocr_text_parts)
+    ocr_text = "\n".join(line for line in ocr_text_parts if len(line.strip()) > 3)
+
+    logger.info("SDIE: sending %d chars to Groq AI", len(ocr_text))
 
     # AI runs first — primary extraction
     ai_specs = _run_ai_extraction(ocr_text)

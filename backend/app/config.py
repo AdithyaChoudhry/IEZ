@@ -43,6 +43,9 @@ class Settings(BaseSettings):
     TEMP_FILE_DIR: str = "/tmp/iez_uploads"
     FILE_RETENTION_HOURS: int = 1
     
+    # AI Extraction
+    GROQ_API_KEY: str = ""
+
     # WebSocket
     WS_HEARTBEAT_INTERVAL: int = 30
     

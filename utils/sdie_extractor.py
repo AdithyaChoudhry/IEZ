@@ -427,9 +427,14 @@ def generate_populated_datasheet(
 # ─────────────────────────────────────────────────────────────────────────────
 def _run_ai_extraction(ocr_text: str) -> list[dict[str, Any]]:
     """Run AI model first. Returns specs list or empty list if unavailable."""
-    hf_token = os.environ.get("HF_TOKEN", "")
-    if not hf_token:
+    try:
+        from backend.app.config import settings
+        groq_key = settings.GROQ_API_KEY
+    except Exception:
+        groq_key = os.environ.get("GROQ_API_KEY", "")
+    if not groq_key:
         return []
+    os.environ["GROQ_API_KEY"] = groq_key
     try:
         import sys
         sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))

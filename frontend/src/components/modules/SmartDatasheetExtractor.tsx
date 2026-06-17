@@ -378,6 +378,8 @@ function ProcessingVisualizer({ step, fileCount, currentFileIdx, fileName, elaps
   );
 }
 
+const SESSION_KEY = 'sdie_results_v1';
+
 /* ───────── Main component ───────── */
 export default function SmartDatasheetExtractor() {
   const [files, setFiles] = useState<File[]>([]);
@@ -390,6 +392,33 @@ export default function SmartDatasheetExtractor() {
   const [activeTab, setActiveTab] = useState<'specs' | 'mapping'>('specs');
   const [elapsed, setElapsed] = useState(0);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Restore last results from sessionStorage on mount (survives navigation)
+  useEffect(() => {
+    try {
+      const saved = sessionStorage.getItem(SESSION_KEY);
+      if (!saved) return;
+      const { fileResults: fr, generateResult: gr, elapsed: el, savedAt } = JSON.parse(saved);
+      // Only restore if saved within the last 60 minutes
+      if (Date.now() - savedAt > 60 * 60 * 1000) { sessionStorage.removeItem(SESSION_KEY); return; }
+      setFileResults(fr ?? []);
+      setGenerateResult(gr ?? null);
+      setElapsed(el ?? 0);
+      setStep('done');
+      setActiveTab(gr ? 'mapping' : 'specs');
+    } catch { sessionStorage.removeItem(SESSION_KEY); }
+  }, []);
+
+  // Persist results to sessionStorage whenever extraction completes
+  useEffect(() => {
+    if (step === 'done' && fileResults.length > 0) {
+      try {
+        sessionStorage.setItem(SESSION_KEY, JSON.stringify({
+          fileResults, generateResult, elapsed, savedAt: Date.now(),
+        }));
+      } catch { /* storage full — ignore */ }
+    }
+  }, [step, fileResults, generateResult, elapsed]);
 
   const startTimer = () => {
     setElapsed(0);
@@ -404,6 +433,7 @@ export default function SmartDatasheetExtractor() {
   const reset = () => {
     setFileResults([]); setGenerateResult(null); setError(null);
     setStep('idle'); setCurrentFileIdx(0); stopTimer(); setElapsed(0);
+    sessionStorage.removeItem(SESSION_KEY);
   };
 
   const pollJob = async (endpoint: string, jobId: string): Promise<any> => {

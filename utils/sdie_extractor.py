@@ -427,33 +427,43 @@ def generate_populated_datasheet(
 # ─────────────────────────────────────────────────────────────────────────────
 _GROQ_SYSTEM = """You are an Instrumentation Engineering Expert for EPC Water/Wastewater/Desalination projects (WABAG standard).
 
-Extract ALL technical specifications from the text and return a JSON object.
-Each field: {"value": "extracted value", "confidence": <0-100>}
+Extract ALL technical specifications from the text and return ONLY a JSON object.
+Format: {"Field Name": {"value": "extracted value", "confidence": <0-100>}}
 Confidence: 95-100 explicitly stated, 80-94 clearly implied, 60-79 inferred.
 
-Extract fields including: Instrument Type, Tag Number, Fluid, Measuring Range, Output Signal, Power Supply, Accuracy, Enclosure Protection, Area Classification, Make, Model, Process Connection, Sensing Element Material, Rangeability, Cable Entry, Mounting, Communication Protocol, Area Certification, Wetted Material.
+Extract EVERY field you find — including but not limited to:
+Instrument Type, Tag Number, Service Description, Fluid/Medium, Line Size, Nominal Pipe Bore,
+Measuring Range, Full Scale Range, Calibration Range, Turndown Ratio, Set Point,
+Output Signal, Loop Power, Supply Voltage, Power Consumption,
+Accuracy, Repeatability, Linearity, Hysteresis, Resolution, Response Time,
+Process Temperature, Ambient Temperature, Process Pressure, Design Pressure, Design Temperature,
+Enclosure Protection (IP Rating), Area Classification, Zone, Group, Ex Protection Standard,
+Certificate Number, Approvals, SIL Rating,
+Manufacturer, Make, Model Number, Series, Part Number,
+Material of Construction, Body Material, Wetted Parts Material, Diaphragm Material,
+Float Material, Electrode Material, Tube Material, Housing Material,
+Process Connection, Connection Size, Flange Rating, Connection Standard (ASME/DIN/BS),
+Cable Entry Size, Number of Cable Entries, Conduit Entry,
+Communication Protocol, Digital Output, Fieldbus Type, HART Revision,
+Mounting Type, Installation Type, Position, Orientation,
+Sensor Type, Sensing Element, Detector Type, Probe Length, Insertion Depth,
+Display Type, Local Indicator, LCD/LED, Scale Units,
+Wiring Terminals, Terminal Block, Cable Gland,
+Any other specification present in the document.
 
-Return ONLY valid JSON. No explanation."""
+Return ONLY valid JSON. No explanation, no markdown, no prefix."""
 
 
 def _run_ai_extraction(ocr_text: str) -> list[dict[str, Any]]:
-    """Call Groq API directly — self-contained, no extra imports."""
-    print("[SDIE-AI] Step 1: _run_ai_extraction called", flush=True)
-
+    """Call Groq API — primary extraction pipeline."""
     groq_key = os.environ.get("GROQ_API_KEY", "")
-    print(f"[SDIE-AI] Step 2: GROQ_API_KEY present={bool(groq_key)} len={len(groq_key)}", flush=True)
-
     if not groq_key:
-        print("[SDIE-AI] ERROR: GROQ_API_KEY not set — skipping AI", flush=True)
+        logger.warning("SDIE: GROQ_API_KEY not set — AI extraction skipped")
         return []
-
-    print(f"[SDIE-AI] Step 3: OCR text length={len(ocr_text)} chars", flush=True)
-    print(f"[SDIE-AI] Step 3: OCR text preview: {ocr_text[:200]!r}", flush=True)
 
     import json as _json
     import requests as _requests
 
-    print("[SDIE-AI] Step 4: Calling Groq API...", flush=True)
     try:
         resp = _requests.post(
             "https://api.groq.com/openai/v1/chat/completions",
@@ -465,55 +475,49 @@ def _run_ai_extraction(ocr_text: str) -> list[dict[str, Any]]:
                 "model": "llama-3.3-70b-versatile",
                 "messages": [
                     {"role": "system", "content": _GROQ_SYSTEM},
-                    {"role": "user", "content": ocr_text[:4000]},
+                    {"role": "user", "content": ocr_text[:8000]},
                 ],
                 "temperature": 0.1,
-                "max_tokens": 1024,
+                "max_tokens": 2048,
             },
-            timeout=30,
+            timeout=45,
         )
-        print(f"[SDIE-AI] Step 5: Groq response status={resp.status_code}", flush=True)
         resp.raise_for_status()
-        raw = resp.json()["choices"][0]["message"]["content"]
-        print(f"[SDIE-AI] Step 6: Groq raw response preview: {raw[:300]!r}", flush=True)
+        raw = resp.json()["choices"][0]["message"]["content"].strip()
     except Exception as exc:
-        print(f"[SDIE-AI] ERROR: Groq call failed: {exc}", flush=True)
+        logger.error("SDIE: Groq API call failed: %s", exc)
         return []
 
-    # Parse JSON from response
-    raw = raw.strip()
     try:
         ai_result = _json.loads(raw)
-        print(f"[SDIE-AI] Step 7: JSON parsed OK, keys={list(ai_result.keys())[:5]}", flush=True)
     except _json.JSONDecodeError:
         import re as _re
         m = _re.search(r"\{.*\}", raw, _re.DOTALL)
         if not m:
-            print(f"[SDIE-AI] ERROR: Could not parse JSON from response: {raw[:200]}", flush=True)
+            logger.error("SDIE: Could not parse JSON from Groq response")
             return []
         try:
             ai_result = _json.loads(m.group())
-            print(f"[SDIE-AI] Step 7: JSON parsed via regex, keys={list(ai_result.keys())[:5]}", flush=True)
         except _json.JSONDecodeError as e:
-            print(f"[SDIE-AI] ERROR: JSON decode failed: {e}", flush=True)
+            logger.error("SDIE: JSON decode failed: %s", e)
             return []
 
     specs = []
     for field, data in ai_result.items():
         val = data.get("value") if isinstance(data, dict) else data
         conf = data.get("confidence", 90) if isinstance(data, dict) else 90
-        if not val:
+        if not val or str(val).strip() in ("", "N/A", "n/a", "None", "null"):
             continue
         specs.append({
             "raw_label": field,
-            "value": str(val),
+            "value": str(val).strip(),
             "confidence": int(conf),
             "page": 1,
             "canonical_field": field,
             "match_score": int(conf),
             "source": "ai",
         })
-    print(f"[SDIE-AI] Step 8: Final AI specs count={len(specs)}", flush=True)
+    logger.info("SDIE: AI extracted %d spec(s)", len(specs))
     return specs
 
 
@@ -531,41 +535,27 @@ def extract_specifications(file_bytes: bytes, filename: str) -> tuple[list[dict[
     """
     Run the full extraction pipeline on an uploaded vendor datasheet.
 
-    AI runs first (if HF_TOKEN set), OCR fills in what AI missed.
+    Renders pages → OCR text → Groq AI extraction.
     Returns (specs, page_count) where each spec is:
         {raw_label, value, confidence, page, canonical_field, match_score, source}
     """
-    logger.info("SDIE: extracting from '%s' (%d bytes), tesseract=%s", filename, len(file_bytes), _tess)
+    logger.info("SDIE: extracting from '%s' (%d bytes)", filename, len(file_bytes))
     pages = extract_pages(file_bytes, filename)
     logger.info("SDIE: rendered %d page(s)", len(pages))
 
-    page_lines = []
+    # Build plain text from all pages to feed the AI
     ocr_text_parts = []
     for idx, page in enumerate(pages, start=1):
         lines = ocr_page(page)
-        logger.info("SDIE: OCR page %d/%d -> %d line(s)", idx, len(pages), len(lines))
-        page_lines.append(lines)
+        logger.info("SDIE: OCR text page %d/%d -> %d line(s)", idx, len(pages), len(lines))
         for line in lines:
             ocr_text_parts.append(line.get("text", ""))
 
     ocr_text = "\n".join(line for line in ocr_text_parts if len(line.strip()) > 3)
-
     logger.info("SDIE: sending %d chars to Groq AI", len(ocr_text))
 
-    # AI runs first — primary extraction
-    ai_specs = _run_ai_extraction(ocr_text)
-
-    # OCR runs always — fills in what AI missed
-    ocr_specs = parse_specifications(page_lines)
-    ocr_specs = normalize_specifications(ocr_specs)
-    logger.info("SDIE: OCR parsed %d specification(s)", len(ocr_specs))
-
-    if ai_specs:
-        specs = _merge_ocr_into_ai(ai_specs, ocr_specs)
-    else:
-        specs = ocr_specs
-
-    logger.info("SDIE: final %d specification(s) (ai=%d, ocr=%d)", len(specs), len(ai_specs), len(ocr_specs))
+    specs = _run_ai_extraction(ocr_text)
+    logger.info("SDIE: final %d specification(s)", len(specs))
     return specs, len(pages)
 
 

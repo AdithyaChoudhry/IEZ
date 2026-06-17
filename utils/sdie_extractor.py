@@ -425,43 +425,83 @@ def generate_populated_datasheet(
 # ─────────────────────────────────────────────────────────────────────────────
 # Orchestration
 # ─────────────────────────────────────────────────────────────────────────────
+_GROQ_SYSTEM = """You are an Instrumentation Engineering Expert for EPC Water/Wastewater/Desalination projects (WABAG standard).
+
+Extract ALL technical specifications from the text and return a JSON object.
+Each field: {"value": "extracted value", "confidence": <0-100>}
+Confidence: 95-100 explicitly stated, 80-94 clearly implied, 60-79 inferred.
+
+Extract fields including: Instrument Type, Tag Number, Fluid, Measuring Range, Output Signal, Power Supply, Accuracy, Enclosure Protection, Area Classification, Make, Model, Process Connection, Sensing Element Material, Rangeability, Cable Entry, Mounting, Communication Protocol, Area Certification, Wetted Material.
+
+Return ONLY valid JSON. No explanation."""
+
+
 def _run_ai_extraction(ocr_text: str) -> list[dict[str, Any]]:
-    """Run AI model first. Returns specs list or empty list if unavailable."""
-    try:
-        from backend.app.config import settings
-        groq_key = settings.GROQ_API_KEY
-    except Exception:
-        groq_key = os.environ.get("GROQ_API_KEY", "")
+    """Call Groq API directly — self-contained, no extra imports."""
+    groq_key = os.environ.get("GROQ_API_KEY", "")
     if not groq_key:
+        logger.warning("SDIE: GROQ_API_KEY not set, skipping AI extraction")
         return []
-    os.environ["GROQ_API_KEY"] = groq_key
+
+    import json as _json
+    import requests as _requests
+
     try:
-        import sys
-        sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-        from ai_training.hf_inference import extract_specifications as ai_extract
-        ai_result = ai_extract(ocr_text)
-        if not ai_result:
-            return []
-        specs = []
-        for field, data in ai_result.items():
-            val = data.get("value") if isinstance(data, dict) else data
-            conf = data.get("confidence", 90) if isinstance(data, dict) else 90
-            if not val:
-                continue
-            specs.append({
-                "raw_label": field,
-                "value": str(val),
-                "confidence": conf,
-                "page": 1,
-                "canonical_field": field,
-                "match_score": conf,
-                "source": "ai",
-            })
-        logger.info("SDIE: AI extracted %d specs", len(specs))
-        return specs
+        resp = _requests.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {groq_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": "llama-3.3-70b-versatile",
+                "messages": [
+                    {"role": "system", "content": _GROQ_SYSTEM},
+                    {"role": "user", "content": ocr_text[:4000]},
+                ],
+                "temperature": 0.1,
+                "max_tokens": 1024,
+            },
+            timeout=30,
+        )
+        resp.raise_for_status()
+        raw = resp.json()["choices"][0]["message"]["content"]
     except Exception as exc:
-        logger.warning("SDIE: AI extraction failed (non-fatal): %s", exc)
+        logger.warning("SDIE: Groq call failed: %s", exc)
         return []
+
+    # Parse JSON from response
+    raw = raw.strip()
+    try:
+        ai_result = _json.loads(raw)
+    except _json.JSONDecodeError:
+        import re as _re
+        m = _re.search(r"\{.*\}", raw, _re.DOTALL)
+        if not m:
+            logger.warning("SDIE: could not parse AI JSON response")
+            return []
+        try:
+            ai_result = _json.loads(m.group())
+        except _json.JSONDecodeError:
+            return []
+
+    specs = []
+    for field, data in ai_result.items():
+        val = data.get("value") if isinstance(data, dict) else data
+        conf = data.get("confidence", 90) if isinstance(data, dict) else 90
+        if not val:
+            continue
+        specs.append({
+            "raw_label": field,
+            "value": str(val),
+            "confidence": int(conf),
+            "page": 1,
+            "canonical_field": field,
+            "match_score": int(conf),
+            "source": "ai",
+        })
+    logger.info("SDIE: Groq AI extracted %d specs", len(specs))
+    return specs
 
 
 def _merge_ocr_into_ai(ai_specs: list[dict[str, Any]], ocr_specs: list[dict[str, Any]]) -> list[dict[str, Any]]:

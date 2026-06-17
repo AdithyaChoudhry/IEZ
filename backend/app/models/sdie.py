@@ -11,6 +11,7 @@ class ExtractedSpec(BaseModel):
     match_score: float
     confidence: float  # OCR confidence 0-100
     page: int
+    source: str = "ocr"  # "ocr" | "ai"
 
 
 class ExtractionResponse(BaseModel):

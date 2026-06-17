@@ -438,14 +438,22 @@ Return ONLY valid JSON. No explanation."""
 
 def _run_ai_extraction(ocr_text: str) -> list[dict[str, Any]]:
     """Call Groq API directly — self-contained, no extra imports."""
+    print("[SDIE-AI] Step 1: _run_ai_extraction called", flush=True)
+
     groq_key = os.environ.get("GROQ_API_KEY", "")
+    print(f"[SDIE-AI] Step 2: GROQ_API_KEY present={bool(groq_key)} len={len(groq_key)}", flush=True)
+
     if not groq_key:
-        logger.warning("SDIE: GROQ_API_KEY not set, skipping AI extraction")
+        print("[SDIE-AI] ERROR: GROQ_API_KEY not set — skipping AI", flush=True)
         return []
+
+    print(f"[SDIE-AI] Step 3: OCR text length={len(ocr_text)} chars", flush=True)
+    print(f"[SDIE-AI] Step 3: OCR text preview: {ocr_text[:200]!r}", flush=True)
 
     import json as _json
     import requests as _requests
 
+    print("[SDIE-AI] Step 4: Calling Groq API...", flush=True)
     try:
         resp = _requests.post(
             "https://api.groq.com/openai/v1/chat/completions",
@@ -464,25 +472,30 @@ def _run_ai_extraction(ocr_text: str) -> list[dict[str, Any]]:
             },
             timeout=30,
         )
+        print(f"[SDIE-AI] Step 5: Groq response status={resp.status_code}", flush=True)
         resp.raise_for_status()
         raw = resp.json()["choices"][0]["message"]["content"]
+        print(f"[SDIE-AI] Step 6: Groq raw response preview: {raw[:300]!r}", flush=True)
     except Exception as exc:
-        logger.warning("SDIE: Groq call failed: %s", exc)
+        print(f"[SDIE-AI] ERROR: Groq call failed: {exc}", flush=True)
         return []
 
     # Parse JSON from response
     raw = raw.strip()
     try:
         ai_result = _json.loads(raw)
+        print(f"[SDIE-AI] Step 7: JSON parsed OK, keys={list(ai_result.keys())[:5]}", flush=True)
     except _json.JSONDecodeError:
         import re as _re
         m = _re.search(r"\{.*\}", raw, _re.DOTALL)
         if not m:
-            logger.warning("SDIE: could not parse AI JSON response")
+            print(f"[SDIE-AI] ERROR: Could not parse JSON from response: {raw[:200]}", flush=True)
             return []
         try:
             ai_result = _json.loads(m.group())
-        except _json.JSONDecodeError:
+            print(f"[SDIE-AI] Step 7: JSON parsed via regex, keys={list(ai_result.keys())[:5]}", flush=True)
+        except _json.JSONDecodeError as e:
+            print(f"[SDIE-AI] ERROR: JSON decode failed: {e}", flush=True)
             return []
 
     specs = []
@@ -500,7 +513,7 @@ def _run_ai_extraction(ocr_text: str) -> list[dict[str, Any]]:
             "match_score": int(conf),
             "source": "ai",
         })
-    logger.info("SDIE: Groq AI extracted %d specs", len(specs))
+    print(f"[SDIE-AI] Step 8: Final AI specs count={len(specs)}", flush=True)
     return specs
 
 

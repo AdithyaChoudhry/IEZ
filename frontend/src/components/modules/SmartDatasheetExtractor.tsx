@@ -3,7 +3,7 @@ import {
   ScanSearch, Upload, FileSpreadsheet, Download, Zap,
   CheckCircle2, AlertCircle, FileText, Brain, Cpu,
   BarChart3, Tag, Activity, Clock, Sparkles, X,
-  ChevronRight, Eye, ListChecks, Layers,
+  Eye, ListChecks, Layers,
 } from 'lucide-react';
 import api from '@/services/api';
 
@@ -374,7 +374,7 @@ function ReviewPanel({ fileResults, onConfirm, onBack }: {
   // Initialize: all included, first value selected
   const [selections, setSelections] = useState<Record<string, SpecSel>>(() => {
     const init: Record<string, SpecSel> = {};
-    allSpecs.forEach((s, i) => { init[i] = { include: true, valueIdx: 0 }; });
+    allSpecs.forEach((_s, i) => { init[i] = { include: true, valueIdx: 0 }; });
     return init;
   });
 

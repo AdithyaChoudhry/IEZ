@@ -1,519 +1,925 @@
 /**
- * Data Sheet Generator (SOP-driven, interactive) — v2
- * Flow: upload IODB -> pick instrument type -> select tags -> upload SOP ->
- * configuration popup (IODB / dropdowns / mandatory) -> preview -> generate.
+ * DataSheetGenerator — iEZ SIMRE-driven 5-step wizard
+ * Step 1: Upload IODB → pick instrument type
+ * Step 2: Select tags → upload SOP → pick datasheet sheet
+ * Step 3: Configure specs  (IODB auto | SIMRE | Manual)
+ * Step 4: Notes + Vendor Recommendation + Model freeze
+ * Step 5: Generate + Download ZIP
  */
-import { useMemo, useState } from 'react';
-import { FileText, Upload, Download, CheckCircle2, Search, FileSpreadsheet, X } from 'lucide-react';
+import { useMemo, useState, useRef } from 'react';
+import {
+  FileText, Upload, Download, CheckCircle2, Search, FileSpreadsheet,
+  X, ChevronRight, Zap, SlidersHorizontal, Star,
+  Lock, Unlock, RefreshCw, ChevronDown, ChevronUp,
+} from 'lucide-react';
 import api from '@/services/api';
 import PageHeader from '../ui/PageHeader';
-import Card from '../ui/Card';
 import Button from '../ui/Button';
 import Alert from '../ui/Alert';
-import FileUploadCard from '../ui/FileUploadCard';
 
+// ── Types ──────────────────────────────────────────────────────────────────────
 interface FieldSpec {
-  section: string;
-  label: string;
-  row: number;
-  value_cols: number[];
-  sub_labels: string[];
-  source: 'iodb' | 'predefined';
-  defaults: string[];
-  source_note: string;
-  color: string;
-  input_type: 'iodb' | 'dropdown' | 'text';
-  options: string[];
-  mandatory: boolean;
+  section: string; label: string; row: number;
+  value_cols: number[]; sub_labels: string[];
+  source: 'iodb' | 'predefined'; defaults: string[]; source_note: string;
+  color: string; input_type: 'iodb' | 'dropdown' | 'text'; options: string[]; mandatory: boolean;
 }
-
 interface DatasheetInfo { sheet: string; eg_sheet: string | null; title: string; }
-interface InstrumentTypesResponse { instrument_types: string[]; count: number; }
-interface DatasheetsResponse { datasheets: DatasheetInfo[]; }
-interface FieldsResponse { datasheet: string; title: string; fields: FieldSpec[]; }
-interface TagsResponse { instrument_type: string; tags: string[]; count: number; }
-interface GenerateJob { job_id: string; status: string; }
-interface GenerateStatus {
-  job_id: string;
-  status: 'processing' | 'done' | 'error';
-  result?: { filename: string; tag_count: number; message: string };
-  error?: string;
-}
+interface VendorMatch { vendor: string; model: string; match_pct: number; strengths: string[]; gaps: string[]; }
+interface GenStatus { job_id: string; status: 'processing' | 'done' | 'error'; result?: { filename: string; tag_count: number; message: string }; error?: string; }
+interface ExtractResult { extracted_value: string; confidence: number; raw_snippet: string; error?: string; }
 
-const POLL_INTERVAL_MS = 3000;
-const MAX_POLL_ATTEMPTS = 200;
+const POLL_MS = 3000;
 const CUSTOM = 'Custom Value';
 
-export default function DataSheetGenerator() {
-  const [iodbFile, setIodbFile] = useState<File | null>(null);
-  const [sopFile, setSopFile] = useState<File | null>(null);
+// Field role classification
+const role = (f: FieldSpec): 'iodb' | 'simre' | 'manual' => {
+  if (f.input_type === 'iodb') return 'iodb';
+  if (f.mandatory) return 'simre';
+  return 'manual';
+};
 
-  const [instrumentTypes, setInstrumentTypes] = useState<string[]>([]);
-  const [selectedType, setSelectedType] = useState('');
-  const [tags, setTags] = useState<string[]>([]);
-  const [selectedTags, setSelectedTags] = useState<string[]>([]);
-
-  const [datasheets, setDatasheets] = useState<DatasheetInfo[]>([]);
-  const [selectedDatasheet, setSelectedDatasheet] = useState('');
-  const [fields, setFields] = useState<FieldSpec[]>([]);
-
-  // overrides[label] = array of values (aligned to value_cols); customMode tracks "Custom Value".
-  const [overrides, setOverrides] = useState<Record<string, string[]>>({});
-  const [customMode, setCustomMode] = useState<Record<string, boolean[]>>({});
-
-  const [showConfig, setShowConfig] = useState(false);
-  const [showPreview, setShowPreview] = useState(false);
-
-  const [loadingTypes, setLoadingTypes] = useState(false);
-  const [loadingTags, setLoadingTags] = useState(false);
-  const [loadingFields, setLoadingFields] = useState(false);
-  const [generating, setGenerating] = useState(false);
-  const [result, setResult] = useState<GenerateStatus['result'] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  // ── Step 1: IODB -> instrument types ──────────────────────────────────────
-  const handleLoadTypes = async () => {
-    if (!iodbFile) return;
-    setLoadingTypes(true); setError(null);
-    setInstrumentTypes([]); setTags([]); setSelectedType(''); setResult(null);
-    const fd = new FormData(); fd.append('iodb_file', iodbFile);
-    try {
-      const res = await api.post<InstrumentTypesResponse>('/sop-datasheet/instrument-types', fd, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      });
-      setInstrumentTypes(res.data.instrument_types);
-    } catch (err: any) {
-      setError(err.response?.data?.detail || 'Failed to read instrument types');
-    } finally { setLoadingTypes(false); }
-  };
-
-  // ── Step 2: type -> tags ──────────────────────────────────────────────────
-  const handleSelectType = async (type: string) => {
-    setSelectedType(type); setSelectedTags([]); setTags([]);
-    if (!iodbFile || !type) return;
-    setLoadingTags(true); setError(null);
-    const fd = new FormData(); fd.append('iodb_file', iodbFile); fd.append('instrument_type', type);
-    try {
-      const res = await api.post<TagsResponse>('/sop-datasheet/tags', fd, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      });
-      setTags(res.data.tags);
-    } catch (err: any) {
-      setError(err.response?.data?.detail || 'Failed to load tags');
-    } finally { setLoadingTags(false); }
-  };
-
-  // ── Step 3: SOP -> datasheets -> fields ───────────────────────────────────
-  const handleLoadDatasheets = async () => {
-    if (!sopFile) return;
-    setError(null); setDatasheets([]); setFields([]);
-    const fd = new FormData(); fd.append('sop_file', sopFile);
-    try {
-      const res = await api.post<DatasheetsResponse>('/sop-datasheet/datasheets', fd, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      });
-      setDatasheets(res.data.datasheets);
-      if (res.data.datasheets.length === 1) await loadFields(res.data.datasheets[0].sheet);
-    } catch (err: any) {
-      setError(err.response?.data?.detail || 'Failed to analyze SOP workbook');
-    }
-  };
-
-  const loadFields = async (sheet: string) => {
-    if (!sopFile) return;
-    setSelectedDatasheet(sheet); setLoadingFields(true); setError(null);
-    const fd = new FormData(); fd.append('sop_file', sopFile); fd.append('datasheet_sheet', sheet);
-    try {
-      const res = await api.post<FieldsResponse>('/sop-datasheet/fields', fd, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      });
-      setFields(res.data.fields);
-      // Initialize overrides for editable fields (dropdown + text) with defaults.
-      const initVals: Record<string, string[]> = {};
-      const initCustom: Record<string, boolean[]> = {};
-      for (const f of res.data.fields) {
-        if (f.input_type === 'iodb') continue;
-        initVals[f.label] = [...f.defaults];
-        initCustom[f.label] = f.value_cols.map(() => false);
-      }
-      setOverrides(initVals);
-      setCustomMode(initCustom);
-    } catch (err: any) {
-      setError(err.response?.data?.detail || 'Failed to load fields');
-    } finally { setLoadingFields(false); }
-  };
-
-  const setVal = (label: string, idx: number, value: string) => {
-    setOverrides((prev) => {
-      const arr = [...(prev[label] || [])]; arr[idx] = value; return { ...prev, [label]: arr };
-    });
-  };
-
-  const onDropdownChange = (label: string, idx: number, value: string) => {
-    if (value === CUSTOM) {
-      setCustomMode((p) => { const a = [...(p[label] || [])]; a[idx] = true; return { ...p, [label]: a }; });
-      setVal(label, idx, '');
-    } else {
-      setCustomMode((p) => { const a = [...(p[label] || [])]; a[idx] = false; return { ...p, [label]: a }; });
-      setVal(label, idx, value);
-    }
-  };
-
-  // Mandatory validation: text+mandatory fields must have a non-empty value.
-  const missingMandatory = useMemo(
-    () => fields.filter((f) => f.input_type === 'text' && f.mandatory)
-      .filter((f) => !(overrides[f.label] || []).some((v) => (v || '').trim())),
-    [fields, overrides]
-  );
-
-  const grouped = useMemo(() => {
-    const out: { section: string; fields: FieldSpec[] }[] = [];
-    for (const f of fields) {
-      const last = out[out.length - 1];
-      if (last && last.section === f.section) last.fields.push(f);
-      else out.push({ section: f.section, fields: [f] });
-    }
-    return out;
-  }, [fields]);
-
-  const iodbFields = fields.filter((f) => f.input_type === 'iodb');
-  const dropdownFields = fields.filter((f) => f.input_type === 'dropdown');
-  const textFields = fields.filter((f) => f.input_type === 'text');
-
-  const readyToConfigure = !!selectedType && selectedTags.length > 0 && fields.length > 0;
-
-  // ── Generate ──────────────────────────────────────────────────────────────
-  const handleGenerate = async () => {
-    if (!sopFile || !iodbFile || !selectedDatasheet || !selectedType || selectedTags.length === 0) return;
-    setShowPreview(false);
-    setGenerating(true); setError(null); setResult(null);
-    const fd = new FormData();
-    fd.append('sop_file', sopFile);
-    fd.append('iodb_file', iodbFile);
-    fd.append('datasheet_sheet', selectedDatasheet);
-    fd.append('instrument_type', selectedType);
-    fd.append('selected_tags', JSON.stringify(selectedTags));
-    fd.append('overrides', JSON.stringify(overrides));
-    try {
-      const kickoff = await api.post<GenerateJob>('/sop-datasheet/generate', fd, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      });
-      const jobId = kickoff.data.job_id;
-      for (let i = 0; i < MAX_POLL_ATTEMPTS; i++) {
-        await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
-        const st = await api.get<GenerateStatus>(`/sop-datasheet/generate/status/${jobId}`);
-        if (st.data.status === 'done') { setResult(st.data.result!); return; }
-        if (st.data.status === 'error') { setError(st.data.error || 'Generation failed'); return; }
-      }
-      setError('Generation is taking longer than expected. Please try again later.');
-    } catch (err: any) {
-      setError(err.response?.data?.detail || 'Generation failed');
-    } finally { setGenerating(false); }
-  };
-
-  const handleDownload = async () => {
-    try {
-      const res = await api.get('/sop-datasheet/download', { responseType: 'blob' });
-      const url = window.URL.createObjectURL(new Blob([res.data]));
-      const link = document.createElement('a');
-      link.href = url; link.setAttribute('download', result?.filename || 'Datasheets.zip');
-      document.body.appendChild(link); link.click(); link.remove();
-    } catch (err: any) {
-      setError(err.response?.data?.detail || 'Download failed');
-    }
-  };
-
-  const valueOf = (label: string, idx: number, fallback: string) => {
-    const v = overrides[label]?.[idx];
-    return (v && v.trim()) ? v : fallback;
-  };
-
+// ── Step indicator ─────────────────────────────────────────────────────────────
+const STEPS = ['IODB & Type', 'Tags & SOP', 'Spec Config', 'Notes & Vendor', 'Generate'];
+function StepBar({ current }: { current: number }) {
   return (
-    <div className="space-y-6">
-      <PageHeader
-        icon={FileText}
-        iconClassName="text-orange-500"
-        title="Data Sheet Generator"
-        description="Upload IODB, select an instrument type & tags, upload the SOP template, configure specs, preview, and generate one datasheet per tag."
-      />
-
-      {error && <Alert variant="error" title="Error" onClose={() => setError(null)}>{error}</Alert>}
-
-      {/* Step 1: IODB */}
-      <FileUploadCard
-        title="Step 1 — Upload IODB"
-        icon={Upload}
-        file={iodbFile}
-        accept=".xls,.xlsx,.xlsm"
-        onChange={(f) => { setIodbFile(f); setInstrumentTypes([]); setTags([]); setSelectedType(''); }}
-      >
-        <Button onClick={handleLoadTypes} disabled={!iodbFile} loading={loadingTypes} fullWidth className="mt-3 bg-blue-600 hover:bg-blue-700">
-          <Search className="w-4 h-4" />
-          {loadingTypes ? 'Reading...' : 'Show Instrument Types'}
-        </Button>
-      </FileUploadCard>
-
-      {/* Step 2: Instrument type + tags */}
-      {instrumentTypes.length > 0 && (
-        <Card title="Step 2 — Select Instrument Type">
-          <select
-            value={selectedType}
-            onChange={(e) => handleSelectType(e.target.value)}
-            className="w-full px-3 py-2 border border-gray-300 rounded-md bg-white"
-          >
-            <option value="">— Select instrument type —</option>
-            {instrumentTypes.map((t) => <option key={t} value={t}>{t}</option>)}
-          </select>
-          {loadingTags && <p className="text-xs text-gray-500 mt-2">Loading tags…</p>}
-
-          {tags.length > 0 && (
-            <div className="mt-4">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-sm font-medium text-gray-700">{tags.length} matching tag(s)</span>
-                <div className="flex gap-2">
-                  <Button variant="secondary" size="sm" onClick={() => setSelectedTags(tags)}>Select All</Button>
-                  <Button variant="ghost" size="sm" onClick={() => setSelectedTags([])}>Clear</Button>
-                </div>
+    <div className="flex items-center gap-0 mb-8">
+      {STEPS.map((label, i) => {
+        const idx = i + 1;
+        const done = idx < current;
+        const active = idx === current;
+        return (
+          <div key={i} className="flex items-center flex-1 last:flex-none">
+            <div className="flex flex-col items-center gap-1.5">
+              <div
+                className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold transition-all duration-300"
+                style={{
+                  background: done ? 'var(--em)' : active ? 'var(--em-dim)' : 'var(--s3)',
+                  border: `1.5px solid ${done || active ? 'var(--em)' : 'var(--b2)'}`,
+                  color: done ? '#fff' : active ? 'var(--em-lt)' : 'var(--t2)',
+                }}
+              >
+                {done ? <CheckCircle2 className="w-4 h-4" /> : idx}
               </div>
-              <div className="max-h-56 overflow-y-auto border border-gray-200 rounded-lg p-3">
-                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2">
-                  {tags.map((tag) => (
-                    <label key={tag} className="flex items-center gap-2 cursor-pointer hover:bg-gray-50 p-1.5 rounded">
-                      <input type="checkbox" checked={selectedTags.includes(tag)}
-                        onChange={() => setSelectedTags((p) => p.includes(tag) ? p.filter((t) => t !== tag) : [...p, tag])}
-                        className="w-4 h-4 text-primary-600 border-gray-300 rounded" />
-                      <span className="text-sm text-gray-700">{tag}</span>
-                    </label>
-                  ))}
-                </div>
-              </div>
-              <p className="text-sm text-gray-600 mt-2"><strong>{selectedTags.length}</strong> tag(s) selected.</p>
+              <span className="text-[10px] font-medium whitespace-nowrap" style={{ color: active ? 'var(--em-lt)' : done ? 'var(--t1)' : 'var(--t2)' }}>
+                {label}
+              </span>
             </div>
-          )}
-        </Card>
-      )}
-
-      {/* Step 3: SOP template */}
-      {selectedTags.length > 0 && (
-        <FileUploadCard
-          title="Step 3 — Upload SOP Datasheet Template"
-          icon={FileSpreadsheet}
-          file={sopFile}
-          accept=".xls,.xlsx,.xlsm"
-          onChange={(f) => { setSopFile(f); setDatasheets([]); setFields([]); }}
-          hint="Upload .xlsx for full logo/formula/page-setup preservation (.xls is best-effort)."
-        >
-          <Button onClick={handleLoadDatasheets} disabled={!sopFile} fullWidth className="mt-3 bg-blue-600 hover:bg-blue-700">
-            <Search className="w-4 h-4" /> Analyze Template
-          </Button>
-        </FileUploadCard>
-      )}
-
-      {datasheets.length > 1 && (
-        <Card title="Select Datasheet">
-          <select value={selectedDatasheet} onChange={(e) => loadFields(e.target.value)}
-            className="w-full px-3 py-2 border border-gray-300 rounded-md bg-white">
-            <option value="">— Select datasheet —</option>
-            {datasheets.map((d) => <option key={d.sheet} value={d.sheet}>{d.title} ({d.sheet})</option>)}
-          </select>
-          {loadingFields && <p className="text-xs text-gray-500 mt-2">Loading fields…</p>}
-        </Card>
-      )}
-
-      {/* Step 4: Configure */}
-      {readyToConfigure && (
-        <Button onClick={() => setShowConfig(true)} size="lg" fullWidth className="text-lg py-4">
-          <FileText className="w-6 h-6" /> Configure Specifications ({fields.length} fields)
-        </Button>
-      )}
-
-      {/* Result */}
-      {result && (
-        <div className="bg-green-50 border border-green-200 rounded-lg p-6">
-          <div className="flex items-start gap-4">
-            <CheckCircle2 className="w-12 h-12 text-green-500 flex-shrink-0" />
-            <div className="flex-1">
-              <h3 className="text-xl font-bold text-green-800 mb-2">Datasheets Generated!</h3>
-              <p className="text-green-700 mb-4">{result.message}</p>
-              <Button onClick={handleDownload} className="bg-green-600 hover:bg-green-700">
-                <Download className="w-5 h-5" /> Download {result.filename}
-              </Button>
-            </div>
+            {i < STEPS.length - 1 && (
+              <div className="flex-1 h-px mx-2 mb-5" style={{ background: done ? 'var(--em)' : 'var(--b2)', transition: 'background 0.3s' }} />
+            )}
           </div>
-        </div>
-      )}
-
-      {/* ── Configuration Popup ─────────────────────────────────────────────── */}
-      {showConfig && (
-        <Modal title="Datasheet Configuration" onClose={() => setShowConfig(false)}>
-          <Legend />
-          {/* Section 1 — IODB */}
-          {iodbFields.length > 0 && (
-            <ConfigSection title="IODB Mapped Fields" tint="bg-[#FFF9C4]" note="Auto-filled per tag from the IODB.">
-              {iodbFields.map((f) => (
-                <Row key={`${f.row}`} label={f.label} note={f.source_note}>
-                  <div className="px-3 py-2 rounded-md text-sm bg-[#FFF9C4] border border-yellow-300 text-gray-600">
-                    {f.defaults.join(' / ') || 'From IODB'}
-                  </div>
-                </Row>
-              ))}
-            </ConfigSection>
-          )}
-          {/* Section 2 — dropdowns */}
-          {dropdownFields.length > 0 && (
-            <ConfigSection title="Predefined Dropdown Fields" tint="bg-[#EAF7EA]" note="Pick a value or choose 'Custom Value'.">
-              {dropdownFields.map((f) => (
-                <Row key={`${f.row}`} label={f.label} note={f.source_note}>
-                  {f.value_cols.map((_c, idx) => {
-                    const isCustom = customMode[f.label]?.[idx];
-                    return (
-                      <div key={idx} className="flex-1 space-y-1">
-                        {f.sub_labels[idx] && <span className="text-xs text-gray-500">{f.sub_labels[idx]}</span>}
-                        <select
-                          value={isCustom ? CUSTOM : (overrides[f.label]?.[idx] ?? '')}
-                          onChange={(e) => onDropdownChange(f.label, idx, e.target.value)}
-                          className="w-full px-3 py-2 rounded-md text-sm border border-green-300 bg-[#EAF7EA]"
-                        >
-                          {f.options.map((o) => <option key={o} value={o}>{o}</option>)}
-                        </select>
-                        {isCustom && (
-                          <input type="text" placeholder="Enter custom value"
-                            value={overrides[f.label]?.[idx] ?? ''}
-                            onChange={(e) => setVal(f.label, idx, e.target.value)}
-                            className="w-full px-3 py-2 rounded-md text-sm border border-green-400 bg-white" />
-                        )}
-                      </div>
-                    );
-                  })}
-                </Row>
-              ))}
-            </ConfigSection>
-          )}
-          {/* Section 3 — mandatory text */}
-          {textFields.length > 0 && (
-            <ConfigSection title="User Input Fields" tint="bg-[#FDEEF0]" note="Mandatory fields must be filled (or have a default).">
-              {textFields.map((f) => (
-                <Row key={`${f.row}`} label={f.label + (f.mandatory ? ' *' : '')} note={f.source_note}>
-                  {f.value_cols.map((_c, idx) => {
-                    const v = overrides[f.label]?.[idx] ?? '';
-                    const blank = f.mandatory && !v.trim();
-                    return (
-                      <div key={idx} className="flex-1 space-y-1">
-                        {f.sub_labels[idx] && <span className="text-xs text-gray-500">{f.sub_labels[idx]}</span>}
-                        <input type="text" value={v} onChange={(e) => setVal(f.label, idx, e.target.value)}
-                          className={`w-full px-3 py-2 rounded-md text-sm border ${blank ? 'bg-[#FDEEF0] border-red-400' : 'bg-white border-gray-300'}`} />
-                      </div>
-                    );
-                  })}
-                </Row>
-              ))}
-            </ConfigSection>
-          )}
-
-          <div className="flex items-center justify-between pt-4 border-t mt-4">
-            <span className="text-sm text-gray-500">
-              {missingMandatory.length > 0
-                ? `${missingMandatory.length} mandatory field(s) need a value`
-                : `Ready · ${selectedTags.length} datasheet(s)`}
-            </span>
-            <div className="flex gap-2">
-              <Button variant="ghost" onClick={() => setShowConfig(false)}>Cancel</Button>
-              <Button onClick={() => { setShowConfig(false); setShowPreview(true); }} disabled={missingMandatory.length > 0}>
-                Preview →
-              </Button>
-            </div>
-          </div>
-        </Modal>
-      )}
-
-      {/* ── Preview Popup ───────────────────────────────────────────────────── */}
-      {showPreview && (
-        <Modal title="Datasheet Preview" onClose={() => setShowPreview(false)}>
-          <p className="text-sm text-gray-600 mb-3">
-            Common specifications below apply to all <strong>{selectedTags.length}</strong> selected tag(s).
-            IODB fields are filled individually per tag at generation.
-          </p>
-          <div className="border border-gray-200 rounded-lg overflow-auto max-h-[26rem]">
-            <table className="w-full text-sm">
-              <thead className="bg-gray-50 sticky top-0">
-                <tr>
-                  <th className="px-3 py-2 text-left font-medium text-gray-700">Section</th>
-                  <th className="px-3 py-2 text-left font-medium text-gray-700">Field</th>
-                  <th className="px-3 py-2 text-left font-medium text-gray-700">Value</th>
-                  <th className="px-3 py-2 text-left font-medium text-gray-700">Source</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-200">
-                {grouped.map((g) => g.fields.map((f) => (
-                  <tr key={`${f.row}`} className={f.input_type === 'iodb' ? 'bg-[#FFFDE7]' : f.input_type === 'dropdown' ? 'bg-[#F4FBF4]' : 'bg-[#FDF5F6]'}>
-                    <td className="px-3 py-2 text-gray-500">{g.fields[0] === f ? g.section : ''}</td>
-                    <td className="px-3 py-2 text-gray-800">{f.label}</td>
-                    <td className="px-3 py-2 text-gray-700">
-                      {f.input_type === 'iodb'
-                        ? <span className="italic text-gray-400">From IODB (per tag)</span>
-                        : f.value_cols.map((_c, idx) => valueOf(f.label, idx, f.defaults[idx] || '')).join(' / ')}
-                    </td>
-                    <td className="px-3 py-2 text-xs uppercase text-gray-400">{f.input_type}</td>
-                  </tr>
-                )))}
-              </tbody>
-            </table>
-          </div>
-          <div className="flex items-center justify-end gap-2 pt-4 border-t mt-4">
-            <Button variant="ghost" onClick={() => { setShowPreview(false); setShowConfig(true); }}>← Back to Edit</Button>
-            <Button onClick={handleGenerate} loading={generating} className="bg-green-600 hover:bg-green-700">
-              <FileText className="w-5 h-5" /> Confirm & Generate {selectedTags.length}
-            </Button>
-          </div>
-        </Modal>
-      )}
+        );
+      })}
     </div>
   );
 }
 
-/* ── Small presentational helpers ────────────────────────────────────────── */
-function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
+// ── Inline file drop zone ──────────────────────────────────────────────────────
+function DropZone({ file, onChange, accept, label }: { file: File | null; onChange: (f: File | null) => void; accept: string; label: string }) {
+  const id = `dz-${label.replace(/\s/g, '-')}`;
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-3xl max-h-[90vh] flex flex-col">
-        <div className="flex items-center justify-between px-6 py-4 border-b">
-          <h3 className="text-lg font-bold text-gray-900">{title}</h3>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-700"><X className="w-5 h-5" /></button>
+    <label htmlFor={id} className="flex items-center gap-3 rounded-xl cursor-pointer px-4 py-3 transition-all duration-200"
+      style={{
+        background: file ? 'rgba(16,185,129,0.06)' : 'var(--s1)',
+        border: `1.5px dashed ${file ? 'var(--em)' : 'var(--b2)'}`,
+      }}
+      onMouseEnter={e => { if (!file) e.currentTarget.style.borderColor = 'var(--em)'; }}
+      onMouseLeave={e => { if (!file) e.currentTarget.style.borderColor = 'var(--b2)'; }}
+    >
+      {file
+        ? <><CheckCircle2 className="w-4 h-4 flex-shrink-0" style={{ color: 'var(--em)' }} /><span className="text-xs font-medium truncate" style={{ color: 'var(--em-lt)' }}>{file.name}</span><span className="ml-auto text-[10px]" style={{ color: 'var(--t2)' }}>Replace</span></>
+        : <><Upload className="w-4 h-4 flex-shrink-0" style={{ color: 'var(--t2)' }} /><span className="text-xs" style={{ color: 'var(--t1)' }}>{label}</span><span className="ml-auto text-[10px]" style={{ color: 'var(--t2)' }}>{accept}</span></>
+      }
+      <input id={id} type="file" accept={accept} className="hidden" onChange={e => onChange(e.target.files?.[0] || null)} />
+    </label>
+  );
+}
+
+// ── SIMRE extraction panel (slide-in drawer) ───────────────────────────────────
+function SimrePanel({
+  field, onClose, onConfirm,
+}: { field: FieldSpec; onClose: () => void; onConfirm: (values: string[]) => void; }) {
+  const [tab, setTab] = useState<'upload' | 'manual'>('upload');
+  const [tenderFile, setTenderFile] = useState<File | null>(null);
+  const [tenderText, setTenderText] = useState('');
+  const [manualValues, setManualValues] = useState<string[]>(field.defaults.map(() => ''));
+  const [extracted, setExtracted] = useState<ExtractResult | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+
+  const extract = async () => {
+    setBusy(true); setErr(''); setExtracted(null);
+    try {
+      const fd = new FormData();
+      fd.append('label', field.label);
+      if (tab === 'upload' && tenderFile) fd.append('tender_file', tenderFile);
+      else fd.append('tender_text', tenderText);
+      const res = await api.post('/sop-datasheet/extract-spec', fd);
+      if (res.data.error) setErr(res.data.error);
+      else setExtracted(res.data);
+    } catch (e: any) {
+      setErr(e?.response?.data?.detail || 'Extraction failed');
+    } finally { setBusy(false); }
+  };
+
+  const handleConfirm = () => {
+    if (tab === 'upload' && extracted?.extracted_value) {
+      onConfirm(field.value_cols.map(() => extracted.extracted_value));
+    } else {
+      onConfirm(manualValues);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center">
+      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
+      <div className="relative w-full max-w-lg rounded-2xl overflow-hidden animate-rise" style={{ background: 'var(--s2)', border: '1px solid var(--b2)' }}>
+        {/* Header */}
+        <div className="px-5 py-4 flex items-center gap-3" style={{ borderBottom: '1px solid var(--b1)' }}>
+          <div className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: 'rgba(248,113,113,0.1)', border: '1px solid rgba(248,113,113,0.2)' }}>
+            <Zap className="w-4 h-4" style={{ color: 'var(--rose)' }} />
+          </div>
+          <div>
+            <p className="text-xs font-bold uppercase tracking-wide" style={{ color: 'var(--rose)' }}>SIMRE Extraction</p>
+            <p className="text-sm font-semibold" style={{ color: 'var(--t0)' }}>{field.label}</p>
+          </div>
+          <button onClick={onClose} className="ml-auto opacity-50 hover:opacity-90 transition-opacity" style={{ color: 'var(--t1)' }}>
+            <X className="w-4 h-4" />
+          </button>
         </div>
-        <div className="p-6 overflow-y-auto">{children}</div>
+
+        {/* Tabs */}
+        <div className="flex" style={{ borderBottom: '1px solid var(--b1)' }}>
+          {(['upload', 'manual'] as const).map(t => (
+            <button key={t} onClick={() => setTab(t)} className="flex-1 py-2.5 text-xs font-semibold capitalize transition-all"
+              style={{
+                background: tab === t ? 'var(--em-dim)' : 'transparent',
+                color: tab === t ? 'var(--em-lt)' : 'var(--t2)',
+                borderBottom: tab === t ? '2px solid var(--em)' : '2px solid transparent',
+              }}
+            >
+              {t === 'upload' ? '📄 Upload Tender' : '✏️ Manual Entry'}
+            </button>
+          ))}
+        </div>
+
+        <div className="p-5 space-y-4">
+          {tab === 'upload' ? (
+            <>
+              <DropZone file={tenderFile} onChange={setTenderFile} accept=".pdf,.txt,.csv" label="Upload tender document (PDF/TXT)" />
+              <div>
+                <p className="text-xs mb-1.5" style={{ color: 'var(--t2)' }}>Or paste tender text directly:</p>
+                <textarea
+                  value={tenderText} onChange={e => setTenderText(e.target.value)}
+                  placeholder="Paste relevant specification excerpt..."
+                  rows={4} className="w-full rounded-lg resize-none text-xs p-3"
+                  style={{ background: 'var(--s1)', border: '1px solid var(--b2)', color: 'var(--t0)', outline: 'none' }}
+                />
+              </div>
+              <Button variant="secondary" onClick={extract} loading={busy} fullWidth>
+                <Zap className="w-3.5 h-3.5" /> Extract with AI
+              </Button>
+              {extracted && (
+                <div className="rounded-xl p-3 space-y-2" style={{ background: 'var(--s3)', border: '1px solid var(--b2)' }}>
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs" style={{ color: 'var(--t2)' }}>Extracted value</span>
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full" style={{
+                      background: extracted.confidence > 0.7 ? 'rgba(16,185,129,0.15)' : 'rgba(245,158,11,0.15)',
+                      color: extracted.confidence > 0.7 ? 'var(--em)' : 'var(--gold)',
+                    }}>
+                      {Math.round(extracted.confidence * 100)}% confidence
+                    </span>
+                  </div>
+                  <p className="text-sm font-semibold" style={{ color: 'var(--t0)' }}>{extracted.extracted_value || '—'}</p>
+                  {extracted.raw_snippet && <p className="text-[11px] italic" style={{ color: 'var(--t2)' }}>"{extracted.raw_snippet}"</p>}
+                </div>
+              )}
+              {err && <Alert variant="error">{err}</Alert>}
+            </>
+          ) : (
+            <>
+              {field.value_cols.map((_, i) => (
+                <div key={i}>
+                  {field.sub_labels[i] && <p className="text-xs mb-1" style={{ color: 'var(--t2)' }}>{field.sub_labels[i]}</p>}
+                  <input
+                    type="text" value={manualValues[i] || ''}
+                    onChange={e => setManualValues(v => v.map((x, j) => j === i ? e.target.value : x))}
+                    placeholder={field.defaults[i] || `Enter ${field.label}`}
+                    className="w-full rounded-lg px-3 py-2 text-sm"
+                    style={{ background: 'var(--s1)', border: '1px solid var(--b2)', color: 'var(--t0)', outline: 'none' }}
+                  />
+                </div>
+              ))}
+            </>
+          )}
+        </div>
+
+        <div className="px-5 pb-5 flex gap-2">
+          <Button variant="secondary" onClick={onClose} fullWidth>Cancel</Button>
+          <Button onClick={handleConfirm} fullWidth
+            disabled={tab === 'upload' ? !extracted?.extracted_value : manualValues.every(v => !v.trim())}
+          >
+            <CheckCircle2 className="w-3.5 h-3.5" /> Confirm
+          </Button>
+        </div>
       </div>
     </div>
   );
 }
 
-function Legend() {
-  return (
-    <div className="flex flex-wrap gap-4 mb-4 text-xs">
-      <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-[#FFF9C4] border border-yellow-400" /> IODB (auto per tag)</span>
-      <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-[#EAF7EA] border border-green-300" /> Predefined dropdown</span>
-      <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-[#FDEEF0] border border-red-300" /> Mandatory input</span>
+// ── Main component ─────────────────────────────────────────────────────────────
+export default function DataSheetGenerator() {
+  const [step, setStep] = useState(1);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  // Step 1
+  const [iodbFile, setIodbFile] = useState<File | null>(null);
+  const [instrumentTypes, setInstrumentTypes] = useState<string[]>([]);
+  const [selectedType, setSelectedType] = useState('');
+  const [typeSearch, setTypeSearch] = useState('');
+
+  // Step 2
+  const [tags, setTags] = useState<string[]>([]);
+  const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const [tagSearch, setTagSearch] = useState('');
+  const [sopFile, setSopFile] = useState<File | null>(null);
+  const [datasheets, setDatasheets] = useState<DatasheetInfo[]>([]);
+  const [selectedDatasheet, setSelectedDatasheet] = useState('');
+  const [fields, setFields] = useState<FieldSpec[]>([]);
+
+  // Step 3 — field configuration
+  const [overrides, setOverrides] = useState<Record<string, string[]>>({});
+  const [customMode, setCustomMode] = useState<Record<string, boolean>>({});
+  const [simreField, setSimreField] = useState<FieldSpec | null>(null);
+  const [iodbExpanded, setIodbExpanded] = useState(false);
+
+  // Step 4
+  const [notes, setNotes] = useState('');
+  const [vendors, setVendors] = useState<VendorMatch[] | null>(null);
+  const [vendorLoading, setVendorLoading] = useState(false);
+  const [selectedVendor, setSelectedVendor] = useState<VendorMatch | null>(null);
+  const [modelFrozen, setModelFrozen] = useState(false);
+
+  // Step 5
+  const [genStatus, setGenStatus] = useState<GenStatus | null>(null);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const clearError = () => setError('');
+
+  // ── Derived lists ──────────────────────────────────────────────────────────
+  const iodbFields = useMemo(() => fields.filter(f => role(f) === 'iodb'), [fields]);
+  const simreFields = useMemo(() => fields.filter(f => role(f) === 'simre'), [fields]);
+  const manualFields = useMemo(() => fields.filter(f => role(f) === 'manual'), [fields]);
+
+  const filteredTypes = useMemo(() =>
+    instrumentTypes.filter(t => t.toLowerCase().includes(typeSearch.toLowerCase())),
+    [instrumentTypes, typeSearch]);
+
+  const filteredTags = useMemo(() =>
+    tags.filter(t => t.toLowerCase().includes(tagSearch.toLowerCase())),
+    [tags, tagSearch]);
+
+  const simreConfigured = useMemo(() =>
+    simreFields.filter(f => overrides[f.label]?.some(v => v.trim())).length,
+    [simreFields, overrides]);
+
+  // ── Step 1: load instrument types ──────────────────────────────────────────
+  const loadInstrumentTypes = async () => {
+    if (!iodbFile) return;
+    setBusy(true); clearError();
+    try {
+      const fd = new FormData();
+      fd.append('iodb_file', iodbFile);
+      const res = await api.post('/sop-datasheet/instrument-types', fd);
+      setInstrumentTypes(res.data.instrument_types || []);
+      setSelectedType('');
+      setTags([]);
+      setSelectedTags([]);
+    } catch (e: any) {
+      setError(e?.response?.data?.detail || 'Failed to read IODB');
+    } finally { setBusy(false); }
+  };
+
+  // ── Step 2a: load tags ──────────────────────────────────────────────────────
+  const loadTags = async (type: string) => {
+    if (!iodbFile || !type) return;
+    setBusy(true); clearError();
+    try {
+      const fd = new FormData();
+      fd.append('iodb_file', iodbFile);
+      fd.append('instrument_type', type);
+      const res = await api.post('/sop-datasheet/tags', fd);
+      setTags(res.data.tags || []);
+      setSelectedTags([]);
+    } catch (e: any) {
+      setError(e?.response?.data?.detail || 'Failed to load tags');
+    } finally { setBusy(false); }
+  };
+
+  const handleTypeSelect = (t: string) => {
+    setSelectedType(t);
+    loadTags(t);
+  };
+
+  // ── Step 2b: load datasheets ───────────────────────────────────────────────
+  const loadDatasheets = async (file: File) => {
+    setSopFile(file);
+    setDatasheets([]); setSelectedDatasheet(''); setFields([]);
+    setBusy(true); clearError();
+    try {
+      const fd = new FormData();
+      fd.append('sop_file', file);
+      const res = await api.post('/sop-datasheet/datasheets', fd);
+      setDatasheets(res.data.datasheets || []);
+    } catch (e: any) {
+      setError(e?.response?.data?.detail || 'Failed to read SOP template');
+    } finally { setBusy(false); }
+  };
+
+  // ── Step 2c: load fields ───────────────────────────────────────────────────
+  const loadFields = async (sheet: string) => {
+    if (!sopFile) return;
+    setSelectedDatasheet(sheet); setFields([]); setOverrides({}); setCustomMode({});
+    setBusy(true); clearError();
+    try {
+      const fd = new FormData();
+      fd.append('sop_file', sopFile);
+      fd.append('datasheet_sheet', sheet);
+      const res = await api.post('/sop-datasheet/fields', fd);
+      const f: FieldSpec[] = res.data.fields || [];
+      setFields(f);
+      // Pre-populate overrides with defaults
+      const init: Record<string, string[]> = {};
+      f.forEach(spec => { init[spec.label] = [...spec.defaults]; });
+      setOverrides(init);
+    } catch (e: any) {
+      setError(e?.response?.data?.detail || 'Failed to load field specs');
+    } finally { setBusy(false); }
+  };
+
+  const canProceedStep2 = selectedTags.length > 0 && selectedDatasheet && fields.length > 0;
+
+  // ── Step 3: helpers ────────────────────────────────────────────────────────
+  const setFieldValues = (label: string, values: string[]) => {
+    setOverrides(o => ({ ...o, [label]: values }));
+  };
+
+  const handleSimreConfirm = (values: string[]) => {
+    if (simreField) setFieldValues(simreField.label, values);
+    setSimreField(null);
+  };
+
+  // ── Step 4: vendor recommendation ─────────────────────────────────────────
+  const fetchVendors = async () => {
+    setVendorLoading(true); clearError();
+    try {
+      const specObj: Record<string, string> = {};
+      [...simreFields, ...manualFields].forEach(f => {
+        const vals = overrides[f.label];
+        if (vals?.some(v => v.trim())) specObj[f.label] = vals.filter(Boolean).join(' / ');
+      });
+      const fd = new FormData();
+      fd.append('instrument_type', selectedType);
+      fd.append('spec_json', JSON.stringify(specObj));
+      const res = await api.post('/sop-datasheet/vendor-recommend', fd);
+      setVendors(res.data.vendors || []);
+      if (res.data.recommended) {
+        const top = (res.data.vendors as VendorMatch[]).find(v => v.vendor === res.data.recommended);
+        if (top) setSelectedVendor(top);
+      }
+    } catch (e: any) {
+      setError(e?.response?.data?.detail || 'Vendor recommendation failed');
+    } finally { setVendorLoading(false); }
+  };
+
+  // ── Step 5: generate ───────────────────────────────────────────────────────
+  const startGenerate = async () => {
+    if (!sopFile || !iodbFile || !selectedDatasheet || !selectedTags.length) return;
+    setBusy(true); setGenStatus(null); clearError();
+    try {
+      const fd = new FormData();
+      fd.append('sop_file', sopFile);
+      fd.append('iodb_file', iodbFile);
+      fd.append('datasheet_sheet', selectedDatasheet);
+      fd.append('instrument_type', selectedType);
+      fd.append('selected_tags', JSON.stringify(selectedTags));
+      // Build overrides excluding IODB fields (backend auto-fills those)
+      const out: Record<string, string[]> = {};
+      [...simreFields, ...manualFields].forEach(f => {
+        const v = overrides[f.label];
+        if (v) out[f.label] = v;
+      });
+      if (selectedVendor) {
+        out['Selected Vendor'] = [selectedVendor.vendor];
+        out['Selected Model'] = [selectedVendor.model];
+      }
+      if (notes.trim()) out['Notes'] = [notes];
+      fd.append('overrides', JSON.stringify(out));
+      const res = await api.post('/sop-datasheet/generate', fd);
+      setGenStatus({ job_id: res.data.job_id, status: 'processing' });
+      pollRef.current = setInterval(async () => {
+        try {
+          const s = await api.get(`/sop-datasheet/generate/status/${res.data.job_id}`);
+          setGenStatus(s.data);
+          if (s.data.status !== 'processing') {
+            clearInterval(pollRef.current!);
+            setBusy(false);
+          }
+        } catch { /* keep polling */ }
+      }, POLL_MS);
+    } catch (e: any) {
+      setError(e?.response?.data?.detail || 'Generation failed');
+      setBusy(false);
+    }
+  };
+
+  const downloadZip = async () => {
+    try {
+      const res = await api.get('/sop-datasheet/download', { responseType: 'blob' });
+      const url = URL.createObjectURL(new Blob([res.data], { type: 'application/zip' }));
+      const a = document.createElement('a'); a.href = url; a.download = 'Datasheets.zip'; a.click();
+      URL.revokeObjectURL(url);
+    } catch { setError('Download failed'); }
+  };
+
+  // ── Render helpers ─────────────────────────────────────────────────────────
+  const card = (children: React.ReactNode, className = '') => (
+    <div className={`rounded-2xl p-6 ${className}`} style={{ background: 'var(--s2)', border: '1px solid var(--b1)' }}>
+      {children}
     </div>
   );
-}
 
-function ConfigSection({ title, tint, note, children }: { title: string; tint: string; note: string; children: React.ReactNode }) {
-  return (
-    <div className="mb-5">
-      <h4 className={`text-sm font-semibold text-gray-800 px-3 py-1.5 rounded mb-1 ${tint}`}>{title}</h4>
-      <p className="text-xs text-gray-500 mb-2">{note}</p>
-      <div className="space-y-2">{children}</div>
+  const sectionTitle = (icon: React.ReactNode, title: string, color = 'var(--t0)') => (
+    <div className="flex items-center gap-2 mb-4">
+      {icon}
+      <span className="text-sm font-bold" style={{ color }}>{title}</span>
     </div>
   );
-}
 
-function Row({ label, note, children }: { label: string; note?: string; children: React.ReactNode }) {
+  // ── Render ─────────────────────────────────────────────────────────────────
   return (
-    <div className="grid grid-cols-1 md:grid-cols-3 gap-2 items-start">
-      <label className="text-sm text-gray-700 md:col-span-1 pt-2">
-        {label}
-        {note && <span className="block text-xs text-gray-400">{note}</span>}
-      </label>
-      <div className="md:col-span-2 flex gap-2">{children}</div>
+    <div className="p-6 max-w-5xl mx-auto space-y-6">
+      <PageHeader
+        icon={FileSpreadsheet}
+        title="Datasheet Generator"
+        description="SIMRE-driven, IODB-linked instrument datasheet creation for water treatment plants"
+      />
+
+      <StepBar current={step} />
+
+      {error && <Alert variant="error" onClose={clearError}>{error}</Alert>}
+
+      {/* ── STEP 1: IODB + Instrument Type ── */}
+      {step === 1 && (
+        <div className="space-y-4">
+          {card(
+            <>
+              {sectionTitle(<FileText className="w-4 h-4" style={{ color: 'var(--em)' }} />, 'Upload IODB File')}
+              <DropZone file={iodbFile} onChange={f => { setIodbFile(f); setInstrumentTypes([]); setSelectedType(''); }} accept=".xlsx,.xls" label="Upload IODB spreadsheet" />
+              {iodbFile && instrumentTypes.length === 0 && (
+                <Button onClick={loadInstrumentTypes} loading={busy} fullWidth className="mt-3">
+                  <Search className="w-3.5 h-3.5" /> Analyse IODB
+                </Button>
+              )}
+              {instrumentTypes.length > 0 && (
+                <Alert variant="info" className="mt-3">
+                  Found <strong>{instrumentTypes.length}</strong> AI instrument types with sub-systems
+                </Alert>
+              )}
+            </>
+          )}
+
+          {instrumentTypes.length > 0 && card(
+            <>
+              {sectionTitle(<SlidersHorizontal className="w-4 h-4" style={{ color: 'var(--gold)' }} />, 'Select Instrument Type', 'var(--gold)')}
+              <div className="relative mb-3">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5" style={{ color: 'var(--t2)' }} />
+                <input
+                  value={typeSearch} onChange={e => setTypeSearch(e.target.value)}
+                  placeholder="Search instrument types..."
+                  className="w-full pl-9 pr-4 py-2 rounded-lg text-sm"
+                  style={{ background: 'var(--s1)', border: '1px solid var(--b2)', color: 'var(--t0)', outline: 'none' }}
+                />
+              </div>
+              <div className="space-y-1.5 max-h-64 overflow-y-auto pr-1">
+                {filteredTypes.map(t => (
+                  <button key={t} onClick={() => handleTypeSelect(t)}
+                    className="w-full text-left px-3 py-2.5 rounded-xl text-sm transition-all duration-150"
+                    style={{
+                      background: selectedType === t ? 'var(--em-dim)' : 'var(--s3)',
+                      border: `1px solid ${selectedType === t ? 'var(--em)' : 'var(--b1)'}`,
+                      color: selectedType === t ? 'var(--em-lt)' : 'var(--t1)',
+                    }}
+                  >
+                    {t}
+                  </button>
+                ))}
+              </div>
+
+              {selectedType && (
+                <Button onClick={() => setStep(2)} className="mt-4 w-full">
+                  Continue <ChevronRight className="w-3.5 h-3.5" />
+                </Button>
+              )}
+            </>
+          )}
+        </div>
+      )}
+
+      {/* ── STEP 2: Tags + SOP ── */}
+      {step === 2 && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          {/* Left: Tags */}
+          {card(
+            <>
+              {sectionTitle(<Search className="w-4 h-4" style={{ color: 'var(--em)' }} />, `Tags — ${selectedType}`)}
+              {busy && tags.length === 0 && <p className="text-xs" style={{ color: 'var(--t2)' }}>Loading tags…</p>}
+              {tags.length > 0 && (
+                <>
+                  <div className="flex items-center justify-between mb-3">
+                    <span className="text-xs" style={{ color: 'var(--t2)' }}>{tags.length} AI tags found</span>
+                    <button onClick={() => setSelectedTags(selectedTags.length === tags.length ? [] : [...tags])}
+                      className="text-[11px] font-semibold" style={{ color: 'var(--em)' }}>
+                      {selectedTags.length === tags.length ? 'Deselect all' : 'Select all'}
+                    </button>
+                  </div>
+                  <div className="relative mb-2">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3 h-3" style={{ color: 'var(--t2)' }} />
+                    <input value={tagSearch} onChange={e => setTagSearch(e.target.value)} placeholder="Filter tags..." className="w-full pl-8 pr-3 py-1.5 rounded-lg text-xs"
+                      style={{ background: 'var(--s1)', border: '1px solid var(--b2)', color: 'var(--t0)', outline: 'none' }} />
+                  </div>
+                  <div className="space-y-1 max-h-52 overflow-y-auto pr-1">
+                    {filteredTags.map(tag => {
+                      const checked = selectedTags.includes(tag);
+                      return (
+                        <label key={tag} className="flex items-center gap-2.5 px-3 py-2 rounded-lg cursor-pointer transition-all"
+                          style={{ background: checked ? 'var(--em-dim)' : 'var(--s3)', border: `1px solid ${checked ? 'rgba(16,185,129,0.3)' : 'transparent'}` }}>
+                          <input type="checkbox" checked={checked} onChange={() => setSelectedTags(s => checked ? s.filter(x => x !== tag) : [...s, tag])} className="accent-emerald-500" />
+                          <span className="text-xs font-mono" style={{ color: checked ? 'var(--em-lt)' : 'var(--t1)' }}>{tag}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                  {selectedTags.length > 0 && (
+                    <div className="mt-3 text-xs font-semibold" style={{ color: 'var(--em)' }}>{selectedTags.length} tag(s) selected</div>
+                  )}
+                </>
+              )}
+            </>
+          )}
+
+          {/* Right: SOP + Datasheet */}
+          {card(
+            <>
+              {sectionTitle(<FileSpreadsheet className="w-4 h-4" style={{ color: 'var(--gold)' }} />, 'SOP Template', 'var(--gold)')}
+              <DropZone file={sopFile} onChange={f => f && loadDatasheets(f)} accept=".xlsx,.xls" label="Upload SOP template workbook" />
+
+              {datasheets.length > 0 && (
+                <div className="mt-4 space-y-1.5">
+                  <p className="text-xs mb-2" style={{ color: 'var(--t2)' }}>Select datasheet:</p>
+                  {datasheets.map(d => (
+                    <button key={d.sheet} onClick={() => loadFields(d.sheet)}
+                      className="w-full text-left px-3 py-2.5 rounded-xl text-xs transition-all"
+                      style={{
+                        background: selectedDatasheet === d.sheet ? 'rgba(245,158,11,0.08)' : 'var(--s3)',
+                        border: `1px solid ${selectedDatasheet === d.sheet ? 'rgba(245,158,11,0.4)' : 'var(--b1)'}`,
+                        color: selectedDatasheet === d.sheet ? 'var(--gold)' : 'var(--t1)',
+                      }}>
+                      <span className="font-semibold">{d.title || d.sheet}</span>
+                      {d.eg_sheet && <span className="ml-2 opacity-60 text-[10px]">{d.sheet}</span>}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {fields.length > 0 && (
+                <Alert variant="success" className="mt-3">
+                  Loaded <strong>{fields.length}</strong> spec fields — {iodbFields.length} auto, {simreFields.length} SIMRE, {manualFields.length} manual
+                </Alert>
+              )}
+            </>
+          )}
+
+          <div className="lg:col-span-2 flex gap-3">
+            <Button variant="secondary" onClick={() => setStep(1)}>← Back</Button>
+            <Button onClick={() => setStep(3)} disabled={!canProceedStep2} className="flex-1">
+              Configure Specs <ChevronRight className="w-3.5 h-3.5" />
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* ── STEP 3: Spec Configuration ── */}
+      {step === 3 && (
+        <div className="space-y-4">
+          {/* IODB auto section (collapsible) */}
+          {card(
+            <>
+              <button className="w-full flex items-center gap-2" onClick={() => setIodbExpanded(x => !x)}>
+                <div className="w-2.5 h-2.5 rounded-full" style={{ background: 'var(--em)' }} />
+                <span className="text-sm font-bold flex-1 text-left" style={{ color: 'var(--em-lt)' }}>
+                  Auto-filled from IODB ({iodbFields.length} fields)
+                </span>
+                <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: 'var(--em-dim)', color: 'var(--em)' }}>Auto</span>
+                {iodbExpanded ? <ChevronUp className="w-4 h-4" style={{ color: 'var(--t2)' }} /> : <ChevronDown className="w-4 h-4" style={{ color: 'var(--t2)' }} />}
+              </button>
+              {iodbExpanded && (
+                <div className="mt-4 grid grid-cols-2 gap-2">
+                  {iodbFields.map(f => (
+                    <div key={f.label} className="rounded-lg px-3 py-2" style={{ background: 'var(--s3)', border: '1px solid var(--b1)' }}>
+                      <p className="text-[10px]" style={{ color: 'var(--t2)' }}>{f.section}</p>
+                      <p className="text-xs font-semibold" style={{ color: 'var(--t1)' }}>{f.label}</p>
+                      <p className="text-[11px] mt-0.5 italic" style={{ color: 'var(--em)' }}>From IODB</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+
+          {/* SIMRE required fields */}
+          {simreFields.length > 0 && card(
+            <>
+              {sectionTitle(
+                <div className="w-2.5 h-2.5 rounded-full" style={{ background: 'var(--rose)' }} />,
+                `SIMRE Required (${simreConfigured}/${simreFields.length} configured)`,
+                'var(--rose)'
+              )}
+              <div className="space-y-2">
+                {simreFields.map(f => {
+                  const vals = overrides[f.label] || [];
+                  const done = vals.some(v => v.trim());
+                  return (
+                    <div key={f.label} className="flex items-center gap-3 rounded-xl px-4 py-3" style={{ background: 'var(--s3)', border: `1px solid ${done ? 'rgba(16,185,129,0.25)' : 'rgba(248,113,113,0.15)'}` }}>
+                      <div>
+                        <p className="text-[10px]" style={{ color: 'var(--t2)' }}>{f.section}</p>
+                        <p className="text-sm font-semibold" style={{ color: done ? 'var(--t0)' : 'var(--t1)' }}>{f.label}</p>
+                        {done && <p className="text-xs mt-0.5 truncate max-w-xs" style={{ color: 'var(--em)' }}>{vals.filter(Boolean).join(' / ')}</p>}
+                      </div>
+                      <button onClick={() => setSimreField(f)}
+                        className="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all"
+                        style={{
+                          background: done ? 'var(--em-dim)' : 'rgba(248,113,113,0.1)',
+                          color: done ? 'var(--em-lt)' : 'var(--rose)',
+                          border: `1px solid ${done ? 'rgba(16,185,129,0.3)' : 'rgba(248,113,113,0.2)'}`,
+                        }}>
+                        {done ? <><CheckCircle2 className="w-3 h-3" /> Edit</> : <><Zap className="w-3 h-3" /> Configure</>}
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          )}
+
+          {/* Manual fields */}
+          {manualFields.length > 0 && card(
+            <>
+              {sectionTitle(
+                <div className="w-2.5 h-2.5 rounded-full" style={{ background: 'var(--t2)' }} />,
+                `Manual Entry (${manualFields.length} fields)`,
+                'var(--t1)'
+              )}
+              <div className="space-y-3">
+                {manualFields.map(f => {
+                  const vals = overrides[f.label] || f.defaults;
+                  const isCustom = customMode[f.label];
+                  return (
+                    <div key={f.label} className="rounded-xl p-3" style={{ background: 'var(--s3)', border: '1px solid var(--b1)' }}>
+                      <p className="text-[10px] mb-1" style={{ color: 'var(--t2)' }}>{f.section} · {f.label}</p>
+                      {f.input_type === 'dropdown' && !isCustom ? (
+                        <div className="flex gap-2">
+                          <select
+                            value={vals[0] || ''} onChange={e => {
+                              if (e.target.value === CUSTOM) setCustomMode(m => ({ ...m, [f.label]: true }));
+                              else setFieldValues(f.label, [e.target.value]);
+                            }}
+                            className="flex-1 rounded-lg px-3 py-1.5 text-xs"
+                            style={{ background: 'var(--s1)', border: '1px solid var(--b2)', color: 'var(--t0)', outline: 'none' }}>
+                            {f.options.map(o => <option key={o} value={o}>{o}</option>)}
+                          </select>
+                        </div>
+                      ) : (
+                        <div className="flex gap-2 items-center">
+                          {f.value_cols.map((_, i) => (
+                            <div key={i} className="flex-1">
+                              {f.sub_labels[i] && <p className="text-[10px] mb-0.5" style={{ color: 'var(--t2)' }}>{f.sub_labels[i]}</p>}
+                              <input type="text" value={vals[i] || ''} onChange={e => {
+                                const next = [...(overrides[f.label] || f.defaults)];
+                                next[i] = e.target.value;
+                                setFieldValues(f.label, next);
+                              }} placeholder={f.defaults[i] || f.label} className="w-full rounded-lg px-3 py-1.5 text-xs"
+                                style={{ background: 'var(--s1)', border: '1px solid var(--b2)', color: 'var(--t0)', outline: 'none' }} />
+                            </div>
+                          ))}
+                          {isCustom && (
+                            <button onClick={() => { setCustomMode(m => ({ ...m, [f.label]: false })); setFieldValues(f.label, f.defaults); }}
+                              className="text-[10px] px-2 py-1 rounded" style={{ color: 'var(--t2)', background: 'var(--s2)' }}>Reset</button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          )}
+
+          <div className="flex gap-3">
+            <Button variant="secondary" onClick={() => setStep(2)}>← Back</Button>
+            <Button onClick={() => setStep(4)} className="flex-1">
+              Notes & Vendor <ChevronRight className="w-3.5 h-3.5" />
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* ── STEP 4: Notes + Vendor ── */}
+      {step === 4 && (
+        <div className="space-y-4">
+          {card(
+            <>
+              {sectionTitle(<FileText className="w-4 h-4" style={{ color: 'var(--sky)' }} />, 'Notes', 'var(--sky)')}
+              <textarea value={notes} onChange={e => setNotes(e.target.value)}
+                placeholder="Add any notes, special requirements, or remarks for these datasheets…"
+                rows={4} className="w-full rounded-xl resize-none text-sm p-3"
+                style={{ background: 'var(--s3)', border: '1px solid var(--b2)', color: 'var(--t0)', outline: 'none' }} />
+            </>
+          )}
+
+          {card(
+            <>
+              {sectionTitle(<Star className="w-4 h-4" style={{ color: 'var(--gold)' }} />, 'Vendor Recommendation (SIMRE)', 'var(--gold)')}
+              {!vendors && (
+                <div className="text-center py-4">
+                  <p className="text-sm mb-4" style={{ color: 'var(--t2)' }}>
+                    AI-powered vendor match analysis based on your specification profile
+                  </p>
+                  <Button variant="secondary" onClick={fetchVendors} loading={vendorLoading}>
+                    <Zap className="w-3.5 h-3.5" /> Run Vendor Analysis
+                  </Button>
+                </div>
+              )}
+              {vendors && (
+                <div className="space-y-3">
+                  {vendors.map(v => {
+                    const picked = selectedVendor?.vendor === v.vendor;
+                    return (
+                      <div key={v.vendor}
+                        className="rounded-xl p-4 cursor-pointer transition-all"
+                        style={{
+                          background: picked ? 'rgba(245,158,11,0.06)' : 'var(--s3)',
+                          border: `1px solid ${picked ? 'rgba(245,158,11,0.5)' : 'var(--b1)'}`,
+                        }}
+                        onClick={() => { if (!modelFrozen) setSelectedVendor(v); }}
+                      >
+                        <div className="flex items-center gap-3 mb-2">
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2">
+                              <span className="text-sm font-bold" style={{ color: picked ? 'var(--gold)' : 'var(--t0)' }}>{v.vendor}</span>
+                              {picked && <span className="text-[10px] px-1.5 py-0.5 rounded-full" style={{ background: 'rgba(245,158,11,0.15)', color: 'var(--gold)' }}>Selected</span>}
+                            </div>
+                            <span className="text-xs" style={{ color: 'var(--t2)' }}>{v.model}</span>
+                          </div>
+                          <div className="text-right">
+                            <span className="text-lg font-bold" style={{ color: v.match_pct >= 80 ? 'var(--em)' : v.match_pct >= 60 ? 'var(--gold)' : 'var(--rose)' }}>
+                              {v.match_pct}%
+                            </span>
+                            <p className="text-[10px]" style={{ color: 'var(--t2)' }}>match</p>
+                          </div>
+                        </div>
+                        {/* Match bar */}
+                        <div className="h-1.5 rounded-full mb-3" style={{ background: 'var(--s4)' }}>
+                          <div className="h-full rounded-full transition-all duration-500" style={{
+                            width: `${v.match_pct}%`,
+                            background: v.match_pct >= 80 ? 'var(--em)' : v.match_pct >= 60 ? 'var(--gold)' : 'var(--rose)',
+                          }} />
+                        </div>
+                        <div className="grid grid-cols-2 gap-2 text-[11px]">
+                          <div>
+                            {v.strengths.map((s, i) => <div key={i} className="flex gap-1.5 mb-0.5"><span style={{ color: 'var(--em)' }}>+</span><span style={{ color: 'var(--t1)' }}>{s}</span></div>)}
+                          </div>
+                          <div>
+                            {v.gaps.map((g, i) => <div key={i} className="flex gap-1.5 mb-0.5"><span style={{ color: 'var(--rose)' }}>−</span><span style={{ color: 'var(--t1)' }}>{g}</span></div>)}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+
+                  <div className="flex gap-2 items-center">
+                    <Button variant="ghost" size="sm" onClick={fetchVendors} loading={vendorLoading}>
+                      <RefreshCw className="w-3 h-3" /> Re-run
+                    </Button>
+                    {selectedVendor && (
+                      <button
+                        onClick={() => setModelFrozen(f => !f)}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ml-auto"
+                        style={{
+                          background: modelFrozen ? 'rgba(16,185,129,0.1)' : 'var(--s3)',
+                          border: `1px solid ${modelFrozen ? 'var(--em)' : 'var(--b2)'}`,
+                          color: modelFrozen ? 'var(--em-lt)' : 'var(--t1)',
+                        }}
+                      >
+                        {modelFrozen ? <><Lock className="w-3 h-3" /> Model locked</> : <><Unlock className="w-3 h-3" /> Lock model</>}
+                      </button>
+                    )}
+                  </div>
+                  {modelFrozen && selectedVendor && (
+                    <Alert variant="success">
+                      Model locked: <strong>{selectedVendor.vendor} — {selectedVendor.model}</strong>. This selection will be included in all generated datasheets.
+                    </Alert>
+                  )}
+                </div>
+              )}
+            </>
+          )}
+
+          <div className="flex gap-3">
+            <Button variant="secondary" onClick={() => setStep(3)}>← Back</Button>
+            <Button onClick={() => { setStep(5); startGenerate(); }} className="flex-1">
+              Generate Datasheets <ChevronRight className="w-3.5 h-3.5" />
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* ── STEP 5: Generate & Download ── */}
+      {step === 5 && (
+        <div className="space-y-4">
+          {card(
+            <div className="text-center py-6">
+              {genStatus?.status === 'processing' && (
+                <>
+                  <div className="w-14 h-14 rounded-2xl flex items-center justify-center mx-auto mb-4" style={{ background: 'var(--em-dim)', border: '1px solid var(--em)' }}>
+                    <RefreshCw className="w-6 h-6 animate-spin" style={{ color: 'var(--em)' }} />
+                  </div>
+                  <p className="text-base font-bold mb-1" style={{ color: 'var(--t0)' }}>Generating datasheets…</p>
+                  <p className="text-sm" style={{ color: 'var(--t2)' }}>Creating {selectedTags.length} Excel file(s) for {selectedType}</p>
+                </>
+              )}
+              {genStatus?.status === 'done' && (
+                <>
+                  <div className="w-14 h-14 rounded-2xl flex items-center justify-center mx-auto mb-4" style={{ background: 'var(--em-dim)', border: '1px solid var(--em)' }}>
+                    <CheckCircle2 className="w-6 h-6" style={{ color: 'var(--em)' }} />
+                  </div>
+                  <p className="text-base font-bold mb-1" style={{ color: 'var(--t0)' }}>Datasheets ready!</p>
+                  <p className="text-sm mb-6" style={{ color: 'var(--t2)' }}>{genStatus.result?.message}</p>
+                  <Button onClick={downloadZip} size="lg">
+                    <Download className="w-4 h-4" /> Download ZIP
+                  </Button>
+                </>
+              )}
+              {genStatus?.status === 'error' && (
+                <Alert variant="error">{genStatus.error || 'Generation failed'}</Alert>
+              )}
+              {!genStatus && busy && (
+                <p className="text-sm" style={{ color: 'var(--t2)' }}>Starting job…</p>
+              )}
+            </div>
+          )}
+
+          {/* Summary */}
+          {card(
+            <>
+              {sectionTitle(<FileText className="w-4 h-4" style={{ color: 'var(--t1)' }} />, 'Generation Summary')}
+              <div className="grid grid-cols-2 gap-3 text-sm">
+                {[
+                  ['Instrument Type', selectedType],
+                  ['Tags', `${selectedTags.length} selected`],
+                  ['Datasheet', selectedDatasheet],
+                  ['IODB Fields', `${iodbFields.length} auto`],
+                  ['SIMRE Fields', `${simreConfigured}/${simreFields.length} configured`],
+                  ['Selected Vendor', selectedVendor ? `${selectedVendor.vendor}` : 'None'],
+                ].map(([k, v]) => (
+                  <div key={k} className="rounded-lg px-3 py-2" style={{ background: 'var(--s3)' }}>
+                    <p className="text-[10px]" style={{ color: 'var(--t2)' }}>{k}</p>
+                    <p className="text-xs font-semibold truncate" style={{ color: 'var(--t0)' }}>{v}</p>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+
+          <div className="flex gap-3">
+            <Button variant="secondary" onClick={() => { setStep(4); setGenStatus(null); if (pollRef.current) clearInterval(pollRef.current); setBusy(false); }}>
+              ← Back
+            </Button>
+            {genStatus?.status === 'done' && (
+              <Button variant="ghost" onClick={() => { setStep(1); setIodbFile(null); setSopFile(null); setInstrumentTypes([]); setSelectedType(''); setTags([]); setSelectedTags([]); setDatasheets([]); setSelectedDatasheet(''); setFields([]); setOverrides({}); setVendors(null); setSelectedVendor(null); setModelFrozen(false); setNotes(''); setGenStatus(null); }} className="flex-1">
+                Start New
+              </Button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* SIMRE extraction panel */}
+      {simreField && (
+        <SimrePanel field={simreField} onClose={() => setSimreField(null)} onConfirm={handleSimreConfirm} />
+      )}
     </div>
   );
 }

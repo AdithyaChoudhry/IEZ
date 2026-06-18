@@ -28,6 +28,9 @@ from ..models.sop_datasheet import (
     GenerateJobResponse,
     GenerateResult,
     GenerateStatusResponse,
+    ExtractSpecResponse,
+    VendorMatch,
+    VendorRecommendResponse,
 )
 
 # Import existing business logic
@@ -261,3 +264,132 @@ async def download(current_user: User = Depends(get_current_user)):
         media_type="application/zip",
         headers={"Content-Disposition": f"attachment; filename={cached['filename']}"},
     )
+
+
+@router.post("/extract-spec", response_model=ExtractSpecResponse)
+async def extract_spec(
+    label: str = Form(...),
+    tender_text: str = Form(""),
+    tender_file: UploadFile | None = File(None),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Extract a single spec value from tender text or an uploaded PDF/image.
+    Uses Groq AI to pull the value and report confidence.
+    """
+    import os, httpx
+
+    text = tender_text.strip()
+    if tender_file is not None:
+        raw = await tender_file.read()
+        # Try simple text decode first (works for text/CSV embedded in PDF-ish uploads).
+        try:
+            text = raw.decode("utf-8", errors="ignore")[:8000]
+        except Exception:
+            text = ""
+
+    if not text:
+        return ExtractSpecResponse(label=label, extracted_value="", confidence=0.0,
+                                   raw_snippet="", error="No text provided for extraction.")
+
+    groq_key = os.environ.get("GROQ_API_KEY", "")
+    if not groq_key:
+        return ExtractSpecResponse(label=label, extracted_value="", confidence=0.0,
+                                   raw_snippet="", error="GROQ_API_KEY not configured.")
+
+    prompt = (
+        f"You are an instrument specification extractor for water treatment plant projects.\n"
+        f"Given the following tender/datasheet text, extract the value for the specification field: \"{label}\".\n\n"
+        f"TEXT:\n{text[:6000]}\n\n"
+        f"Respond with a JSON object ONLY:\n"
+        f"{{\"value\": \"<extracted value or empty string>\", \"confidence\": <0.0-1.0>, \"snippet\": \"<relevant excerpt>\"}}\n"
+        f"If the field is not mentioned, set value to \"\" and confidence to 0.0."
+    )
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"},
+                json={"model": "llama-3.3-70b-versatile", "messages": [{"role": "user", "content": prompt}],
+                      "temperature": 0.1, "max_tokens": 256},
+            )
+        data = resp.json()
+        raw_content = data["choices"][0]["message"]["content"].strip()
+        parsed = json.loads(raw_content)
+        return ExtractSpecResponse(
+            label=label,
+            extracted_value=str(parsed.get("value", "")),
+            confidence=float(parsed.get("confidence", 0.0)),
+            raw_snippet=str(parsed.get("snippet", "")),
+        )
+    except Exception as exc:
+        logger.exception("extract-spec Groq call failed")
+        return ExtractSpecResponse(label=label, extracted_value="", confidence=0.0,
+                                   raw_snippet="", error=str(exc))
+
+
+@router.post("/vendor-recommend", response_model=VendorRecommendResponse)
+async def vendor_recommend(
+    instrument_type: str = Form(...),
+    spec_json: str = Form("{}"),   # JSON: {label: value, ...}
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Use Groq AI to generate a vendor comparison table for the given instrument
+    type and collected spec profile. Returns match % per vendor/model.
+    """
+    import os, httpx
+
+    specs: dict = {}
+    try:
+        specs = json.loads(spec_json) if spec_json else {}
+    except Exception:
+        pass
+
+    groq_key = os.environ.get("GROQ_API_KEY", "")
+    if not groq_key:
+        raise HTTPException(status_code=503, detail="GROQ_API_KEY not configured.")
+
+    spec_lines = "\n".join(f"  - {k}: {v}" for k, v in specs.items()) or "  (no specs provided)"
+    prompt = (
+        f"You are a senior instrumentation engineer for a water treatment plant project.\n"
+        f"Instrument type: {instrument_type}\n"
+        f"Collected technical specifications:\n{spec_lines}\n\n"
+        f"Compare the following vendors for this instrument: Endress+Hauser, Emerson, VEGA, ABB, Yokogawa.\n"
+        f"For each vendor provide:\n"
+        f"  - Their best-fit model name\n"
+        f"  - match_pct: integer 0-100 showing how well their product line matches the specs\n"
+        f"  - strengths: list of 2-3 short bullet points\n"
+        f"  - gaps: list of 0-2 short bullet points (limitations or missing features)\n\n"
+        f"Respond with ONLY a JSON array:\n"
+        f"[{{\"vendor\":\"...\",\"model\":\"...\",\"match_pct\":...,\"strengths\":[...],\"gaps\":[...]}}, ...]\n"
+        f"Sort by match_pct descending."
+    )
+    try:
+        async with httpx.AsyncClient(timeout=40) as client:
+            resp = await client.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"},
+                json={"model": "llama-3.3-70b-versatile", "messages": [{"role": "user", "content": prompt}],
+                      "temperature": 0.2, "max_tokens": 1024},
+            )
+        data = resp.json()
+        raw = data["choices"][0]["message"]["content"].strip()
+        # Strip markdown fences if present
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        vendors_raw: list[dict] = json.loads(raw)
+        vendors = [VendorMatch(
+            vendor=v.get("vendor", ""),
+            model=v.get("model", ""),
+            match_pct=float(v.get("match_pct", 0)),
+            strengths=v.get("strengths", []),
+            gaps=v.get("gaps", []),
+        ) for v in vendors_raw]
+        top = vendors[0].vendor if vendors else ""
+        return VendorRecommendResponse(instrument_type=instrument_type, vendors=vendors, recommended=top)
+    except Exception as exc:
+        logger.exception("vendor-recommend Groq call failed")
+        raise HTTPException(status_code=500, detail=f"Vendor recommendation failed: {exc}")

@@ -68,3 +68,25 @@ class GenerateStatusResponse(BaseModel):
     status: str  # "processing" | "done" | "error"
     result: GenerateResult | None = None
     error: str | None = None
+
+
+class ExtractSpecResponse(BaseModel):
+    label: str
+    extracted_value: str
+    confidence: float  # 0.0 – 1.0
+    raw_snippet: str
+    error: str | None = None
+
+
+class VendorMatch(BaseModel):
+    vendor: str
+    model: str
+    match_pct: float
+    strengths: list[str]
+    gaps: list[str]
+
+
+class VendorRecommendResponse(BaseModel):
+    instrument_type: str
+    vendors: list[VendorMatch]
+    recommended: str  # vendor name of top match

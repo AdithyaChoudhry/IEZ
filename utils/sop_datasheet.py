@@ -56,6 +56,8 @@ SOURCE_NOTE_COL = 11
 IODB_TYPE_KEYS = ("instrument type", "instrument_type", "type")
 IODB_NAME_KEYS = ("instrument name", "instrument_name", "instr name", "instr. name", "instr_name")
 IODB_TAG_KEYS = ("tag no", "tag number", "tag_no", "tag_number", "tag")
+IODB_SIGNAL_KEYS = ("signal i/o type", "signal io type", "io type", "i/o type", "signal type", "signal_io_type", "signal i o type")
+IODB_SUBSYS_KEYS = ("sub system", "subsystem", "sub_system", "sub-system", "subsys")
 
 # Field region in the EG example sheet (1-based rows 9–60 → 0-based 8–59).
 DEFAULT_START_ROW = 8
@@ -526,19 +528,34 @@ def _find_column(df: pd.DataFrame, keys: tuple[str, ...]) -> str | None:
 _BLANK_VALS = {"", "nan", "none"}
 
 
+def _apply_ai_subsystem_filter(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Retain only rows where:
+      SIGNAL I/O TYPE == "AI"  (case-insensitive)
+      AND SUB SYSTEM contains "-"
+    Falls back to the full dataframe if either column is not found.
+    """
+    signal_col = _find_column(df, IODB_SIGNAL_KEYS)
+    subsys_col = _find_column(df, IODB_SUBSYS_KEYS)
+
+    mask = pd.Series([True] * len(df), index=df.index)
+    if signal_col is not None:
+        mask &= df[signal_col].fillna("").astype(str).str.strip().str.upper() == "AI"
+    if subsys_col is not None:
+        mask &= df[subsys_col].fillna("").astype(str).str.contains("-", na=False)
+
+    filtered = df.loc[mask]
+    return filtered if not filtered.empty else df
+
+
 def get_iodb_instrument_types(iodb_bytes: bytes) -> tuple[list[str], str | None]:
     """
-    Return unique instrument type combinations from the IODB.
+    Return unique INSTRUMENT TYPE values from the IODB.
 
-    When both INSTRUMENT NAME and INSTRUMENT TYPE columns exist, the dropdown
-    value is the combined string:
-        "INSTRUMENT NAME - INSTRUMENT TYPE"
+    Only rows that pass the AI-subsystem dual filter are considered:
+      SIGNAL I/O TYPE = "AI"  AND  SUB SYSTEM contains "-"
 
-    This uniquely identifies the instrument family (e.g.
-    "LEVEL TRANSMITTER - NON CONTACT RADAR TYPE") so the same generic type
-    word like "TRANSMITTER" is never ambiguous across technologies.
-
-    Blank, NULL, and duplicate combinations are removed. Result is sorted.
+    Blank and duplicate values are removed. Result is sorted.
     """
     df, err = _load_iodb_df(iodb_bytes)
     if err:
@@ -547,34 +564,23 @@ def get_iodb_instrument_types(iodb_bytes: bytes) -> tuple[list[str], str | None]
     if type_col is None:
         return [], "No 'INSTRUMENT TYPE' column found in IODB."
 
-    name_col = _find_column(df, IODB_NAME_KEYS)
-    combined: set[str] = set()
+    # Apply AI + sub-system filter so dropdown only shows relevant types.
+    df = _apply_ai_subsystem_filter(df)
 
+    types: set[str] = set()
     for _, row in df.iterrows():
         itype = str(row.get(type_col, "") or "").strip()
-        if not itype or itype.lower() in _BLANK_VALS:
-            continue
-        if name_col is not None:
-            name = str(row.get(name_col, "") or "").strip()
-            if name and name.lower() not in _BLANK_VALS:
-                combined.add(f"{name} - {itype}")
-                continue
-        combined.add(itype)
+        if itype and itype.lower() not in _BLANK_VALS:
+            types.add(itype)
 
-    return sorted(combined), None
+    return sorted(types), None
 
 
 def get_iodb_tags(iodb_bytes: bytes, instrument_type: str) -> tuple[list[str], str | None]:
     """
-    Return tags whose rows match `instrument_type`.
-
-    `instrument_type` is now a combined "INSTRUMENT NAME - INSTRUMENT TYPE"
-    string (as produced by get_iodb_instrument_types). The function rebuilds
-    every (name, type) pair from the IODB to find the exact match, then
-    filters rows where BOTH columns equal the found values.
-
-    Falls back to matching on INSTRUMENT TYPE alone for older callers or when
-    the INSTRUMENT NAME column is absent.
+    Return tags whose rows match `instrument_type`, after applying the
+    AI-subsystem dual filter (SIGNAL I/O TYPE = "AI" AND SUB SYSTEM contains "-").
+    Matches on INSTRUMENT TYPE column only (case-insensitive, exact match).
     """
     df, err = _load_iodb_df(iodb_bytes)
     if err:
@@ -586,45 +592,12 @@ def get_iodb_tags(iodb_bytes: bytes, instrument_type: str) -> tuple[list[str], s
     if type_col is None:
         return [], "No 'INSTRUMENT TYPE' column found in IODB."
 
-    name_col = _find_column(df, IODB_NAME_KEYS)
-    it_lower = instrument_type.strip().lower()
+    df = _apply_ai_subsystem_filter(df)
 
-    if name_col is not None:
-        # Search every row for the (name, type) pair that produces the combined string.
-        found_name: str | None = None
-        found_type: str | None = None
-        for _, row in df.iterrows():
-            n = str(row.get(name_col, "") or "").strip()
-            t = str(row.get(type_col, "") or "").strip()
-            if n.lower() in _BLANK_VALS or t.lower() in _BLANK_VALS:
-                continue
-            if f"{n} - {t}".lower() == it_lower:
-                found_name = n
-                found_type = t
-                break
-
-        if found_name is not None:
-            # Filter by both INSTRUMENT NAME and INSTRUMENT TYPE (exact, case-insensitive).
-            name_mask = (
-                df[name_col].fillna("").astype(str).str.strip().str.lower()
-                == found_name.lower()
-            )
-            type_mask = (
-                df[type_col].fillna("").astype(str).str.strip().str.lower()
-                == found_type.lower()  # type: ignore[arg-type]
-            )
-            mask = name_mask & type_mask
-        else:
-            # Combined string not matched — fall back to INSTRUMENT TYPE only.
-            mask = (
-                df[type_col].fillna("").astype(str).str.strip().str.lower()
-                == it_lower
-            )
-    else:
-        mask = (
-            df[type_col].fillna("").astype(str).str.strip().str.lower()
-            == it_lower
-        )
+    mask = (
+        df[type_col].fillna("").astype(str).str.strip().str.lower()
+        == instrument_type.strip().lower()
+    )
 
     tags = (
         df.loc[mask, tag_col].dropna().astype(str).str.strip()

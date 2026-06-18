@@ -2,7 +2,7 @@ import { NavLink, useLocation } from 'react-router-dom';
 import {
   Home, CheckCircle2, FileSpreadsheet, Network,
   FileText, Cable, GitBranch, Layers, ScanSearch,
-  Sparkles, Droplets,
+  Sparkles, Droplets, Radio,
 } from 'lucide-react';
 import clsx from 'clsx';
 
@@ -35,6 +35,10 @@ const sections = [
     label: 'Smart AI',
     items: [{ path: '/smart-datasheet', icon: ScanSearch, label: 'Spec Extraction' }],
     ai: true,
+  },
+  {
+    label: 'Instruments',
+    items: [{ path: '/lt-radar', icon: Radio, label: 'LT Non-Contact Radar' }],
   },
 ];
 

@@ -115,7 +115,7 @@ function SimrePanel({
       fd.append('label', field.label);
       if (tab === 'upload' && tenderFile) fd.append('tender_file', tenderFile);
       else fd.append('tender_text', tenderText);
-      const res = await api.post('/sop-datasheet/extract-spec', fd);
+      const res = await api.post('/sop-datasheet/extract-spec', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
       if (res.data.error) setErr(res.data.error);
       else setExtracted(res.data);
     } catch (e: any) {
@@ -292,7 +292,7 @@ export default function DataSheetGenerator() {
     try {
       const fd = new FormData();
       fd.append('iodb_file', iodbFile);
-      const res = await api.post('/sop-datasheet/instrument-types', fd);
+      const res = await api.post('/sop-datasheet/instrument-types', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
       setInstrumentTypes(res.data.instrument_types || []);
       setSelectedType('');
       setTags([]);
@@ -310,7 +310,7 @@ export default function DataSheetGenerator() {
       const fd = new FormData();
       fd.append('iodb_file', iodbFile);
       fd.append('instrument_type', type);
-      const res = await api.post('/sop-datasheet/tags', fd);
+      const res = await api.post('/sop-datasheet/tags', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
       setTags(res.data.tags || []);
       setSelectedTags([]);
     } catch (e: any) {
@@ -331,7 +331,7 @@ export default function DataSheetGenerator() {
     try {
       const fd = new FormData();
       fd.append('sop_file', file);
-      const res = await api.post('/sop-datasheet/datasheets', fd);
+      const res = await api.post('/sop-datasheet/datasheets', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
       setDatasheets(res.data.datasheets || []);
     } catch (e: any) {
       setError(e?.response?.data?.detail || 'Failed to read SOP template');
@@ -347,7 +347,7 @@ export default function DataSheetGenerator() {
       const fd = new FormData();
       fd.append('sop_file', sopFile);
       fd.append('datasheet_sheet', sheet);
-      const res = await api.post('/sop-datasheet/fields', fd);
+      const res = await api.post('/sop-datasheet/fields', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
       const f: FieldSpec[] = res.data.fields || [];
       setFields(f);
       // Pre-populate overrides with defaults
@@ -383,7 +383,7 @@ export default function DataSheetGenerator() {
       const fd = new FormData();
       fd.append('instrument_type', selectedType);
       fd.append('spec_json', JSON.stringify(specObj));
-      const res = await api.post('/sop-datasheet/vendor-recommend', fd);
+      const res = await api.post('/sop-datasheet/vendor-recommend', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
       setVendors(res.data.vendors || []);
       if (res.data.recommended) {
         const top = (res.data.vendors as VendorMatch[]).find(v => v.vendor === res.data.recommended);
@@ -417,7 +417,7 @@ export default function DataSheetGenerator() {
       }
       if (notes.trim()) out['Notes'] = [notes];
       fd.append('overrides', JSON.stringify(out));
-      const res = await api.post('/sop-datasheet/generate', fd);
+      const res = await api.post('/sop-datasheet/generate', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
       setGenStatus({ job_id: res.data.job_id, status: 'processing' });
       pollRef.current = setInterval(async () => {
         try {

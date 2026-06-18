@@ -16,6 +16,7 @@ import IOListGenerator from './components/modules/IOListGenerator';
 import CableScheduleGenerator from './components/modules/CableScheduleGenerator';
 import LoopWiringGenerator from './components/modules/LoopWiringGenerator';
 import SmartDatasheetExtractor from './components/modules/SmartDatasheetExtractor';
+import ErrorBoundary from './components/ui/ErrorBoundary';
 
 // Create React Query client
 const queryClient = new QueryClient({
@@ -117,12 +118,14 @@ function AppRoutes() {
 
 export default function App() {
   return (
-    <QueryClientProvider client={queryClient}>
-      <BrowserRouter>
-        <AuthProvider>
-          <AppRoutes />
-        </AuthProvider>
-      </BrowserRouter>
-    </QueryClientProvider>
+    <ErrorBoundary>
+      <QueryClientProvider client={queryClient}>
+        <BrowserRouter>
+          <AuthProvider>
+            <AppRoutes />
+          </AuthProvider>
+        </BrowserRouter>
+      </QueryClientProvider>
+    </ErrorBoundary>
   );
 }

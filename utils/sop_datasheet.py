@@ -53,10 +53,10 @@ SPLIT_VALUE_COLS = (5, 7, 9)
 SUB_LABEL_COLS = (2, 3, 4)
 SOURCE_NOTE_COL = 11
 
-IODB_TYPE_KEYS = ("instrument type", "instrument_type", "type")
+IODB_TYPE_KEYS = ("instrument_type_desc", "instrument type desc", "instrument type", "instrument_type", "type")
 IODB_NAME_KEYS = ("instrument name", "instrument_name", "instr name", "instr. name", "instr_name")
-IODB_TAG_KEYS = ("tag no", "tag number", "tag_no", "tag_number", "tag")
-IODB_SIGNAL_KEYS = ("signal i/o type", "signal io type", "io type", "i/o type", "signal type", "signal_io_type", "signal i o type")
+IODB_TAG_KEYS = ("tag_number_new", "tag number new", "tag no", "tag number", "tag_no", "tag_number", "tag")
+IODB_SIGNAL_KEYS = ("io_type_name", "io type name", "signal i/o type", "signal io type", "io type", "i/o type", "signal type", "signal_io_type", "signal i o type")
 IODB_SUBSYS_KEYS = ("sub system", "subsystem", "sub_system", "sub-system", "subsys")
 
 # Field region in the EG example sheet (1-based rows 9–60 → 0-based 8–59).

@@ -44,7 +44,7 @@ export default function Sidebar({ isOpen }: SidebarProps) {
   return (
     <aside
       className={clsx(
-        'fixed left-0 z-40 flex flex-col overflow-hidden transition-all duration-300 ease-spring',
+        'fixed left-0 z-40 flex flex-col overflow-hidden transition-all duration-300',
         isOpen ? 'w-56' : 'w-0 -translate-x-full'
       )}
       style={{
@@ -56,13 +56,16 @@ export default function Sidebar({ isOpen }: SidebarProps) {
     >
       <div className="flex-1 overflow-y-auto py-3 px-2">
         {sections.map((section, si) => (
-          <div key={section.label} className={clsx('mb-4', si > 0 && 'border-t pt-3')} style={si > 0 ? { borderColor:'var(--b0)' } : {}}>
-            {/* Section label */}
+          <div
+            key={section.label}
+            className={clsx('mb-4', si > 0 && 'border-t pt-3')}
+            style={si > 0 ? { borderColor: 'var(--b0)' } : {}}
+          >
             <div className="flex items-center gap-1.5 px-2 mb-1.5">
-              {section.ai && <Sparkles className="w-2.5 h-2.5" style={{ color:'var(--violet)' }} />}
+              {section.ai && <Sparkles className="w-2.5 h-2.5" style={{ color: 'var(--gold)' }} />}
               <span
                 className="text-[10px] font-semibold uppercase tracking-widest"
-                style={{ color: section.ai ? 'var(--violet)' : 'var(--t2)' }}
+                style={{ color: section.ai ? 'var(--gold)' : 'var(--t2)' }}
               >
                 {section.label}
               </span>
@@ -76,19 +79,12 @@ export default function Sidebar({ isOpen }: SidebarProps) {
                   : (location.pathname.startsWith(item.path) && item.path !== '/');
 
                 return (
-                  <NavLink
-                    key={item.path}
-                    to={item.path}
-                    end={'exact' in item ? item.exact : false}
-                  >
+                  <NavLink key={item.path} to={item.path} end={'exact' in item ? item.exact : false}>
                     <div
-                      className={clsx(
-                        'flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-xs font-medium transition-all duration-150 relative group',
-                        isActive ? '' : ''
-                      )}
+                      className="flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-xs font-medium transition-all duration-150 relative"
                       style={{
-                        background: isActive ? 'var(--teal-dim)' : 'transparent',
-                        color: isActive ? 'var(--teal-lt)' : 'var(--t1)',
+                        background: isActive ? 'var(--em-dim)' : 'transparent',
+                        color: isActive ? 'var(--em-lt)' : 'var(--t1)',
                       }}
                       onMouseEnter={e => {
                         if (!isActive) {
@@ -103,20 +99,19 @@ export default function Sidebar({ isOpen }: SidebarProps) {
                         }
                       }}
                     >
-                      {/* Active left bar */}
                       {isActive && (
                         <span
                           className="absolute left-0 top-1/2 -translate-y-1/2 w-0.5 h-4 rounded-r-full"
-                          style={{ background: 'var(--teal)' }}
+                          style={{ background: 'var(--em)' }}
                         />
                       )}
                       <Icon
                         className="w-3.5 h-3.5 flex-shrink-0"
-                        style={{ color: isActive ? 'var(--teal)' : 'inherit', opacity: isActive ? 1 : 0.7 }}
+                        style={{ color: isActive ? 'var(--em)' : 'inherit', opacity: isActive ? 1 : 0.65 }}
                       />
                       <span>{item.label}</span>
                       {isActive && (
-                        <span className="ml-auto w-1 h-1 rounded-full" style={{ background:'var(--teal)' }} />
+                        <span className="ml-auto w-1 h-1 rounded-full" style={{ background: 'var(--em)' }} />
                       )}
                     </div>
                   </NavLink>
@@ -127,13 +122,12 @@ export default function Sidebar({ isOpen }: SidebarProps) {
         ))}
       </div>
 
-      {/* Footer */}
-      <div className="p-2 flex-shrink-0" style={{ borderTop:'1px solid var(--b0)' }}>
-        <div className="flex items-center gap-2 px-2.5 py-2 rounded-lg" style={{ background:'var(--s1)' }}>
-          <Droplets className="w-3.5 h-3.5 flex-shrink-0" style={{ color:'var(--teal)' }} />
+      <div className="p-2 flex-shrink-0" style={{ borderTop: '1px solid var(--b0)' }}>
+        <div className="flex items-center gap-2 px-2.5 py-2 rounded-lg" style={{ background: 'var(--s1)' }}>
+          <Droplets className="w-3.5 h-3.5 flex-shrink-0" style={{ color: 'var(--em)' }} />
           <div>
-            <p className="text-[10px] font-semibold" style={{ color:'var(--t1)' }}>iEZ v2.0</p>
-            <p className="text-[9px]" style={{ color:'var(--t2)' }}>WABAG · AI-Powered</p>
+            <p className="text-[10px] font-semibold" style={{ color: 'var(--t1)' }}>iEZ v2.0</p>
+            <p className="text-[9px]" style={{ color: 'var(--t2)' }}>WABAG · AI-Powered</p>
           </div>
         </div>
       </div>

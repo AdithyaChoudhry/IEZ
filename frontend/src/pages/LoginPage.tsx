@@ -16,7 +16,7 @@ function ParticleCanvas() {
     window.addEventListener('resize', resize);
 
     type P = { x: number; y: number; r: number; vy: number; vx: number; o: number; color: string };
-    const colors = ['rgba(16,185,129,', 'rgba(52,211,153,', 'rgba(245,158,11,'];
+    const colors = ['rgba(59,130,246,', 'rgba(96,165,250,', 'rgba(147,197,253,'];
     const pts: P[] = Array.from({ length: 35 }, () => ({
       x: Math.random() * (canvas.width || 600),
       y: Math.random() * (canvas.height || 800),
@@ -85,14 +85,14 @@ export default function LoginPage() {
         <ParticleCanvas />
         {/* Mesh blobs */}
         <div className="absolute inset-0 pointer-events-none overflow-hidden">
-          <div className="mesh-blob-a absolute -top-20 -left-20 w-80 h-80 rounded-full blur-3xl" style={{ background: 'rgba(16,185,129,0.06)' }} />
+          <div className="mesh-blob-a absolute -top-20 -left-20 w-80 h-80 rounded-full blur-3xl" style={{ background: 'rgba(59,130,246,0.08)' }} />
           <div className="mesh-blob-b absolute bottom-0 right-0 w-72 h-72 rounded-full blur-3xl" style={{ background: 'rgba(245,158,11,0.04)' }} />
         </div>
 
         {/* Logo */}
         <div className="relative">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ background: 'linear-gradient(135deg, var(--em), #059669)', boxShadow: '0 0 20px var(--em-glow)' }}>
+            <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ background: 'linear-gradient(135deg, var(--em), #1d4ed8)', boxShadow: '0 0 20px var(--em-glow)' }}>
               <Droplets className="w-5 h-5 text-white" />
             </div>
             <div>
@@ -107,8 +107,8 @@ export default function LoginPage() {
         {/* Hero text */}
         <div className="relative flex-1 flex flex-col justify-center py-8">
           <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full mb-8 w-fit text-xs font-medium"
-            style={{ background: 'var(--em-dim)', border: '1px solid rgba(16,185,129,0.18)', color: 'var(--em-lt)' }}>
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+            style={{ background: 'var(--em-dim)', border: '1px solid rgba(59,130,246,0.18)', color: 'var(--em-lt)' }}>
+            <span className="w-1.5 h-1.5 rounded-full bg-blue-400" />
             WABAG Water Treatment · India
           </div>
 
@@ -150,7 +150,7 @@ export default function LoginPage() {
 
           {/* Mobile logo */}
           <div className="lg:hidden flex items-center gap-3 justify-center mb-10">
-            <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ background: 'linear-gradient(135deg, var(--em), #059669)' }}>
+            <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ background: 'linear-gradient(135deg, var(--em), #1d4ed8)' }}>
               <Droplets className="w-5 h-5 text-white" />
             </div>
             <span className="text-2xl font-black" style={{ fontFamily: "'Space Grotesk', sans-serif", color: 'var(--t0)' }}>

@@ -535,80 +535,79 @@ def main():
             label    = spec["label"]
             color    = spec["color"]
             sub_labs = spec["sub_labels"]
-            n_vals   = len(spec["value_cols"])
             eg       = eg_defaults.get(_norm(label), [""] * 3)
 
+            # ── NOTES (optional free text) ─────────────────────────────────
             if label == "Notes":
                 if notes_asked:
                     continue
                 notes_asked = True
-                notes_val = _ask("NOTES (press Enter to skip)", required=False)
+                print(f"\n  [NOTES]")
+                notes_val = _ask("Enter notes / remarks (Enter to leave blank)", required=False)
                 filled_rows.append({**spec, "filled_values": [notes_val]})
                 continue
 
-            print(f"\n  [{color}]  {spec['section']} › {label}", end="")
-
+            # ── GREY — header (CLIENT/CONSULTANT etc.) ─────────────────────
             if color == "GREY":
-                # Already captured in project_info — skip individual prompt
-                # (CLIENT/CONSULTANT etc. are in the header block, not spec rows)
-                continue
+                continue  # already captured in project_info header block
 
+            sec_label = f"{spec['section']} › {label}" if spec['section'] else label
+            prefix = {"GREEN": "🟢 IODB", "RED": "🔴 SPEC", "VIOLET": "🟣 PURCHASE"}
+
+            # ── GREEN — auto-fill from IODB; prompt if not found ───────────
             if color == "GREEN":
-                # Auto-fill from IODB
                 if sub_labs:
                     vals = []
-                    auto_found = False
                     for i, sub in enumerate(sub_labs):
-                        field_key = f"{label} {sub}"
-                        val = iodb_value_for_label(field_key, iodb_row, iodb_cols) if iodb_row else ""
-                        if not val:
-                            val = iodb_value_for_label(label, iodb_row, iodb_cols) if iodb_row else ""
+                        sub_key = f"{label} {sub}"
+                        val = (iodb_value_for_label(sub_key, iodb_row, iodb_cols) or
+                               iodb_value_for_label(label, iodb_row, iodb_cols)) if iodb_row else ""
                         if val:
-                            print(f"\n    ✔  {sub}: {val!r}  (IODB)")
+                            print(f"\n  🟢  {sec_label} ({sub})  →  {val!r}  ✔ IODB")
                             vals.append(val)
-                            auto_found = True
                         else:
-                            print(f"\n    ⚠  {sub}: not in IODB")
-                            v = _ask(f"    Enter {label} ({sub})", default=eg[i] if i < len(eg) else "")
+                            print(f"\n  🟢  {sec_label} ({sub})  →  NOT in IODB")
+                            v = _ask(f"     Enter value for [{label} — {sub}]",
+                                     default=eg[i] if i < len(eg) else "",
+                                     required=True)
                             vals.append(v)
                 else:
                     val = iodb_value_for_label(label, iodb_row, iodb_cols) if iodb_row else ""
                     if val:
-                        print(f"  →  {val!r}  (IODB)")
+                        print(f"\n  🟢  {sec_label}  →  {val!r}  ✔ IODB")
                         vals = [val]
                     else:
-                        print(f"  →  not in IODB")
-                        v = _ask(f"    Enter {label}", default=eg[0] if eg else "")
+                        print(f"\n  🟢  {sec_label}  →  NOT in IODB")
+                        v = _ask(f"     Enter value for [{label}]",
+                                 default=eg[0] if eg else "",
+                                 required=True)
                         vals = [v]
 
+            # ── RED — vendor spec; show EG default, must confirm or override ─
             elif color == "RED":
-                # Vendor/job spec — use EG default if set, else prompt
                 if sub_labs:
                     vals = []
                     for i, sub in enumerate(sub_labs):
                         eg_val = eg[i] if i < len(eg) else ""
                         if eg_val:
-                            print(f"\n    ✔  {sub}: {eg_val!r}  (EG default)")
-                            vals.append(eg_val)
+                            print(f"\n  🔴  {sec_label} ({sub})  →  {eg_val!r}  (EG default — confirm or change)")
                         else:
-                            print(f"\n    ⚠  {sub}: no default")
-                            v = _ask(f"    Enter {label} ({sub})")
-                            vals.append(v)
+                            print(f"\n  🔴  {sec_label} ({sub})  →  No default — enter value")
+                        v = _ask(f"     [{label} — {sub}]", default=eg_val, required=True)
+                        vals.append(v)
                 else:
                     eg_val = eg[0] if eg else ""
                     if eg_val:
-                        print(f"  →  {eg_val!r}  (EG default)")
-                        # Give user chance to override
-                        override = _ask(f"    Confirm/override {label}", default=eg_val)
-                        vals = [override]
+                        print(f"\n  🔴  {sec_label}  →  {eg_val!r}  (EG default — confirm or change)")
                     else:
-                        print(f"  →  no default")
-                        v = _ask(f"    Enter {label}")
-                        vals = [v]
+                        print(f"\n  🔴  {sec_label}  →  No default — enter value")
+                    v = _ask(f"     [{label}]", default=eg_val, required=True)
+                    vals = [v]
 
+            # ── VIOLET — PURCHASE Make/Model/Qty (always prompt) ───────────
             elif color == "VIOLET":
-                # PURCHASE: Make / Model / Qty
-                v = _ask(f"    Enter {label}")
+                print(f"\n  🟣  {sec_label}")
+                v = _ask(f"     Enter [{label}]", required=True)
                 vals = [v]
 
             else:

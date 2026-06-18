@@ -39,7 +39,7 @@ export default function Header({ onToggleSidebar }: HeaderProps) {
         <div className="flex items-center gap-2.5 select-none">
           <div
             className="w-8 h-8 rounded-lg flex items-center justify-center"
-            style={{ background: 'linear-gradient(135deg, var(--em), #059669)', boxShadow: '0 0 12px var(--em-glow)' }}
+            style={{ background: 'linear-gradient(135deg, var(--em), #1d4ed8)', boxShadow: '0 0 12px var(--em-glow)' }}
           >
             <Droplets className="w-4 h-4 text-white" />
           </div>
@@ -67,7 +67,7 @@ export default function Header({ onToggleSidebar }: HeaderProps) {
 
       {/* Centre */}
       <div className="hidden md:flex items-center gap-1.5 px-3 py-1 rounded-full" style={{ background: 'var(--s2)', border: '1px solid var(--b1)' }}>
-        <span className="ping-dot w-1.5 h-1.5 rounded-full bg-emerald-400" />
+        <span className="ping-dot w-1.5 h-1.5 rounded-full bg-blue-400" />
         <span className="text-[11px] font-medium" style={{ color: 'var(--t1)' }}>Systems operational</span>
       </div>
 
@@ -81,7 +81,7 @@ export default function Header({ onToggleSidebar }: HeaderProps) {
         >
           <div
             className="w-7 h-7 rounded-full flex items-center justify-center text-white text-xs font-bold"
-            style={{ background: 'linear-gradient(135deg, var(--em), #059669)' }}
+            style={{ background: 'linear-gradient(135deg, var(--em), #1d4ed8)' }}
           >
             {user?.username?.charAt(0).toUpperCase() || <User className="w-3.5 h-3.5" />}
           </div>

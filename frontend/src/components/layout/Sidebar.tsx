@@ -124,7 +124,7 @@ export default function Sidebar({ isOpen }: SidebarProps) {
 
       <div className="p-2 flex-shrink-0" style={{ borderTop: '1px solid var(--b0)' }}>
         <div className="flex items-center gap-2 px-2.5 py-2 rounded-lg" style={{ background: 'var(--s1)' }}>
-          <Droplets className="w-3.5 h-3.5 flex-shrink-0" style={{ color: 'var(--em)' }} />
+          <Droplets className="w-3.5 h-3.5 flex-shrink-0" style={{ color: 'var(--em-lt)' }} />
           <div>
             <p className="text-[10px] font-semibold" style={{ color: 'var(--t1)' }}>iEZ v2.0</p>
             <p className="text-[9px]" style={{ color: 'var(--t2)' }}>WABAG · AI-Powered</p>

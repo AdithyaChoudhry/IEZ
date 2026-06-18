@@ -7,7 +7,7 @@ export default function RegisterPage() {
   const [email, setEmail] = useState('');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
+  const [confirm, setConfirm] = useState('');
   const [showPw, setShowPw] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -17,8 +17,8 @@ export default function RegisterPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
-    if (password !== confirmPassword) { setError('Passwords do not match'); return; }
-    if (password.length < 8) { setError('Password must be at least 8 characters'); return; }
+    if (password !== confirm) { setError('Passwords do not match'); return; }
+    if (password.length < 8)  { setError('Password must be at least 8 characters'); return; }
     setLoading(true);
     try {
       await register({ email, username, password });
@@ -30,159 +30,107 @@ export default function RegisterPage() {
     }
   };
 
-  const inputStyle = {
-    background: 'rgba(2,10,24,0.8)',
-    border: '1px solid rgba(14,165,233,0.2)',
-    color: '#f0f9ff',
-  };
-  const onFocus = (e: React.FocusEvent<HTMLInputElement>) =>
-    (e.currentTarget.style.borderColor = 'rgba(14,165,233,0.55)');
-  const onBlur = (e: React.FocusEvent<HTMLInputElement>) =>
-    (e.currentTarget.style.borderColor = 'rgba(14,165,233,0.2)');
-
   return (
-    <div className="min-h-screen flex items-center justify-center px-4 py-12" style={{ background: 'var(--bg-base)' }}>
-      {/* Background dots */}
-      <div className="fixed inset-0 dot-grid opacity-20 pointer-events-none" />
-      <div
-        className="fixed top-1/4 left-1/2 -translate-x-1/2 w-[600px] h-[400px] rounded-full blur-3xl pointer-events-none"
-        style={{ background: 'radial-gradient(ellipse, rgba(14,165,233,0.07) 0%, transparent 70%)' }}
-      />
+    <div className="min-h-screen flex items-center justify-center px-4 py-12" style={{ background:'var(--s0)' }}>
+      {/* Ambient glow */}
+      <div className="fixed inset-0 pointer-events-none overflow-hidden">
+        <div className="mesh-blob-1 absolute top-1/4 left-1/2 -translate-x-1/2 w-96 h-96 rounded-full blur-3xl" style={{ background:'rgba(20,184,166,0.05)' }} />
+      </div>
 
-      <div className="relative w-full max-w-md animate-slide-up">
+      <div className="relative w-full max-w-md animate-rise">
         {/* Logo */}
-        <div className="flex items-center gap-3 justify-center mb-8">
-          <div
-            className="w-10 h-10 rounded-xl flex items-center justify-center"
-            style={{ background: 'linear-gradient(135deg, #0ea5e9, #0369a1)', boxShadow: '0 0 20px rgba(14,165,233,0.3)' }}
-          >
-            <Droplets className="w-5 h-5 text-white" />
+        <div className="flex items-center gap-3 justify-center mb-10">
+          <div className="w-9 h-9 rounded-xl flex items-center justify-center" style={{ background:'linear-gradient(135deg,var(--teal),#0d9488)', boxShadow:'0 0 18px rgba(20,184,166,0.2)' }}>
+            <Droplets className="w-4.5 h-4.5 text-white" style={{ width:'18px', height:'18px' }} />
           </div>
-          <h1 className="text-2xl font-black" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>
-            <span className="text-white">i</span><span className="text-gradient">EZ</span>
-          </h1>
+          <span className="text-xl font-black" style={{ fontFamily:"'Space Grotesk',sans-serif", color:'var(--t0)' }}>
+            i<span className="text-gradient">EZ</span>
+          </span>
         </div>
 
         {/* Card */}
-        <div
-          className="rounded-2xl p-8"
-          style={{
-            background: 'rgba(6,20,40,0.9)',
-            backdropFilter: 'blur(20px)',
-            border: '1px solid rgba(14,165,233,0.18)',
-            boxShadow: '0 32px 64px rgba(2,13,26,0.5)',
-          }}
-        >
+        <div className="rounded-2xl p-8" style={{ background:'var(--s2)', border:'1px solid var(--b1)', boxShadow:'0 24px 64px rgba(0,0,0,0.4)' }}>
           <div className="mb-7">
-            <h2 className="text-2xl font-bold text-white mb-1" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>
-              Create Account
+            <h2 className="text-2xl font-bold mb-1" style={{ fontFamily:"'Space Grotesk',sans-serif", color:'var(--t0)' }}>
+              Create account
             </h2>
-            <p className="text-sm" style={{ color: 'rgba(147,197,253,0.5)' }}>
-              Join the iEZ engineering platform
-            </p>
+            <p className="text-sm" style={{ color:'var(--t1)' }}>Join the iEZ engineering platform</p>
           </div>
 
           {error && (
-            <div
-              className="mb-5 px-4 py-3 rounded-xl text-sm animate-slide-up"
-              style={{ background: 'rgba(244,63,94,0.1)', border: '1px solid rgba(244,63,94,0.25)', color: '#fb7185' }}
-            >
+            <div className="mb-5 px-4 py-3 rounded-xl text-sm animate-rise"
+              style={{ background:'rgba(248,113,113,0.08)', border:'1px solid rgba(248,113,113,0.2)', color:'var(--rose)' }}>
               {error}
             </div>
           )}
 
           <form onSubmit={handleSubmit} className="space-y-4">
-            {/* Email */}
-            <div>
-              <label className="block text-xs font-semibold mb-1.5 tracking-wide uppercase" style={{ color: 'rgba(125,211,252,0.6)' }}>
-                Email
-              </label>
-              <input
-                type="email" required autoComplete="email"
-                value={email} onChange={e => setEmail(e.target.value)}
-                placeholder="your.email@example.com"
-                className="w-full px-4 py-2.5 rounded-xl text-sm outline-none transition-all duration-200"
-                style={inputStyle} onFocus={onFocus} onBlur={onBlur}
-              />
-            </div>
+            {[
+              { label:'Email',            id:'email',    type:'email',    val:email,    set:setEmail,    ph:'your.email@company.com',  ac:'email' },
+              { label:'Username',         id:'username', type:'text',     val:username, set:setUsername, ph:'choose a username',        ac:'username' },
+            ].map(f => (
+              <div key={f.id}>
+                <label className="block text-xs font-semibold mb-2 uppercase tracking-wider" style={{ color:'var(--t2)' }}>{f.label}</label>
+                <input
+                  type={f.type} required autoComplete={f.ac}
+                  value={f.val} onChange={e => f.set(e.target.value)}
+                  placeholder={f.ph}
+                  className="input-field w-full"
+                />
+              </div>
+            ))}
 
-            {/* Username */}
             <div>
-              <label className="block text-xs font-semibold mb-1.5 tracking-wide uppercase" style={{ color: 'rgba(125,211,252,0.6)' }}>
-                Username
-              </label>
-              <input
-                type="text" required autoComplete="username" minLength={3} maxLength={50}
-                value={username} onChange={e => setUsername(e.target.value)}
-                placeholder="Choose a username"
-                className="w-full px-4 py-2.5 rounded-xl text-sm outline-none transition-all duration-200"
-                style={inputStyle} onFocus={onFocus} onBlur={onBlur}
-              />
-            </div>
-
-            {/* Password */}
-            <div>
-              <label className="block text-xs font-semibold mb-1.5 tracking-wide uppercase" style={{ color: 'rgba(125,211,252,0.6)' }}>
-                Password
-              </label>
+              <label className="block text-xs font-semibold mb-2 uppercase tracking-wider" style={{ color:'var(--t2)' }}>Password</label>
               <div className="relative">
                 <input
-                  type={showPw ? 'text' : 'password'} required autoComplete="new-password" minLength={8}
+                  type={showPw ? 'text' : 'password'} required minLength={8}
+                  autoComplete="new-password"
                   value={password} onChange={e => setPassword(e.target.value)}
-                  placeholder="At least 8 characters"
-                  className="w-full px-4 py-2.5 pr-10 rounded-xl text-sm outline-none transition-all duration-200"
-                  style={inputStyle} onFocus={onFocus} onBlur={onBlur}
+                  placeholder="at least 8 characters"
+                  className="input-field w-full"
+                  style={{ paddingRight:'40px' }}
                 />
-                <button type="button" onClick={() => setShowPw(!showPw)} className="absolute right-3 top-1/2 -translate-y-1/2" style={{ color: 'rgba(125,211,252,0.35)' }} tabIndex={-1}>
+                <button type="button" tabIndex={-1} onClick={() => setShowPw(!showPw)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 opacity-50 hover:opacity-100 transition-opacity"
+                  style={{ color:'var(--t1)' }}>
                   {showPw ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                 </button>
               </div>
             </div>
 
-            {/* Confirm Password */}
             <div>
-              <label className="block text-xs font-semibold mb-1.5 tracking-wide uppercase" style={{ color: 'rgba(125,211,252,0.6)' }}>
-                Confirm Password
-              </label>
+              <label className="block text-xs font-semibold mb-2 uppercase tracking-wider" style={{ color:'var(--t2)' }}>Confirm Password</label>
               <input
                 type="password" required autoComplete="new-password"
-                value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)}
-                placeholder="Re-enter password"
-                className="w-full px-4 py-2.5 rounded-xl text-sm outline-none transition-all duration-200"
-                style={inputStyle} onFocus={onFocus} onBlur={onBlur}
+                value={confirm} onChange={e => setConfirm(e.target.value)}
+                placeholder="re-enter password"
+                className="input-field w-full"
               />
             </div>
 
             <button
               type="submit" disabled={loading}
-              className="w-full py-3 px-4 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed mt-1"
-              style={{
-                background: loading ? 'rgba(14,165,233,0.4)' : 'linear-gradient(135deg, #0ea5e9, #0369a1)',
-                color: 'white',
-                boxShadow: loading ? 'none' : '0 8px 24px rgba(14,165,233,0.25)',
-              }}
+              className="btn btn-primary w-full py-3 text-sm mt-1"
             >
               {loading ? (
-                <span className="flex items-center gap-2">
-                  <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                  Creating account…
-                </span>
-              ) : (
                 <>
-                  <UserPlus className="w-4 h-4" />
-                  Create Account
+                  <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                  Creating…
                 </>
+              ) : (
+                <><UserPlus className="w-4 h-4" />Create Account</>
               )}
             </button>
           </form>
 
-          <div className="mt-6 text-center text-sm" style={{ color: 'rgba(125,211,252,0.45)' }}>
+          <p className="mt-6 text-center text-sm" style={{ color:'var(--t1)' }}>
             Already have an account?{' '}
-            <Link to="/login" className="font-semibold" style={{ color: '#38bdf8' }}>Sign in</Link>
-          </div>
+            <Link to="/login" className="font-semibold" style={{ color:'var(--teal-lt)' }}>Sign in</Link>
+          </p>
         </div>
 
-        <p className="text-center text-[11px] mt-5" style={{ color: 'rgba(125,211,252,0.25)' }}>
+        <p className="text-center text-[11px] mt-5" style={{ color:'var(--t2)' }}>
           Built by Akash B · iEZ v2.0 · WABAG Water Treatment
         </p>
       </div>

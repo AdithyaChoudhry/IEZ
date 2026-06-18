@@ -8,47 +8,32 @@ interface PageHeaderProps {
   accentColor?: string;
 }
 
-export default function PageHeader({
-  icon: Icon,
-  iconClassName,
-  title,
-  description,
-  accentColor = '#0ea5e9',
-}: PageHeaderProps) {
+export default function PageHeader({ icon: Icon, iconClassName, title, description, accentColor = 'var(--teal)' }: PageHeaderProps) {
   return (
     <div className="mb-7">
-      <div className="flex items-start gap-4">
+      <div className="flex items-center gap-4">
         <div
-          className="w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0 shadow-lg"
-          style={{
-            background: `linear-gradient(135deg, ${accentColor}30, ${accentColor}15)`,
-            border: `1px solid ${accentColor}30`,
-            boxShadow: `0 0 20px ${accentColor}15`,
-          }}
+          className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0"
+          style={{ background:'var(--s2)', border:'1px solid var(--b2)' }}
         >
-          <Icon className={`w-5 h-5 ${iconClassName || ''}`} style={!iconClassName ? { color: accentColor } : {}} />
+          <Icon
+            className={`w-4.5 h-4.5 ${iconClassName || ''}`}
+            style={!iconClassName ? { color:accentColor, width:'18px', height:'18px' } : { width:'18px', height:'18px' }}
+          />
         </div>
         <div>
           <h2
-            className="text-2xl font-black text-sky-100 leading-tight"
-            style={{ fontFamily: "'Space Grotesk', sans-serif" }}
+            className="text-xl font-bold leading-tight"
+            style={{ fontFamily:"'Space Grotesk',sans-serif", color:'var(--t0)' }}
           >
             {title}
           </h2>
           {description && (
-            <p className="text-sm mt-1" style={{ color: 'rgba(147,197,253,0.6)' }}>
-              {description}
-            </p>
+            <p className="text-sm mt-0.5" style={{ color:'var(--t1)' }}>{description}</p>
           )}
         </div>
       </div>
-      {/* Accent divider */}
-      <div
-        className="mt-5 h-px"
-        style={{
-          background: `linear-gradient(90deg, ${accentColor}40, transparent)`,
-        }}
-      />
+      <div className="mt-4 h-px" style={{ background:'var(--b0)' }} />
     </div>
   );
 }

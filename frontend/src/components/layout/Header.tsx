@@ -1,5 +1,5 @@
 import { useAuth } from '@/context/AuthContext';
-import { Menu, LogOut, User, ChevronDown, Droplets, Activity } from 'lucide-react';
+import { Menu, LogOut, User, ChevronDown, Droplets } from 'lucide-react';
 import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 
@@ -8,140 +8,115 @@ interface HeaderProps { onToggleSidebar: () => void; }
 export default function Header({ onToggleSidebar }: HeaderProps) {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
-  const [dropdownOpen, setDropdownOpen] = useState(false);
-  const dropdownRef = useRef<HTMLDivElement>(null);
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    function handleClickOutside(e: MouseEvent) {
-      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
-        setDropdownOpen(false);
-      }
+    function close(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
     }
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
+    document.addEventListener('mousedown', close);
+    return () => document.removeEventListener('mousedown', close);
   }, []);
 
   return (
     <header
-      className="sticky top-0 z-50 shadow-2xl"
-      style={{ background: 'linear-gradient(135deg, #020d1a 0%, #061428 50%, #020d1a 100%)' }}
+      className="sticky top-0 z-50 flex items-center justify-between px-5 h-[56px]"
+      style={{ background: 'var(--s1)', borderBottom: '1px solid var(--b1)' }}
     >
-      {/* Top animated accent stripe */}
-      <div
-        className="h-[2px] animate-water-flow"
-        style={{
-          background: 'linear-gradient(90deg, #0ea5e9, #06b6d4, #3b82f6, #0ea5e9)',
-          backgroundSize: '200% 100%',
-        }}
-      />
+      {/* ── Left ── */}
+      <div className="flex items-center gap-3">
+        <button
+          onClick={onToggleSidebar}
+          className="w-8 h-8 flex items-center justify-center rounded-lg transition-colors"
+          style={{ color: 'var(--t2)' }}
+          onMouseEnter={e => { e.currentTarget.style.background='var(--s3)'; e.currentTarget.style.color='var(--t0)'; }}
+          onMouseLeave={e => { e.currentTarget.style.background='transparent'; e.currentTarget.style.color='var(--t2)'; }}
+        >
+          <Menu className="w-4 h-4" />
+        </button>
 
-      <div className="flex items-center justify-between px-4 py-2.5">
-        {/* ── Left ── */}
-        <div className="flex items-center gap-3">
-          <button
-            onClick={onToggleSidebar}
-            className="p-2 rounded-xl transition-all duration-200 hover:bg-white/8 text-sky-300/60 hover:text-sky-300"
+        {/* Brand */}
+        <div className="flex items-center gap-2.5 select-none">
+          <div
+            className="w-8 h-8 rounded-lg flex items-center justify-center shadow-md"
+            style={{ background: 'linear-gradient(135deg, var(--teal), #0d9488)' }}
           >
-            <Menu className="w-5 h-5" />
-          </button>
-
-          <div className="flex items-center gap-3 select-none">
-            {/* Logo mark */}
-            <div className="relative group">
-              <div
-                className="w-10 h-10 rounded-xl flex items-center justify-center shadow-lg"
-                style={{
-                  background: 'linear-gradient(135deg, #0ea5e9, #0369a1)',
-                  boxShadow: '0 0 20px rgba(14,165,233,0.3)',
-                }}
+            <Droplets className="w-4 h-4 text-white" />
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <span
+                className="text-base font-bold leading-none"
+                style={{ fontFamily:"'Space Grotesk',sans-serif", color:'var(--t0)', letterSpacing:'-0.02em' }}
               >
-                <Droplets className="w-5 h-5 text-white" />
-              </div>
-              <div className="absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full bg-emerald-400 border-2 border-[#020d1a] animate-pulse" />
+                i<span className="text-gradient">EZ</span>
+              </span>
+              <span
+                className="text-[9px] font-semibold px-1.5 py-0.5 rounded tracking-wider"
+                style={{ background:'var(--violet-dim)', color:'var(--violet)', border:'1px solid rgba(167,139,250,0.2)' }}
+              >
+                AI
+              </span>
             </div>
-
-            {/* Brand text */}
-            <div>
-              <div className="flex items-center gap-2">
-                <h1
-                  className="text-lg font-black tracking-tight leading-none"
-                  style={{ fontFamily: "'Space Grotesk', sans-serif" }}
-                >
-                  <span className="text-white">i</span>
-                  <span className="text-gradient">EZ</span>
-                </h1>
-                <span className="px-1.5 py-0.5 text-[9px] font-bold rounded tracking-wider border"
-                  style={{
-                    background: 'rgba(14,165,233,0.12)',
-                    borderColor: 'rgba(14,165,233,0.3)',
-                    color: '#38bdf8',
-                  }}>
-                  AI
-                </span>
-              </div>
-              <p className="text-[10px] leading-tight font-medium tracking-wider" style={{ color: 'var(--text-muted)' }}>
-                WABAG · Instrumentation Platform
-              </p>
-            </div>
+            <p className="text-[10px] leading-tight tracking-wide" style={{ color:'var(--t2)' }}>
+              WABAG · Instrumentation
+            </p>
           </div>
         </div>
+      </div>
 
-        {/* ── Center ── */}
-        <div className="hidden lg:flex items-center gap-4">
-          <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full" style={{ background: 'rgba(16,185,129,0.1)', border: '1px solid rgba(16,185,129,0.2)' }}>
-            <Activity className="w-3 h-3 text-emerald-400" />
-            <span className="text-[11px] font-medium text-emerald-400">Systems Online</span>
-          </div>
-        </div>
+      {/* ── Center live badge ── */}
+      <div className="hidden md:flex items-center gap-1.5 px-3 py-1 rounded-full" style={{ background:'var(--s2)', border:'1px solid var(--b1)' }}>
+        <span className="relative flex h-1.5 w-1.5">
+          <span className="status-dot absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+          <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-green-400"></span>
+        </span>
+        <span className="text-[11px] font-medium" style={{ color:'var(--t1)' }}>Systems operational</span>
+      </div>
 
-        {/* ── Right ── */}
-        <div className="relative" ref={dropdownRef}>
-          <button
-            onClick={() => setDropdownOpen(!dropdownOpen)}
-            className="flex items-center gap-2.5 px-3 py-2 rounded-xl transition-all duration-200 group"
-            style={{ border: '1px solid transparent' }}
-            onMouseEnter={e => (e.currentTarget.style.borderColor = 'rgba(14,165,233,0.2)')}
-            onMouseLeave={e => (e.currentTarget.style.borderColor = 'transparent')}
+      {/* ── Right ── */}
+      <div className="relative" ref={ref}>
+        <button
+          onClick={() => setOpen(!open)}
+          className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg transition-all duration-150"
+          style={{ color:'var(--t0)' }}
+          onMouseEnter={e => (e.currentTarget.style.background='var(--s3)')}
+          onMouseLeave={e => (e.currentTarget.style.background='transparent')}
+        >
+          <div
+            className="w-7 h-7 rounded-full flex items-center justify-center text-white text-xs font-bold"
+            style={{ background:'linear-gradient(135deg,var(--teal),#0d9488)' }}
           >
-            <div
-              className="w-8 h-8 rounded-full flex items-center justify-center shadow-md"
-              style={{ background: 'linear-gradient(135deg, #0ea5e9, #0369a1)' }}
-            >
-              <User className="w-4 h-4 text-white" />
-            </div>
-            <div className="hidden sm:block text-left">
-              <p className="text-xs font-semibold text-sky-100 leading-tight">{user?.username}</p>
-              <p className="text-[10px] leading-tight" style={{ color: 'var(--text-muted)' }}>Engineer</p>
-            </div>
-            <ChevronDown className={`w-3.5 h-3.5 transition-transform duration-200 ${dropdownOpen ? 'rotate-180' : ''}`} style={{ color: 'var(--text-muted)' }} />
-          </button>
+            {user?.username?.charAt(0).toUpperCase() || <User className="w-3.5 h-3.5" />}
+          </div>
+          <span className="hidden sm:block text-xs font-medium" style={{ color:'var(--t0)' }}>
+            {user?.username}
+          </span>
+          <ChevronDown className="w-3 h-3 transition-transform duration-150" style={{ color:'var(--t2)', transform: open ? 'rotate(180deg)' : 'rotate(0deg)' }} />
+        </button>
 
-          {dropdownOpen && (
-            <div
-              className="absolute right-0 mt-2 w-56 rounded-2xl shadow-2xl py-2 animate-fade-in"
-              style={{
-                background: 'rgba(6,20,40,0.96)',
-                backdropFilter: 'blur(20px)',
-                border: '1px solid rgba(14,165,233,0.2)',
-              }}
-            >
-              <div className="px-4 py-3" style={{ borderBottom: '1px solid rgba(14,165,233,0.12)' }}>
-                <p className="text-sm font-semibold text-sky-100">{user?.username}</p>
-                <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>{user?.email}</p>
-              </div>
-              <button
-                onClick={() => { logout(); navigate('/login'); }}
-                className="w-full px-4 py-2.5 text-left text-sm flex items-center gap-2 transition-colors"
-                style={{ color: '#fb7185' }}
-                onMouseEnter={e => (e.currentTarget.style.background = 'rgba(244,63,94,0.08)')}
-                onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
-              >
-                <LogOut className="w-4 h-4" />
-                Sign Out
-              </button>
+        {open && (
+          <div
+            className="glass absolute right-0 mt-1.5 w-52 rounded-xl overflow-hidden shadow-2xl animate-fade-in"
+            style={{ zIndex:100 }}
+          >
+            <div className="px-4 py-3" style={{ borderBottom:'1px solid var(--b1)' }}>
+              <p className="text-sm font-semibold" style={{ color:'var(--t0)' }}>{user?.username}</p>
+              <p className="text-xs mt-0.5" style={{ color:'var(--t2)' }}>{user?.email}</p>
             </div>
-          )}
-        </div>
+            <button
+              onClick={() => { logout(); navigate('/login'); }}
+              className="w-full px-4 py-2.5 text-left text-sm flex items-center gap-2.5 transition-colors"
+              style={{ color:'var(--rose)' }}
+              onMouseEnter={e => (e.currentTarget.style.background='rgba(248,113,113,0.08)')}
+              onMouseLeave={e => (e.currentTarget.style.background='transparent')}
+            >
+              <LogOut className="w-3.5 h-3.5" />
+              Sign Out
+            </button>
+          </div>
+        )}
       </div>
     </header>
   );

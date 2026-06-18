@@ -1,336 +1,324 @@
 import { Link } from 'react-router-dom';
+import { useEffect, useRef, useState } from 'react';
 import {
-  CheckCircle2, FileSpreadsheet, Cable, FileText,
-  Network, GitBranch, Layers, ArrowRight,
-  ScanSearch, Sparkles, Gauge, Waves,
-  BarChart3, Zap, Activity,
+  CheckCircle2, FileSpreadsheet, Cable, FileText, Network,
+  GitBranch, Layers, ArrowUpRight, ScanSearch, Sparkles,
+  Gauge, Zap, BarChart3, ArrowRight,
 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 
-const featuredModule = {
-  id: 'smart-datasheet',
-  name: 'Smart Spec Extraction',
-  shortName: 'SDIE',
-  icon: ScanSearch,
-  description: 'Upload tender PDFs — AI reads section headings, groups specs per instrument type, and generates pre-filled datasheets. No manual copying.',
-  path: '/smart-datasheet',
-  badge: 'AI-Powered',
-};
-
+/* ── Data ─────────────────────────────────────────────────────────────────── */
 const modules = [
   {
-    id: 'validator',
+    id: 'validator',   path: '/validator',      icon: CheckCircle2,
     name: 'IODB Validator',
-    icon: CheckCircle2,
-    description: 'Validate Instrument & Operations Database files against predefined and custom engineering rules.',
-    path: '/validator',
-    accent: '#0ea5e9',
-    accentBg: 'rgba(14,165,233,0.08)',
-    tag: 'Validation',
+    desc: 'Validate instrument databases against predefined and custom engineering rules.',
+    accent: '#4ade80', tag: 'Validation',
   },
   {
-    id: 'instrument',
+    id: 'instrument',  path: '/instrument-list', icon: FileSpreadsheet,
     name: 'Instrument List',
-    icon: FileSpreadsheet,
-    description: 'Generate instrument lists from IODB data with smart column filters and export.',
-    path: '/instrument-list',
-    accent: '#10b981',
-    accentBg: 'rgba(16,185,129,0.08)',
-    tag: 'Generator',
+    desc: 'Generate instrument lists from IODB data with smart column filters.',
+    accent: '#60a5fa', tag: 'Generator',
   },
   {
-    id: 'io',
+    id: 'io',          path: '/io-list',          icon: Network,
     name: 'I/O List',
-    icon: Network,
-    description: 'Create structured I/O signal lists with per-column filtering and live preview.',
-    path: '/io-list',
-    accent: '#a78bfa',
-    accentBg: 'rgba(167,139,250,0.08)',
-    tag: 'Generator',
+    desc: 'Create structured I/O signal lists with per-column filtering and live preview.',
+    accent: '#a78bfa', tag: 'Generator',
   },
   {
-    id: 'datasheet',
+    id: 'datasheet',   path: '/datasheet',        icon: FileText,
     name: 'Data Sheet',
-    icon: FileText,
-    description: 'Generate technical datasheets per tag with intelligent column matching to SOP templates.',
-    path: '/datasheet',
-    accent: '#f59e0b',
-    accentBg: 'rgba(245,158,11,0.08)',
-    tag: 'Generator',
+    desc: 'Generate technical datasheets per tag with intelligent column matching.',
+    accent: '#fb923c', tag: 'Generator',
   },
   {
-    id: 'cover',
+    id: 'cover',       path: '/cover-sheet',      icon: Layers,
     name: 'Cover Sheet',
-    icon: Layers,
-    description: 'Build document cover sheets with custom branding, revision control, and WABAG formatting.',
-    path: '/cover-sheet',
-    accent: '#14b8a6',
-    accentBg: 'rgba(20,184,166,0.08)',
-    tag: 'Documents',
+    desc: 'Build cover sheets with custom branding and WABAG revision control.',
+    accent: '#2dd4bf', tag: 'Documents',
   },
   {
-    id: 'cable',
+    id: 'cable',       path: '/cable-schedule',   icon: Cable,
     name: 'Cable Schedule',
-    icon: Cable,
-    description: 'Create cable schedules grouped by junction box from field instrument data.',
-    path: '/cable-schedule',
-    accent: '#f43f5e',
-    accentBg: 'rgba(244,63,94,0.08)',
-    tag: 'Generator',
+    desc: 'Create cable schedules grouped by junction box from field instrument data.',
+    accent: '#f87171', tag: 'Generator',
   },
   {
-    id: 'loop',
+    id: 'loop',        path: '/loop-wiring',      icon: GitBranch,
     name: 'Loop Wiring',
-    icon: GitBranch,
-    description: 'Generate loop wiring diagrams automatically from input files and instrument data.',
-    path: '/loop-wiring',
-    accent: '#3b82f6',
-    accentBg: 'rgba(59,130,246,0.08)',
-    tag: 'Generator',
+    desc: 'Generate loop wiring diagrams automatically from input files.',
+    accent: '#fbbf24', tag: 'Generator',
   },
 ];
 
-const stats = [
-  { label: 'Total Modules', value: '8', icon: Gauge, color: '#0ea5e9' },
-  { label: 'AI-Powered Tools', value: '1', icon: Sparkles, color: '#f59e0b' },
-  { label: 'Auto Generators', value: '6', icon: Zap, color: '#10b981' },
-  { label: 'System Status', value: 'Live', icon: Activity, color: '#a78bfa' },
-];
+/* ── Animated counter ─────────────────────────────────────────────────────── */
+function Counter({ to, suffix = '' }: { to: number; suffix?: string }) {
+  const [val, setVal] = useState(0);
+  const ref = useRef<HTMLSpanElement>(null);
 
+  useEffect(() => {
+    let start: number | null = null;
+    const duration = 900;
+    function step(ts: number) {
+      if (!start) start = ts;
+      const progress = Math.min((ts - start) / duration, 1);
+      const ease = 1 - Math.pow(1 - progress, 3);
+      setVal(Math.round(ease * to));
+      if (progress < 1) requestAnimationFrame(step);
+    }
+    const id = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(id);
+  }, [to]);
+
+  return <span ref={ref}>{val}{suffix}</span>;
+}
+
+/* ── Mouse-tracking glow on cards ─────────────────────────────────────────── */
+function useMouseGlow() {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    function move(e: MouseEvent) {
+      const rect = el!.getBoundingClientRect();
+      el!.style.setProperty('--mx', `${e.clientX - rect.left}px`);
+      el!.style.setProperty('--my', `${e.clientY - rect.top}px`);
+    }
+    el.addEventListener('mousemove', move);
+    return () => el.removeEventListener('mousemove', move);
+  }, []);
+  return ref;
+}
+
+/* ── Module card ───────────────────────────────────────────────────────────── */
+function ModuleCard({ mod, delay }: { mod: typeof modules[0]; delay: number }) {
+  const Icon = mod.icon;
+  const ref = useMouseGlow();
+
+  return (
+    <Link to={mod.path} className="block group">
+      <div
+        ref={ref}
+        className="module-card h-full p-5 flex flex-col animate-rise"
+        style={{ animationDelay:`${delay}ms`, '--mx':'50%', '--my':'50%' } as React.CSSProperties}
+      >
+        {/* Subtle mouse-following inner glow */}
+        <div
+          className="pointer-events-none absolute inset-0 rounded-2xl opacity-0 group-hover:opacity-100 transition-opacity duration-300"
+          style={{
+            background:'radial-gradient(200px circle at var(--mx) var(--my), rgba(255,255,255,0.03) 0%, transparent 70%)',
+          }}
+        />
+
+        {/* Top accent line */}
+        <div
+          className="absolute top-0 left-6 right-6 h-px rounded-full"
+          style={{ background:`linear-gradient(90deg, transparent, ${mod.accent}66, transparent)`, opacity:0 }}
+          ref={el => { if (el) el.closest('.group')?.addEventListener('mouseenter', () => { el.style.opacity='1'; }); if (el) el.closest('.group')?.addEventListener('mouseleave', () => { el.style.opacity='0'; }); }}
+        />
+
+        <div className="flex items-start justify-between mb-5">
+          <div
+            className="w-10 h-10 rounded-xl flex items-center justify-center"
+            style={{ background:`${mod.accent}18`, border:`1px solid ${mod.accent}30` }}
+          >
+            <Icon className="w-4.5 h-4.5" style={{ color:mod.accent, width:'18px', height:'18px' }} />
+          </div>
+          <span
+            className="text-[10px] font-semibold px-2 py-0.5 rounded-full tracking-wide"
+            style={{ background:`${mod.accent}14`, color:mod.accent, border:`1px solid ${mod.accent}25` }}
+          >
+            {mod.tag}
+          </span>
+        </div>
+
+        <h3 className="text-sm font-bold mb-2 leading-snug" style={{ color:'var(--t0)', fontFamily:"'Space Grotesk',sans-serif" }}>
+          {mod.name}
+        </h3>
+        <p className="text-xs leading-relaxed flex-1" style={{ color:'var(--t1)' }}>
+          {mod.desc}
+        </p>
+
+        <div
+          className="flex items-center gap-1 text-xs font-semibold mt-4 opacity-0 group-hover:opacity-100 transition-all duration-200 group-hover:translate-x-1 translate-x-0"
+          style={{ color:mod.accent }}
+        >
+          Open <ArrowRight className="w-3 h-3" />
+        </div>
+      </div>
+    </Link>
+  );
+}
+
+/* ── Page ──────────────────────────────────────────────────────────────────── */
 export default function DashboardPage() {
   const { user } = useAuth();
-  const FeaturedIcon = featuredModule.icon;
 
   return (
     <div className="space-y-8">
 
-      {/* ── Hero Section ── */}
+      {/* ── Hero ── */}
       <div
-        className="relative rounded-2xl overflow-hidden"
-        style={{
-          background: 'linear-gradient(135deg, rgba(6,20,40,0.95) 0%, rgba(10,28,56,0.9) 100%)',
-          border: '1px solid rgba(14,165,233,0.18)',
-        }}
+        className="relative overflow-hidden rounded-2xl"
+        style={{ background:'var(--s2)', border:'1px solid var(--b1)' }}
       >
-        {/* Background ambient elements */}
-        <div className="absolute inset-0 dot-grid opacity-40 pointer-events-none" />
-        <div
-          className="absolute top-0 right-0 w-96 h-96 rounded-full blur-3xl pointer-events-none"
-          style={{ background: 'radial-gradient(circle, rgba(14,165,233,0.12) 0%, transparent 70%)' }}
-        />
-        <div
-          className="absolute bottom-0 left-0 w-72 h-72 rounded-full blur-3xl pointer-events-none"
-          style={{ background: 'radial-gradient(circle, rgba(6,182,212,0.08) 0%, transparent 70%)' }}
-        />
+        {/* Animated mesh blobs */}
+        <div className="absolute inset-0 overflow-hidden pointer-events-none">
+          <div
+            className="mesh-blob-1 absolute -top-20 -left-20 w-72 h-72 rounded-full blur-3xl"
+            style={{ background:'rgba(20,184,166,0.08)' }}
+          />
+          <div
+            className="mesh-blob-2 absolute -bottom-16 -right-16 w-64 h-64 rounded-full blur-3xl"
+            style={{ background:'rgba(167,139,250,0.07)' }}
+          />
+          <div
+            className="mesh-blob-3 absolute top-10 right-1/3 w-48 h-48 rounded-full blur-3xl"
+            style={{ background:'rgba(96,165,250,0.06)' }}
+          />
+        </div>
 
-        <div className="relative px-8 py-10">
-          <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6">
-            <div className="animate-slide-up">
-              <div className="flex items-center gap-2 mb-3">
-                <Waves className="w-4 h-4 text-sky-400" />
-                <span className="text-xs font-medium tracking-widest uppercase text-sky-400/70">
-                  WABAG Water Treatment · iEZ Platform
-                </span>
-              </div>
-              <h1
-                className="text-4xl font-black leading-tight mb-2"
-                style={{ fontFamily: "'Space Grotesk', sans-serif" }}
-              >
-                <span className="text-white">Welcome back, </span>
-                <span className="text-gradient">{user?.username || 'Engineer'}</span>
-              </h1>
-              <p className="text-base max-w-lg" style={{ color: 'rgba(147,197,253,0.7)' }}>
-                Intelligent document automation for water treatment plant instrumentation.
-                Select a module below to get started.
-              </p>
-            </div>
+        {/* Dot grid */}
+        <div className="absolute inset-0 dot-grid opacity-30 pointer-events-none" />
 
-            {/* Stats row */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-2 xl:grid-cols-4 gap-3 animate-slide-up animation-delay-200">
-              {stats.map((s) => {
-                const Icon = s.icon;
-                return (
-                  <div
-                    key={s.label}
-                    className="px-4 py-3 rounded-xl flex flex-col gap-1"
-                    style={{
-                      background: 'rgba(255,255,255,0.03)',
-                      border: `1px solid ${s.color}22`,
-                    }}
-                  >
-                    <div className="flex items-center gap-1.5">
-                      <Icon className="w-3.5 h-3.5" style={{ color: s.color }} />
-                      <span className="text-[10px] font-medium tracking-wide uppercase" style={{ color: `${s.color}99` }}>
-                        {s.label}
-                      </span>
-                    </div>
-                    <span className="text-2xl font-black" style={{ color: s.color, fontFamily: "'Space Grotesk', sans-serif" }}>
-                      {s.value}
+        <div className="relative px-8 py-10 flex flex-col lg:flex-row lg:items-center gap-8">
+          {/* Greeting */}
+          <div className="flex-1 animate-rise">
+            <p
+              className="text-xs font-semibold tracking-widest uppercase mb-3"
+              style={{ color:'var(--t2)' }}
+            >
+              WABAG Water Treatment · Engineering Platform
+            </p>
+            <h1
+              className="text-4xl font-black leading-tight mb-3"
+              style={{ fontFamily:"'Space Grotesk',sans-serif", color:'var(--t0)', letterSpacing:'-0.02em' }}
+            >
+              Welcome, {' '}
+              <span className="text-gradient">{user?.username || 'Engineer'}</span>
+            </h1>
+            <p className="text-sm max-w-md" style={{ color:'var(--t1)', lineHeight:'1.7' }}>
+              Intelligent document automation for instrumentation teams.
+              Every module runs on live data from your IODB.
+            </p>
+          </div>
+
+          {/* Stat chips */}
+          <div className="grid grid-cols-2 gap-3 animate-rise animation-delay-200">
+            {[
+              { label: 'Modules', val: 8,    icon: Gauge,    suffix: '', color:'var(--teal)' },
+              { label: 'AI Tools', val: 1,   icon: Sparkles, suffix: '',  color:'var(--violet)' },
+              { label: 'Auto-Gen', val: 6,   icon: Zap,      suffix: '',  color:'#60a5fa' },
+              { label: 'Uptime',   val: 100, icon: BarChart3, suffix:'%', color:'#4ade80' },
+            ].map(s => {
+              const Icon = s.icon;
+              return (
+                <div
+                  key={s.label}
+                  className="px-4 py-3 rounded-xl animate-ticker"
+                  style={{ background:'var(--s1)', border:'1px solid var(--b1)' }}
+                >
+                  <div className="flex items-center gap-1.5 mb-2">
+                    <Icon className="w-3 h-3" style={{ color:s.color }} />
+                    <span className="text-[10px] uppercase tracking-wider font-semibold" style={{ color:'var(--t2)' }}>
+                      {s.label}
                     </span>
                   </div>
-                );
-              })}
-            </div>
+                  <span
+                    className="text-2xl font-black"
+                    style={{ fontFamily:"'Space Grotesk',sans-serif", color:s.color }}
+                  >
+                    <Counter to={s.val} suffix={s.suffix} />
+                  </span>
+                </div>
+              );
+            })}
           </div>
         </div>
       </div>
 
-      {/* ── Featured: SDIE ── */}
-      <div className="animate-slide-up animation-delay-200">
-        <div className="flex items-center gap-2 mb-3">
-          <Sparkles className="w-4 h-4 text-amber-400" />
-          <h2 className="text-xs font-bold uppercase tracking-widest" style={{ color: 'rgba(125,211,252,0.5)' }}>
-            Featured Tool
-          </h2>
-        </div>
+      {/* ── Featured SDIE ── */}
+      <div>
+        <p className="text-[10px] font-semibold tracking-widest uppercase mb-3 flex items-center gap-1.5" style={{ color:'var(--t2)' }}>
+          <Sparkles className="w-3 h-3" style={{ color:'var(--violet)' }} />
+          Featured · AI-Powered Tool
+        </p>
 
-        <Link to={featuredModule.path} className="block group">
+        <Link to="/smart-datasheet" className="block group">
           <div
-            className="relative rounded-2xl overflow-hidden transition-all duration-300 group-hover:scale-[1.01]"
+            className="relative rounded-2xl overflow-hidden transition-all duration-300 group-hover:shadow-2xl group-hover:-translate-y-1"
             style={{
-              background: 'linear-gradient(135deg, rgba(14,165,233,0.12) 0%, rgba(6,182,212,0.08) 50%, rgba(59,130,246,0.1) 100%)',
-              border: '1px solid rgba(14,165,233,0.3)',
+              background:'linear-gradient(135deg, rgba(20,184,166,0.08) 0%, rgba(167,139,250,0.06) 50%, rgba(26,29,38,1) 100%)',
+              border:'1px solid var(--b2)',
             }}
           >
-            <div className="absolute inset-0 dot-grid opacity-20 pointer-events-none" />
+            {/* Ambient glow */}
             <div
-              className="absolute top-0 right-0 w-64 h-64 rounded-full blur-3xl pointer-events-none"
-              style={{ background: 'radial-gradient(circle, rgba(14,165,233,0.15) 0%, transparent 70%)' }}
+              className="absolute top-0 left-0 w-64 h-32 rounded-full blur-3xl pointer-events-none"
+              style={{ background:'rgba(20,184,166,0.1)' }}
             />
 
-            <div className="relative p-6 flex flex-col sm:flex-row sm:items-center gap-6">
+            <div className="relative flex flex-col sm:flex-row sm:items-center gap-6 p-6">
               <div
-                className="w-14 h-14 rounded-2xl flex items-center justify-center flex-shrink-0 shadow-xl"
-                style={{
-                  background: 'linear-gradient(135deg, #0ea5e9, #0369a1)',
-                  boxShadow: '0 0 24px rgba(14,165,233,0.35)',
-                }}
+                className="w-14 h-14 rounded-2xl flex items-center justify-center flex-shrink-0"
+                style={{ background:'linear-gradient(135deg,var(--teal),#0d9488)', boxShadow:'0 8px 24px rgba(20,184,166,0.25)' }}
               >
-                <FeaturedIcon className="w-7 h-7 text-white" />
+                <ScanSearch className="w-7 h-7 text-white" />
               </div>
 
               <div className="flex-1">
                 <div className="flex flex-wrap items-center gap-2 mb-1.5">
                   <h3
-                    className="text-xl font-bold text-white"
-                    style={{ fontFamily: "'Space Grotesk', sans-serif" }}
+                    className="text-lg font-bold"
+                    style={{ fontFamily:"'Space Grotesk',sans-serif", color:'var(--t0)' }}
                   >
-                    {featuredModule.name}
+                    Smart Spec Extraction
                   </h3>
-                  <span
-                    className="px-2 py-0.5 text-[10px] font-bold rounded-full tracking-wider"
-                    style={{
-                      background: 'rgba(245,158,11,0.15)',
-                      border: '1px solid rgba(245,158,11,0.35)',
-                      color: '#fbbf24',
-                    }}
-                  >
-                    {featuredModule.badge}
+                  <span className="px-2 py-0.5 text-[9px] font-bold rounded-full tracking-wider"
+                    style={{ background:'var(--violet-dim)', color:'var(--violet)', border:'1px solid rgba(167,139,250,0.2)' }}>
+                    AI · GROQ
                   </span>
-                  <span
-                    className="px-2 py-0.5 text-[10px] font-bold rounded-full tracking-wider"
-                    style={{
-                      background: 'rgba(14,165,233,0.12)',
-                      border: '1px solid rgba(14,165,233,0.25)',
-                      color: '#38bdf8',
-                    }}
-                  >
-                    {featuredModule.shortName}
+                  <span className="px-2 py-0.5 text-[9px] font-bold rounded-full tracking-wider"
+                    style={{ background:'rgba(20,184,166,0.12)', color:'var(--teal-lt)', border:'1px solid rgba(20,184,166,0.2)' }}>
+                    SDIE
                   </span>
                 </div>
-                <p className="text-sm max-w-2xl" style={{ color: 'rgba(147,197,253,0.75)' }}>
-                  {featuredModule.description}
+                <p className="text-sm max-w-2xl" style={{ color:'var(--t1)', lineHeight:'1.65' }}>
+                  Upload tender PDFs — AI reads section headings, groups specs per instrument type, and generates pre-filled datasheets. Zero manual copying.
                 </p>
               </div>
 
               <div
-                className="flex items-center gap-2 px-5 py-2.5 rounded-xl font-semibold text-sm flex-shrink-0 transition-all duration-200 group-hover:shadow-lg"
-                style={{
-                  background: 'linear-gradient(135deg, #0ea5e9, #0369a1)',
-                  color: 'white',
-                  boxShadow: '0 4px 16px rgba(14,165,233,0.25)',
-                }}
+                className="flex items-center gap-2 px-5 py-2.5 rounded-xl font-bold text-sm flex-shrink-0 text-white transition-all duration-200"
+                style={{ background:'linear-gradient(135deg,var(--teal),#0d9488)', boxShadow:'0 4px 16px rgba(20,184,166,0.22)' }}
               >
-                Launch
-                <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
+                Launch <ArrowUpRight className="w-4 h-4" />
               </div>
             </div>
           </div>
         </Link>
       </div>
 
-      {/* ── Engineering Modules Grid ── */}
+      {/* ── Module Grid ── */}
       <div>
-        <div className="flex items-center gap-2 mb-3">
-          <BarChart3 className="w-4 h-4 text-sky-400/60" />
-          <h2 className="text-xs font-bold uppercase tracking-widest" style={{ color: 'rgba(125,211,252,0.5)' }}>
-            Engineering Modules
-          </h2>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {modules.map((mod, i) => {
-            const Icon = mod.icon;
-            return (
-              <Link key={mod.id} to={mod.path} className="block group">
-                <div
-                  className="interactive-card p-5 h-full flex flex-col animate-slide-up"
-                  style={{ animationDelay: `${i * 60 + 300}ms` }}
-                >
-                  {/* Top accent line */}
-                  <div
-                    className="absolute top-0 left-0 right-0 h-0.5 rounded-t-2xl"
-                    style={{ background: `linear-gradient(90deg, ${mod.accent}, transparent)` }}
-                  />
-
-                  <div className="flex items-start justify-between mb-4">
-                    <div
-                      className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0"
-                      style={{ background: mod.accentBg, border: `1px solid ${mod.accent}30` }}
-                    >
-                      <Icon className="w-5 h-5" style={{ color: mod.accent }} />
-                    </div>
-                    <span
-                      className="text-[10px] font-semibold px-2 py-0.5 rounded-full"
-                      style={{
-                        background: `${mod.accent}14`,
-                        color: mod.accent,
-                        border: `1px solid ${mod.accent}22`,
-                      }}
-                    >
-                      {mod.tag}
-                    </span>
-                  </div>
-
-                  <h3
-                    className="font-bold text-base text-sky-100 mb-2 leading-tight group-hover:text-white transition-colors"
-                    style={{ fontFamily: "'Space Grotesk', sans-serif" }}
-                  >
-                    {mod.name}
-                  </h3>
-                  <p className="text-xs leading-relaxed flex-1" style={{ color: 'rgba(147,197,253,0.6)' }}>
-                    {mod.description}
-                  </p>
-
-                  <div
-                    className="flex items-center gap-1.5 text-xs font-semibold mt-4 opacity-0 group-hover:opacity-100 transition-all duration-200 group-hover:translate-x-1"
-                    style={{ color: mod.accent }}
-                  >
-                    Open module <ArrowRight className="w-3.5 h-3.5" />
-                  </div>
-                </div>
-              </Link>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* ── Footer note ── */}
-      <div className="pb-2 text-center">
-        <p className="text-[11px]" style={{ color: 'rgba(125,211,252,0.3)' }}>
-          iEZ Platform · WABAG Water Treatment Solutions · AI-Powered Engineering Automation
+        <p className="text-[10px] font-semibold tracking-widest uppercase mb-4 flex items-center gap-1.5" style={{ color:'var(--t2)' }}>
+          <BarChart3 className="w-3 h-3" />
+          Engineering Modules
         </p>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+          {modules.map((mod, i) => (
+            <ModuleCard key={mod.id} mod={mod} delay={i * 50 + 100} />
+          ))}
+        </div>
       </div>
+
+      {/* ── Footer ── */}
+      <p className="text-center text-[11px] pb-4" style={{ color:'var(--t2)' }}>
+        iEZ Platform · WABAG Water Treatment Solutions · AI-Powered Engineering Automation
+      </p>
     </div>
   );
 }

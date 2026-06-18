@@ -1,13 +1,72 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '@/context/AuthContext';
-import { LogIn, Droplets, Eye, EyeOff, Waves, Zap, Shield, BarChart3 } from 'lucide-react';
+import { LogIn, Droplets, Eye, EyeOff, Zap, Shield, BarChart3, Waves } from 'lucide-react';
+
+/* ── Canvas particle system (water bubbles) ──────────────────────────────── */
+function WaterCanvas() {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    function resize() {
+      canvas!.width = canvas!.offsetWidth;
+      canvas!.height = canvas!.offsetHeight;
+    }
+    resize();
+    window.addEventListener('resize', resize);
+
+    type Particle = { x:number; y:number; r:number; vy:number; vx:number; opacity:number; color:string; };
+    const colors = ['rgba(20,184,166,', 'rgba(167,139,250,', 'rgba(96,165,250,'];
+    const particles: Particle[] = Array.from({ length: 40 }, () => ({
+      x: Math.random() * canvas!.width,
+      y: Math.random() * canvas!.height,
+      r: Math.random() * 2.5 + 0.5,
+      vy: -(Math.random() * 0.4 + 0.1),
+      vx: (Math.random() - 0.5) * 0.15,
+      opacity: Math.random() * 0.4 + 0.1,
+      color: colors[Math.floor(Math.random() * colors.length)],
+    }));
+
+    let rafId: number;
+    function draw() {
+      ctx!.clearRect(0, 0, canvas!.width, canvas!.height);
+      particles.forEach(p => {
+        ctx!.beginPath();
+        ctx!.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+        ctx!.fillStyle = p.color + p.opacity + ')';
+        ctx!.fill();
+
+        p.y += p.vy;
+        p.x += p.vx;
+        p.opacity -= 0.0008;
+
+        if (p.y < -5 || p.opacity <= 0) {
+          p.x = Math.random() * canvas!.width;
+          p.y = canvas!.height + 5;
+          p.opacity = Math.random() * 0.4 + 0.1;
+          p.r = Math.random() * 2.5 + 0.5;
+        }
+      });
+      rafId = requestAnimationFrame(draw);
+    }
+    draw();
+
+    return () => { cancelAnimationFrame(rafId); window.removeEventListener('resize', resize); };
+  }, []);
+
+  return <canvas ref={canvasRef} className="absolute inset-0 w-full h-full pointer-events-none" />;
+}
 
 const features = [
-  { icon: Zap,       text: 'AI-powered spec extraction from tender PDFs' },
-  { icon: BarChart3, text: 'Auto-generate datasheets, I/O lists, cable schedules' },
-  { icon: Shield,    text: 'IODB validation with custom engineering rules' },
-  { icon: Waves,     text: 'Built for WABAG water treatment projects' },
+  { icon: Zap,      label: 'AI spec extraction from tender PDFs' },
+  { icon: BarChart3,label: 'Auto-generate datasheets & I/O lists' },
+  { icon: Shield,   label: 'IODB validation with custom rules' },
+  { icon: Waves,    label: 'Built for WABAG water treatment' },
 ];
 
 export default function LoginPage() {
@@ -34,261 +93,169 @@ export default function LoginPage() {
   };
 
   return (
-    <div
-      className="min-h-screen flex"
-      style={{ background: 'var(--bg-base)' }}
-    >
-      {/* ── Left panel: Branding ── */}
-      <div
-        className="hidden lg:flex flex-col justify-between w-[45%] p-12 relative overflow-hidden"
-        style={{
-          background: 'linear-gradient(160deg, #061428 0%, #020d1a 60%, #020d1a 100%)',
-          borderRight: '1px solid rgba(14,165,233,0.12)',
-        }}
-      >
-        {/* Background decorations */}
-        <div className="absolute inset-0 dot-grid opacity-30 pointer-events-none" />
-        <div
-          className="absolute top-1/4 left-1/2 -translate-x-1/2 w-96 h-96 rounded-full blur-3xl pointer-events-none"
-          style={{ background: 'radial-gradient(circle, rgba(14,165,233,0.08) 0%, transparent 70%)' }}
-        />
-        <div
-          className="absolute bottom-0 left-0 w-80 h-80 rounded-full blur-3xl pointer-events-none"
-          style={{ background: 'radial-gradient(circle, rgba(6,182,212,0.06) 0%, transparent 70%)' }}
-        />
+    <div className="min-h-screen flex" style={{ background:'var(--s0)' }}>
 
-        {/* Logo */}
+      {/* ── Left — Branding ── */}
+      <div
+        className="hidden lg:flex flex-col justify-between w-[46%] relative overflow-hidden p-12"
+        style={{ background:'var(--s1)', borderRight:'1px solid var(--b1)' }}
+      >
+        <WaterCanvas />
+
+        {/* Mesh blobs */}
+        <div className="absolute inset-0 pointer-events-none overflow-hidden">
+          <div className="mesh-blob-1 absolute -top-24 -left-24 w-80 h-80 rounded-full blur-3xl" style={{ background:'rgba(20,184,166,0.07)' }} />
+          <div className="mesh-blob-2 absolute bottom-0 right-0 w-72 h-72 rounded-full blur-3xl" style={{ background:'rgba(167,139,250,0.06)' }} />
+        </div>
+
+        {/* Content */}
         <div className="relative">
-          <div className="flex items-center gap-3 mb-3">
-            <div
-              className="w-11 h-11 rounded-2xl flex items-center justify-center shadow-xl"
-              style={{
-                background: 'linear-gradient(135deg, #0ea5e9, #0369a1)',
-                boxShadow: '0 0 24px rgba(14,165,233,0.3)',
-              }}
-            >
-              <Droplets className="w-6 h-6 text-white" />
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ background:'linear-gradient(135deg,var(--teal),#0d9488)', boxShadow:'0 0 20px rgba(20,184,166,0.2)' }}>
+              <Droplets className="w-5 h-5 text-white" />
             </div>
             <div>
-              <h1
-                className="text-2xl font-black leading-none"
-                style={{ fontFamily: "'Space Grotesk', sans-serif" }}
-              >
-                <span className="text-white">i</span>
-                <span className="text-gradient">EZ</span>
-              </h1>
-              <p className="text-[10px] tracking-wider uppercase" style={{ color: 'rgba(125,211,252,0.4)' }}>
-                Intelligent Engineering Zone
-              </p>
+              <span className="text-xl font-black" style={{ fontFamily:"'Space Grotesk',sans-serif", color:'var(--t0)', letterSpacing:'-0.02em' }}>
+                i<span className="text-gradient">EZ</span>
+              </span>
+              <p className="text-[10px] tracking-widest uppercase" style={{ color:'var(--t2)' }}>Intelligent Engineering Zone</p>
             </div>
           </div>
         </div>
 
-        {/* Hero */}
-        <div className="relative flex-1 flex flex-col justify-center">
-          <div className="mb-8">
-            <div
-              className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full mb-6 text-xs font-medium"
-              style={{
-                background: 'rgba(14,165,233,0.1)',
-                border: '1px solid rgba(14,165,233,0.2)',
-                color: '#38bdf8',
-              }}
-            >
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-              Water Treatment · India
-            </div>
-            <h2
-              className="text-4xl font-black leading-tight mb-4"
-              style={{ fontFamily: "'Space Grotesk', sans-serif" }}
-            >
-              <span className="text-white">Engineering</span>
-              <br />
-              <span className="text-gradient">Automation</span>
-              <br />
-              <span className="text-white">Redefined</span>
-            </h2>
-            <p className="text-base leading-relaxed" style={{ color: 'rgba(147,197,253,0.65)' }}>
-              Purpose-built for WABAG instrumentation teams — from IODB validation to AI-powered datasheet generation.
-            </p>
+        <div className="relative flex-1 flex flex-col justify-center py-8">
+          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full mb-8 w-fit text-xs font-medium"
+            style={{ background:'rgba(20,184,166,0.08)', border:'1px solid rgba(20,184,166,0.15)', color:'var(--teal-lt)' }}>
+            <span className="w-1.5 h-1.5 rounded-full bg-green-400" />
+            WABAG Water Treatment · India
           </div>
 
-          {/* Feature list */}
+          <h2
+            className="text-4xl font-black mb-5 leading-tight"
+            style={{ fontFamily:"'Space Grotesk',sans-serif", color:'var(--t0)', letterSpacing:'-0.025em' }}
+          >
+            Engineering<br />
+            <span className="text-gradient">automation</span><br />
+            redefined.
+          </h2>
+
+          <p className="text-sm mb-10" style={{ color:'var(--t1)', lineHeight:'1.75' }}>
+            Purpose-built for WABAG instrumentation teams — from IODB validation to AI-powered datasheet generation.
+          </p>
+
           <div className="space-y-3">
             {features.map((f, i) => {
               const Icon = f.icon;
               return (
-                <div
-                  key={i}
-                  className="flex items-center gap-3 animate-slide-up"
-                  style={{ animationDelay: `${i * 100 + 200}ms` }}
-                >
-                  <div
-                    className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0"
-                    style={{ background: 'rgba(14,165,233,0.12)', border: '1px solid rgba(14,165,233,0.2)' }}
-                  >
-                    <Icon className="w-3.5 h-3.5 text-sky-400" />
+                <div key={i} className="flex items-center gap-3 animate-rise" style={{ animationDelay:`${i * 80 + 200}ms` }}>
+                  <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0"
+                    style={{ background:'var(--s2)', border:'1px solid var(--b1)' }}>
+                    <Icon className="w-3.5 h-3.5" style={{ color:'var(--teal)' }} />
                   </div>
-                  <span className="text-sm" style={{ color: 'rgba(147,197,253,0.7)' }}>{f.text}</span>
+                  <span className="text-sm" style={{ color:'var(--t1)' }}>{f.label}</span>
                 </div>
               );
             })}
           </div>
         </div>
 
-        {/* Bottom credit */}
         <div className="relative">
-          <p className="text-[11px]" style={{ color: 'rgba(125,211,252,0.3)' }}>
-            Built by Akash B · iEZ v2.0
-          </p>
+          <p className="text-[11px]" style={{ color:'var(--t2)' }}>Built by Akash B · iEZ v2.0</p>
         </div>
       </div>
 
-      {/* ── Right panel: Form ── */}
-      <div className="flex-1 flex items-center justify-center px-6 py-12">
-        <div className="w-full max-w-sm animate-slide-up">
+      {/* ── Right — Form ── */}
+      <div className="flex-1 flex items-center justify-center px-6">
+        <div className="w-full max-w-sm animate-rise">
 
           {/* Mobile logo */}
           <div className="lg:hidden flex items-center gap-3 justify-center mb-10">
-            <div
-              className="w-10 h-10 rounded-xl flex items-center justify-center"
-              style={{ background: 'linear-gradient(135deg, #0ea5e9, #0369a1)', boxShadow: '0 0 20px rgba(14,165,233,0.3)' }}
-            >
+            <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ background:'linear-gradient(135deg,var(--teal),#0d9488)' }}>
               <Droplets className="w-5 h-5 text-white" />
             </div>
-            <h1 className="text-2xl font-black" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>
-              <span className="text-white">i</span><span className="text-gradient">EZ</span>
-            </h1>
+            <span className="text-2xl font-black" style={{ fontFamily:"'Space Grotesk',sans-serif", color:'var(--t0)' }}>
+              i<span className="text-gradient">EZ</span>
+            </span>
           </div>
 
-          {/* Card */}
-          <div
-            className="rounded-2xl p-8"
-            style={{
-              background: 'rgba(6,20,40,0.85)',
-              backdropFilter: 'blur(20px)',
-              border: '1px solid rgba(14,165,233,0.18)',
-              boxShadow: '0 32px 64px rgba(2,13,26,0.5)',
-            }}
-          >
-            <div className="mb-8">
-              <h2
-                className="text-2xl font-bold text-white mb-1"
-                style={{ fontFamily: "'Space Grotesk', sans-serif" }}
-              >
-                Sign In
-              </h2>
-              <p className="text-sm" style={{ color: 'rgba(147,197,253,0.55)' }}>
-                Access your instrumentation workspace
-              </p>
+          <div className="mb-8">
+            <h2 className="text-2xl font-bold mb-1" style={{ fontFamily:"'Space Grotesk',sans-serif", color:'var(--t0)' }}>
+              Sign in
+            </h2>
+            <p className="text-sm" style={{ color:'var(--t1)' }}>Enter your credentials to continue</p>
+          </div>
+
+          {error && (
+            <div className="mb-6 px-4 py-3 rounded-xl text-sm animate-rise"
+              style={{ background:'rgba(248,113,113,0.08)', border:'1px solid rgba(248,113,113,0.2)', color:'var(--rose)' }}>
+              {error}
+            </div>
+          )}
+
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div>
+              <label className="block text-xs font-semibold mb-2 uppercase tracking-wider" style={{ color:'var(--t2)' }}>
+                Username
+              </label>
+              <input
+                type="text" required autoComplete="username"
+                value={username} onChange={e => setUsername(e.target.value)}
+                placeholder="your username"
+                className="input-field w-full"
+                style={{ width:'100%' }}
+              />
             </div>
 
-            {error && (
-              <div
-                className="mb-5 px-4 py-3 rounded-xl text-sm flex items-center gap-2 animate-slide-up"
-                style={{
-                  background: 'rgba(244,63,94,0.1)',
-                  border: '1px solid rgba(244,63,94,0.25)',
-                  color: '#fb7185',
-                }}
-              >
-                {error}
-              </div>
-            )}
-
-            <form onSubmit={handleSubmit} className="space-y-5">
-              <div>
-                <label className="block text-xs font-semibold mb-2 tracking-wide uppercase" style={{ color: 'rgba(125,211,252,0.6)' }}>
-                  Username
-                </label>
+            <div>
+              <label className="block text-xs font-semibold mb-2 uppercase tracking-wider" style={{ color:'var(--t2)' }}>
+                Password
+              </label>
+              <div className="relative">
                 <input
-                  type="text"
-                  required
-                  autoComplete="username"
-                  value={username}
-                  onChange={e => setUsername(e.target.value)}
-                  placeholder="Enter your username"
-                  className="w-full px-4 py-3 rounded-xl text-sm outline-none transition-all duration-200"
-                  style={{
-                    background: 'rgba(2,10,24,0.8)',
-                    border: '1px solid rgba(14,165,233,0.2)',
-                    color: '#f0f9ff',
-                  }}
-                  onFocus={e => (e.currentTarget.style.borderColor = 'rgba(14,165,233,0.55)')}
-                  onBlur={e => (e.currentTarget.style.borderColor = 'rgba(14,165,233,0.2)')}
+                  type={showPw ? 'text' : 'password'} required autoComplete="current-password"
+                  value={password} onChange={e => setPassword(e.target.value)}
+                  placeholder="••••••••"
+                  className="input-field w-full pr-10"
+                  style={{ paddingRight:'40px' }}
                 />
+                <button
+                  type="button" tabIndex={-1} onClick={() => setShowPw(!showPw)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 transition-opacity hover:opacity-100 opacity-50"
+                  style={{ color:'var(--t1)' }}
+                >
+                  {showPw ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
               </div>
-
-              <div>
-                <label className="block text-xs font-semibold mb-2 tracking-wide uppercase" style={{ color: 'rgba(125,211,252,0.6)' }}>
-                  Password
-                </label>
-                <div className="relative">
-                  <input
-                    type={showPw ? 'text' : 'password'}
-                    required
-                    autoComplete="current-password"
-                    value={password}
-                    onChange={e => setPassword(e.target.value)}
-                    placeholder="Enter your password"
-                    className="w-full px-4 py-3 pr-11 rounded-xl text-sm outline-none transition-all duration-200"
-                    style={{
-                      background: 'rgba(2,10,24,0.8)',
-                      border: '1px solid rgba(14,165,233,0.2)',
-                      color: '#f0f9ff',
-                    }}
-                    onFocus={e => (e.currentTarget.style.borderColor = 'rgba(14,165,233,0.55)')}
-                    onBlur={e => (e.currentTarget.style.borderColor = 'rgba(14,165,233,0.2)')}
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowPw(!showPw)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 transition-colors"
-                    style={{ color: 'rgba(125,211,252,0.4)' }}
-                    tabIndex={-1}
-                  >
-                    {showPw ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                  </button>
-                </div>
-              </div>
-
-              <button
-                type="submit"
-                disabled={loading}
-                className="w-full py-3 px-4 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed mt-2"
-                style={{
-                  background: loading ? 'rgba(14,165,233,0.4)' : 'linear-gradient(135deg, #0ea5e9, #0369a1)',
-                  color: 'white',
-                  boxShadow: loading ? 'none' : '0 8px 24px rgba(14,165,233,0.25)',
-                }}
-              >
-                {loading ? (
-                  <span className="flex items-center gap-2">
-                    <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                    Signing in…
-                  </span>
-                ) : (
-                  <>
-                    <LogIn className="w-4 h-4" />
-                    Sign In
-                  </>
-                )}
-              </button>
-            </form>
-
-            <div className="mt-6 text-center text-sm" style={{ color: 'rgba(125,211,252,0.45)' }}>
-              Don't have an account?{' '}
-              <Link
-                to="/register"
-                className="font-semibold transition-colors"
-                style={{ color: '#38bdf8' }}
-                onMouseEnter={e => (e.currentTarget.style.color = '#7dd3fc')}
-                onMouseLeave={e => (e.currentTarget.style.color = '#38bdf8')}
-              >
-                Sign up
-              </Link>
             </div>
-          </div>
+
+            <button
+              type="submit" disabled={loading}
+              className="btn btn-primary w-full py-3 mt-2 text-sm"
+            >
+              {loading ? (
+                <>
+                  <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                  Signing in…
+                </>
+              ) : (
+                <>
+                  <LogIn className="w-4 h-4" />
+                  Sign In
+                </>
+              )}
+            </button>
+          </form>
+
+          <p className="mt-6 text-center text-sm" style={{ color:'var(--t1)' }}>
+            Don't have an account?{' '}
+            <Link
+              to="/register"
+              className="font-semibold transition-colors"
+              style={{ color:'var(--teal-lt)' }}
+            >
+              Sign up
+            </Link>
+          </p>
         </div>
       </div>
     </div>

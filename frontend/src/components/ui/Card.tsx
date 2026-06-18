@@ -12,31 +12,16 @@ interface CardProps {
   accentColor?: string;
 }
 
-export default function Card({
-  title,
-  description,
-  icon: Icon,
-  iconClassName,
-  actions,
-  className,
-  children,
-  accentColor,
-}: CardProps) {
+export default function Card({ title, description, icon: Icon, iconClassName, actions, className, children, accentColor }: CardProps) {
   return (
     <div
       className={clsx('relative rounded-2xl p-6 overflow-hidden', className)}
-      style={{
-        background: 'rgba(10, 24, 50, 0.8)',
-        backdropFilter: 'blur(12px)',
-        WebkitBackdropFilter: 'blur(12px)',
-        border: '1px solid rgba(14,165,233,0.14)',
-      }}
+      style={{ background:'var(--s2)', border:'1px solid var(--b1)' }}
     >
-      {/* Top accent stripe */}
       {accentColor && (
         <div
-          className="absolute top-0 left-0 right-0 h-0.5 rounded-t-2xl"
-          style={{ background: `linear-gradient(90deg, ${accentColor}, transparent)` }}
+          className="absolute top-0 left-0 right-0 h-px"
+          style={{ background:`linear-gradient(90deg, ${accentColor}60, transparent)` }}
         />
       )}
 
@@ -44,22 +29,20 @@ export default function Card({
         <div className="flex items-start justify-between mb-5 gap-4">
           <div>
             {title && (
-              <h3
-                className="text-base font-bold text-sky-100 flex items-center gap-2"
-              >
+              <h3 className="text-sm font-bold flex items-center gap-2.5" style={{ color:'var(--t0)' }}>
                 {Icon && (
-                  <div
+                  <span
                     className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0"
-                    style={{ background: 'rgba(14,165,233,0.12)', border: '1px solid rgba(14,165,233,0.18)' }}
+                    style={{ background:'var(--s3)', border:'1px solid var(--b1)' }}
                   >
-                    <Icon className={clsx('w-3.5 h-3.5', iconClassName || 'text-sky-400')} />
-                  </div>
+                    <Icon className={clsx('w-3.5 h-3.5', iconClassName || 'text-teal-400')} />
+                  </span>
                 )}
                 {title}
               </h3>
             )}
             {description && (
-              <p className="text-xs mt-1.5" style={{ color: 'rgba(147,197,253,0.55)' }}>{description}</p>
+              <p className="text-xs mt-1.5 leading-relaxed" style={{ color:'var(--t1)' }}>{description}</p>
             )}
           </div>
           {actions && <div className="flex items-center gap-2 flex-shrink-0">{actions}</div>}

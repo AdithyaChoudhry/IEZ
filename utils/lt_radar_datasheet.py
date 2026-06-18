@@ -356,8 +356,9 @@ def generate(values: dict[str, Any]) -> bytes:
     ws.merge_cells("A52:A53")  # PURCHASE
     # Data rows: label B-E, value F-K (most rows)
     for r in range(9, 55):
-        if r in (16, 17):  # Pressure / Temp → split value cols
-            ws.merge_cells(f"B{r}:E{r}")
+        if r in (16, 17):
+            # Pressure / Temp rows: B=main label, C=Min, D=Nor, E=Max (all individual)
+            # Value cells: F-G (Min), H-I (Nor), J-K (Max) — each a separate merge
             ws.merge_cells(f"F{r}:G{r}")
             ws.merge_cells(f"H{r}:I{r}")
             ws.merge_cells(f"J{r}:K{r}")
@@ -511,25 +512,27 @@ def generate(values: dict[str, Any]) -> bytes:
         (53, "Model"),
         (54, "NOTES : "),
     ]
-    # Sub-labels for split rows
-    _split_rows = {
-        16: (["Pressure\n(Kg/Cm² g)", "Min", "Nor", "Max"], True),
-        17: (["Temp(°C)", "Min", "Nor", "Max"], True),
-    }
+    def _label(opx_r, col, val, ha="left", wrap=False, L=None, R=None, T=None, B=None):
+        c = ws.cell(row=opx_r, column=col, value=val)
+        c.fill      = NO_FILL
+        c.font      = font(sz=9)
+        c.alignment = align(h=ha, v="center", wrap=wrap)
+        c.border    = border(L=L or TH, R=R or TH, T=T or TH, B=B or TH)
+
     for opx_r, lbl in _labels:
-        lc = ws.cell(row=opx_r, column=2, value=lbl)
-        lc.fill      = NO_FILL
-        lc.font      = font(sz=9)
-        lc.alignment = align(h="left", v="center", wrap=(opx_r in (16, 17, 38)))
-        lc.border    = border(L=M, R=M, T=TH, B=TH)
-        # For split rows write Min/Nor/Max sub-labels
         if opx_r in (16, 17):
-            for sub_ci, sub_lbl in zip([3, 4, 5], ["Min", "Nor", "Max"]):
-                sc = ws.cell(row=opx_r, column=sub_ci, value=sub_lbl)
-                sc.fill      = NO_FILL
-                sc.font      = font(sz=9)
-                sc.alignment = align(h="center", v="center")
-                sc.border    = border(L=TH, R=TH, T=TH, B=TH)
+            # Split row: B=main label (individual), C=Min, D=Nor, E=Max (individual)
+            _label(opx_r, 2, lbl,   ha="left",   wrap=True,  L=M)
+            _label(opx_r, 3, "Min", ha="center")
+            _label(opx_r, 4, "Nor", ha="center")
+            _label(opx_r, 5, "Max", ha="center", R=M)
+        else:
+            # Normal row: col 2 is top-left of merged B-E
+            lc = ws.cell(row=opx_r, column=2, value=lbl)
+            lc.fill      = NO_FILL
+            lc.font      = font(sz=9)
+            lc.alignment = align(h="left", v="center", wrap=(opx_r == 38))
+            lc.border    = border(L=M, R=M, T=TH, B=TH)
 
     # ── WRITE USER VALUES ──────────────────────────────────────────────────────
     def _put(opx_row, opx_col, val):
@@ -581,27 +584,27 @@ def generate(values: dict[str, Any]) -> bytes:
     _put(36, 6, v.get("nozzle_height", ""))
     _put(37, 6, v.get("mounting_pos", ""))
     _put(38, 6, v.get("cable_distance", ""))
-    # TRANSMITTER header row (row 39 in openpyxl) → fixed "Non Contact radar"
+    # TRANSMITTER header row 39 → fixed sensor type label
     _put(39, 6, "Non Contact radar")
-    # TRANSMITTER specs
-    _put(40, 6, v.get("transmitter_type", "Integral"))
-    _put(41, 6, v.get("power_supply", "24 VDC"))
-    _put(42, 6, v.get("output", "4-20mA + HART"))
-    _put(43, 6, v.get("accuracy", "±2 mm"))
-    _put(44, 6, v.get("repeatability", "±1 mm"))
-    _put(45, 6, v.get("inst_range", ""))
-    _put(46, 6, v.get("calib_range", ""))
-    _put(47, 6, v.get("encl_protection", "IP67"))
-    _put(48, 6, v.get("cable_entry", "M20 x 1.5"))
-    _put(49, 6, v.get("display", "LCD"))
-    # OPTIONS
-    _put(50, 6, v.get("mounting_acc", ""))
-    _put(51, 6, "PROVIDED")    # SS Tag Plate fixed
-    # CERTIFICATION
-    _put(52, 6, v.get("area_cert", ""))
-    # PURCHASE
-    _put(53, 6, v.get("make", ""))
-    _put(54, 6, v.get("model_no", ""))
+    # TRANSMITTER specs (rows 40–48, matching template exactly)
+    _put(40, 6, v.get("power_supply",   "24 VDC"))
+    _put(41, 6, v.get("output",         "4-20mA + HART"))
+    _put(42, 6, v.get("accuracy",       "±2 mm"))
+    _put(43, 6, v.get("repeatability",  "±1 mm"))
+    _put(44, 6, v.get("inst_range",     ""))
+    _put(45, 6, v.get("calib_range",    ""))
+    _put(46, 6, v.get("encl_protection","IP67"))
+    _put(47, 6, v.get("cable_entry",    "M20 x 1.5"))
+    _put(48, 6, v.get("display",        "LCD"))
+    # OPTIONS (rows 49–50)
+    _put(49, 6, v.get("mounting_acc",   ""))
+    _put(50, 6, "PROVIDED")             # SS Tag Plate — fixed
+    # CERTIFICATION (row 51)
+    _put(51, 6, v.get("area_cert",      ""))
+    # PURCHASE (rows 52–53)
+    _put(52, 6, v.get("make",           ""))
+    _put(53, 6, v.get("model_no",       ""))
+    # NOTES row 54 handled below (merged B54:K54 → write to col 2)
     # NOTES (in col B of row 54 merged B:K)
     notes_cell = ws.cell(row=54, column=2, value=v.get("notes", ""))
     notes_cell.fill      = NO_FILL

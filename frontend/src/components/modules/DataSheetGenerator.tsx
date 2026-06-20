@@ -44,11 +44,14 @@ const role = (f: FieldSpec): 'iodb' | 'simre' | 'manual' => {
 };
 
 // ── Step indicator ─────────────────────────────────────────────────────────────
-const STEPS = ['IODB & Type', 'Tags & SOP', 'Spec Config', 'Notes & Vendor', 'Generate'];
-function StepBar({ current }: { current: number }) {
+const STEPS_NORMAL = ['IODB & Type', 'Tags & SOP', 'Spec Config', 'Notes & Vendor', 'Generate'];
+const STEPS_LT = ['IODB & Type', 'Tag', 'Input', 'Header', 'Specs', 'Vendor', 'Preview & Generate'];
+
+function StepBar({ current, ltMode }: { current: number; ltMode?: boolean }) {
+  const steps = ltMode ? STEPS_LT : STEPS_NORMAL;
   return (
     <div className="flex items-center gap-0 mb-8">
-      {STEPS.map((label, i) => {
+      {steps.map((label, i) => {
         const idx = i + 1;
         const done = idx < current;
         const active = idx === current;
@@ -69,7 +72,7 @@ function StepBar({ current }: { current: number }) {
                 {label}
               </span>
             </div>
-            {i < STEPS.length - 1 && (
+            {i < steps.length - 1 && (
               <div className="flex-1 h-px mx-2 mb-5" style={{ background: done ? 'var(--em)' : 'var(--b2)', transition: 'background 0.3s' }} />
             )}
           </div>
@@ -237,6 +240,9 @@ export default function DataSheetGenerator() {
   const [step, setStep] = useState(1);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+
+  // LT radar sub-flow tracking
+  const [ltStep, setLtStep] = useState(1); // wizard internal step 1-6, maps to outer step 2-7
 
   // Step 1
   const [iodbFile, setIodbFile] = useState<File | null>(null);
@@ -471,7 +477,10 @@ export default function DataSheetGenerator() {
         description="SIMRE-driven, IODB-linked instrument datasheet creation for water treatment plants"
       />
 
-      <StepBar current={step} />
+      <StepBar
+        current={isLTRadar(selectedType) && step > 1 ? ltStep + 1 : step}
+        ltMode={isLTRadar(selectedType)}
+      />
 
       {error && <Alert variant="error" onClose={clearError}>{error}</Alert>}
 
@@ -523,7 +532,7 @@ export default function DataSheetGenerator() {
               </div>
 
               {selectedType && (
-                <Button onClick={() => setStep(2)} className="mt-4 w-full">
+                <Button onClick={() => { setLtStep(1); setStep(2); }} className="mt-4 w-full">
                   Continue <ChevronRight className="w-3.5 h-3.5" />
                 </Button>
               )}
@@ -532,8 +541,18 @@ export default function DataSheetGenerator() {
         </div>
       )}
 
-      {/* ── STEP 2: Tags + SOP ── */}
-      {step === 2 && (
+      {/* ── LT RADAR SUB-FLOW (steps 2-7 when LT type selected) ── */}
+      {step >= 2 && isLTRadar(selectedType) && iodbFile && (
+        <LTRadarWizard
+          iodbFile={iodbFile}
+          instrumentType={selectedType}
+          onBack={() => { setStep(1); setLtStep(1); }}
+          onStepChange={s => setLtStep(s)}
+        />
+      )}
+
+      {/* ── STEP 2: Tags + SOP (normal flow only) ── */}
+      {step === 2 && !isLTRadar(selectedType) && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           {/* Left: Tags */}
           {card(
@@ -609,22 +628,13 @@ export default function DataSheetGenerator() {
           <div className="lg:col-span-2 flex gap-3">
             <Button variant="secondary" onClick={() => setStep(1)}>← Back</Button>
             <Button onClick={() => setStep(3)} disabled={!canProceedStep2} className="flex-1">
-              {isLTRadar(selectedType) ? 'Continue to LT Radar Specs' : 'Configure Specs'} <ChevronRight className="w-3.5 h-3.5" />
+              Configure Specs <ChevronRight className="w-3.5 h-3.5" />
             </Button>
           </div>
         </div>
       )}
 
-      {/* ── STEP 3 (LT Radar): LT Radar sub-wizard ── */}
-      {step === 3 && isLTRadar(selectedType) && iodbFile && (
-        <LTRadarWizard
-          iodbFile={iodbFile}
-          instrumentType={selectedType}
-          onBack={() => setStep(2)}
-        />
-      )}
-
-      {/* ── STEP 3: Spec Configuration (non-LT) ── */}
+      {/* ── STEP 3: Spec Configuration ── */}
       {step === 3 && !isLTRadar(selectedType) && (
         <div className="space-y-4">
           {/* IODB auto section (collapsible) */}

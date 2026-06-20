@@ -14,7 +14,6 @@ import IOListGenerator from './components/modules/IOListGenerator';
 import CableScheduleGenerator from './components/modules/CableScheduleGenerator';
 import LoopWiringGenerator from './components/modules/LoopWiringGenerator';
 import SmartDatasheetExtractor from './components/modules/SmartDatasheetExtractor';
-import LTRadarDatasheet from './components/modules/LTRadarDatasheet';
 import ErrorBoundary from './components/ui/ErrorBoundary';
 
 // Create React Query client
@@ -107,7 +106,6 @@ function AppRoutes() {
         <Route path="cable-schedule" element={<CableScheduleGenerator />} />
         <Route path="loop-wiring" element={<LoopWiringGenerator />} />
         <Route path="smart-datasheet" element={<SmartDatasheetExtractor />} />
-        <Route path="lt-radar" element={<LTRadarDatasheet />} />
       </Route>
 
       {/* Catch all - redirect to home */}

@@ -6,7 +6,7 @@ import { useState, useCallback, useEffect } from 'react';
 import {
   Search, ChevronRight, ChevronLeft, CheckCircle2, AlertTriangle,
   Sparkles, Download, RefreshCw, X, Zap, FileText, Radio,
-  Settings, ShoppingCart, Eye, Loader2, Lock, ExternalLink,
+  Settings, Eye, Loader2, Lock, ExternalLink,
   Star, Shield, Thermometer, Gauge, Wifi, Package,
   Upload, User, KeyRound,
 } from 'lucide-react';
@@ -18,6 +18,7 @@ interface Props {
   iodbFile: File;
   instrumentType: string;
   onBack: () => void;
+  onStepChange?: (step: number) => void; // notifies parent of internal step (1-6)
 }
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -36,16 +37,7 @@ interface SpecMeta {
   defaults: Record<string, string>;
 }
 
-// ── Step definitions ───────────────────────────────────────────────────────────
-const STEPS = [
-  { id: 1, label: 'Tag',         icon: Search },
-  { id: 2, label: 'Input',       icon: Zap },
-  { id: 3, label: 'Header',      icon: FileText },
-  { id: 4, label: 'Specs',       icon: Settings },
-  { id: 5, label: 'Vendor',      icon: ShoppingCart },
-  { id: 6, label: 'Preview',     icon: Eye },
-  { id: 7, label: 'Generate',    icon: Download },
-];
+// Steps are now 1-6 (Preview & Generate merged); StepBar is owned by parent
 
 // ── Validation rules ───────────────────────────────────────────────────────────
 const BEAM_ANGLE_MAP: Record<string, string[]> = {
@@ -84,41 +76,6 @@ const pill = (label: string, color: string) => (
     {label}
   </span>
 );
-
-// ── Step Bar ───────────────────────────────────────────────────────────────────
-function StepBar({ current }: { current: number }) {
-  return (
-    <div className="flex items-center gap-0 mb-8">
-      {STEPS.map((s, i) => {
-        const Icon = s.icon;
-        const done = current > s.id;
-        const active = current === s.id;
-        return (
-          <div key={s.id} className="flex items-center flex-1 last:flex-none">
-            <div className="flex flex-col items-center gap-1">
-              <div className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold transition-all"
-                style={{
-                  background: done ? 'var(--em)' : active ? 'var(--em-dim)' : 'var(--s3)',
-                  border: `2px solid ${done || active ? 'var(--em)' : 'var(--b2)'}`,
-                  color: done ? '#fff' : active ? 'var(--em-lt)' : 'var(--t2)',
-                }}>
-                {done ? <CheckCircle2 className="w-3.5 h-3.5" /> : <Icon className="w-3.5 h-3.5" />}
-              </div>
-              <span className="text-[10px] font-medium whitespace-nowrap"
-                style={{ color: active ? 'var(--em-lt)' : done ? 'var(--t1)' : 'var(--t2)' }}>
-                {s.label}
-              </span>
-            </div>
-            {i < STEPS.length - 1 && (
-              <div className="flex-1 h-px mx-1.5 mb-5"
-                style={{ background: done ? 'var(--em)' : 'var(--b2)', transition: 'background 0.3s' }} />
-            )}
-          </div>
-        );
-      })}
-    </div>
-  );
-}
 
 // ── Auth Modal ─────────────────────────────────────────────────────────────────
 function AuthModal({ onSuccess, onClose }: { onSuccess: () => void; onClose: () => void }) {
@@ -353,8 +310,10 @@ function VendorCard({
 }
 
 // ── Main Wizard ────────────────────────────────────────────────────────────────
-export default function LTRadarWizard({ iodbFile, instrumentType, onBack }: Props) {
+export default function LTRadarWizard({ iodbFile, instrumentType, onBack, onStepChange }: Props) {
   const [step, setStep]       = useState(1);
+
+  useEffect(() => { onStepChange?.(step); }, [step, onStepChange]);
   const [busy, setBusy]       = useState(false);
   const [error, setError]     = useState('');
 
@@ -934,19 +893,56 @@ export default function LTRadarWizard({ iodbFile, instrumentType, onBack }: Prop
           </div>
         )}
 
+        {/* Generation result — shown inline after generate is triggered */}
+        {(busy || genDone) && card(
+          <div className="text-center py-6">
+            {busy && !genDone && (
+              <>
+                <Loader2 className="w-8 h-8 animate-spin mx-auto mb-3" style={{ color: 'var(--em-lt)' }} />
+                <p className="text-sm font-bold" style={{ color: 'var(--t0)' }}>Generating Datasheet…</p>
+                <p className="text-xs mt-1" style={{ color: 'var(--t2)' }}>
+                  {selectedTag?.tag} · {selectedVS?.model.vendor} {selectedVS?.model.modelNo}
+                </p>
+              </>
+            )}
+            {genDone && (
+              <>
+                <CheckCircle2 className="w-8 h-8 mx-auto mb-3" style={{ color: '#4ade80' }} />
+                <p className="text-sm font-bold mb-1" style={{ color: '#4ade80' }}>Datasheet Ready!</p>
+                <p className="text-xs mb-4" style={{ color: 'var(--t2)' }}>
+                  {selectedTag?.tag} · {header.project || 'WABAG Project'} · Rev {header.rev_no}
+                </p>
+                <a href={downloadUrl} download={`${selectedTag?.tag}_LT_Radar_Datasheet.xlsx`}
+                  className="inline-flex items-center gap-2 px-6 py-2.5 rounded-xl text-sm font-bold"
+                  style={{ background: 'linear-gradient(135deg,#16a34a,#15803d)', color: '#fff' }}>
+                  <Download className="w-4 h-4" /> Download XLSX
+                </a>
+              </>
+            )}
+          </div>
+        )}
+
         <div className="flex gap-3">
-          <button onClick={() => setStep(5)} className="px-5 py-2.5 rounded-xl text-sm font-semibold flex items-center gap-2" style={{ background: 'var(--s3)', color: 'var(--t1)', border: '1px solid var(--b2)' }}>
+          <button onClick={() => setStep(5)} disabled={busy} className="px-5 py-2.5 rounded-xl text-sm font-semibold flex items-center gap-2" style={{ background: 'var(--s3)', color: 'var(--t1)', border: '1px solid var(--b2)' }}>
             <ChevronLeft className="w-4 h-4" /> Back
           </button>
-          <button onClick={() => { setStep(7); generate(); }} disabled={!authed}
-            className="flex-1 py-2.5 rounded-xl text-sm font-bold flex items-center justify-center gap-2 transition-all"
-            style={{
-              background: authed ? 'linear-gradient(135deg,#16a34a,#15803d)' : 'var(--s3)',
-              color: authed ? '#fff' : 'var(--t2)',
-              cursor: authed ? 'pointer' : 'not-allowed',
-            }}>
-            <Download className="w-4 h-4" /> Generate Datasheet
-          </button>
+          {!genDone && (
+            <button onClick={generate} disabled={!authed || busy}
+              className="flex-1 py-2.5 rounded-xl text-sm font-bold flex items-center justify-center gap-2 transition-all"
+              style={{
+                background: authed && !busy ? 'linear-gradient(135deg,#16a34a,#15803d)' : 'var(--s3)',
+                color: authed && !busy ? '#fff' : 'var(--t2)',
+                cursor: authed && !busy ? 'pointer' : 'not-allowed',
+              }}>
+              {busy ? <><Loader2 className="w-4 h-4 animate-spin" />Generating…</> : <><Download className="w-4 h-4" />Generate Datasheet</>}
+            </button>
+          )}
+          {genDone && (
+            <button onClick={onBack} className="flex-1 py-2.5 rounded-xl text-sm font-semibold"
+              style={{ background: 'var(--s3)', color: 'var(--t1)', border: '1px solid var(--b2)' }}>
+              ← Back to Instrument Type
+            </button>
+          )}
         </div>
 
         {showAuth && (
@@ -958,105 +954,21 @@ export default function LTRadarWizard({ iodbFile, instrumentType, onBack }: Prop
     );
   };
 
-  // ── STEP 7 — Generate ──────────────────────────────────────────────────────
-  const renderStep7 = () => (
-    <div className="space-y-4">
-      {card(
-        <div className="text-center py-8">
-          {busy && !genDone && (
-            <>
-              <div className="w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4"
-                style={{ background: 'var(--em-dim)', border: '1px solid var(--em)' }}>
-                <Loader2 className="w-7 h-7 animate-spin" style={{ color: 'var(--em-lt)' }} />
-              </div>
-              <p className="text-base font-bold mb-1" style={{ color: 'var(--t0)', fontFamily: "'Space Grotesk',sans-serif" }}>
-                Generating Datasheet…
-              </p>
-              <p className="text-sm" style={{ color: 'var(--t2)' }}>
-                Filling template for {selectedTag?.tag} · {selectedVS?.model.vendor} {selectedVS?.model.modelNo}
-              </p>
-            </>
-          )}
-          {genDone && (
-            <>
-              <div className="w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4"
-                style={{ background: 'rgba(16,185,129,0.12)', border: '1px solid rgba(16,185,129,0.35)' }}>
-                <CheckCircle2 className="w-7 h-7" style={{ color: '#4ade80' }} />
-              </div>
-              <p className="text-base font-bold mb-1" style={{ color: 'var(--t0)', fontFamily: "'Space Grotesk',sans-serif" }}>
-                Datasheet Ready!
-              </p>
-              <p className="text-sm mb-6" style={{ color: 'var(--t2)' }}>
-                {selectedTag?.tag} · {header.project || 'WABAG Project'} · Rev {header.rev_no}
-              </p>
-              <a href={downloadUrl} download={`${selectedTag?.tag}_LT_Radar_Datasheet.xlsx`}
-                className="inline-flex items-center gap-2 px-8 py-3 rounded-xl text-sm font-bold"
-                style={{ background: 'linear-gradient(135deg,#16a34a,#15803d)', color: '#fff' }}>
-                <Download className="w-4 h-4" /> Download XLSX
-              </a>
-              <p className="text-xs mt-4" style={{ color: 'var(--t2)' }}>
-                Vendor: {selectedVS?.model.vendor} · Model: {selectedVS?.model.modelNo}
-              </p>
-            </>
-          )}
-          {error && (
-            <div className="flex items-center gap-2 px-4 py-3 rounded-xl text-sm mt-4"
-              style={{ background: 'rgba(248,113,113,0.08)', border: '1px solid rgba(248,113,113,0.2)', color: 'var(--rose)' }}>
-              <AlertTriangle className="w-4 h-4 flex-shrink-0" /> {error}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Summary card */}
-      {card(<>
-        <p className="text-xs font-semibold uppercase tracking-wider mb-3" style={{ color: 'var(--t2)' }}>Generation Summary</p>
-        <div className="grid grid-cols-2 gap-2 text-xs">
-          {[
-            ['Tag', selectedTag?.tag || '—'], ['Type', instrumentType],
-            ['Client', header.client || '—'], ['Project', header.project || '—'],
-            ['Issued For', header.issued_for], ['Revision', header.rev_no],
-            ['Vendor', selectedVS?.model.vendor || '—'], ['Model', selectedVS?.model.modelNo || '—'],
-          ].map(([k, v]) => (
-            <div key={k} className="rounded-lg px-3 py-2" style={{ background: 'var(--s3)' }}>
-              <p style={{ color: 'var(--t2)' }}>{k}</p>
-              <p className="font-semibold mt-0.5 truncate" style={{ color: 'var(--t0)' }}>{v}</p>
-            </div>
-          ))}
-        </div>
-      </>)}
-
-      {genDone && (
-        <button onClick={onBack}
-          className="w-full py-2.5 rounded-xl text-sm font-semibold"
-          style={{ background: 'var(--s3)', color: 'var(--t1)', border: '1px solid var(--b2)' }}>
-          ← Back to Instrument Type
-        </button>
-      )}
-    </div>
-  );
-
   // ── Layout ─────────────────────────────────────────────────────────────────
   return (
     <div className="space-y-6">
-      {/* Header banner */}
-      <div className="rounded-2xl px-6 py-4 flex items-center gap-4"
-        style={{ background: 'linear-gradient(135deg,rgba(59,130,246,0.1),rgba(29,78,216,0.05))', border: '1px solid var(--b2)' }}>
-        <div className="w-10 h-10 rounded-xl flex items-center justify-center"
-          style={{ background: 'linear-gradient(135deg,var(--em),#1d4ed8)', boxShadow: '0 0 16px rgba(59,130,246,0.3)' }}>
-          <Radio className="w-5 h-5 text-white" />
+      {/* Sub-header showing selected tag */}
+      {selectedTag && (
+        <div className="flex items-center gap-2 px-4 py-2.5 rounded-xl"
+          style={{ background: 'var(--em-dim)', border: '1px solid rgba(59,130,246,0.25)' }}>
+          <Radio className="w-3.5 h-3.5 flex-shrink-0" style={{ color: 'var(--em-lt)' }} />
+          <span className="text-xs font-semibold" style={{ color: 'var(--em-lt)' }}>
+            {instrumentType} · Tag: {selectedTag.tag}
+          </span>
         </div>
-        <div>
-          <p className="text-sm font-bold" style={{ color: 'var(--t0)', fontFamily: "'Space Grotesk',sans-serif" }}>
-            LT Non-Contact Radar Datasheet
-          </p>
-          <p className="text-xs" style={{ color: 'var(--t2)' }}>{instrumentType} · {selectedTag?.tag || 'No tag selected'}</p>
-        </div>
-      </div>
+      )}
 
-      <StepBar current={step} />
-
-      {error && step !== 7 && (
+      {error && (
         <div className="flex items-center gap-2 px-4 py-3 rounded-xl text-sm"
           style={{ background: 'rgba(248,113,113,0.08)', border: '1px solid rgba(248,113,113,0.2)', color: 'var(--rose)' }}>
           <AlertTriangle className="w-4 h-4 flex-shrink-0" /> {error}
@@ -1070,7 +982,6 @@ export default function LTRadarWizard({ iodbFile, instrumentType, onBack }: Prop
       {step === 4 && renderStep4()}
       {step === 5 && renderStep5()}
       {step === 6 && renderStep6()}
-      {step === 7 && renderStep7()}
     </div>
   );
 }

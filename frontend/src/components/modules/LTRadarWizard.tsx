@@ -37,7 +37,48 @@ interface SpecMeta {
   defaults: Record<string, string>;
 }
 
-// Steps are now 1-6 (Preview & Generate merged); StepBar is owned by parent
+// ── LT Wizard Step Bar (6 internal steps) ─────────────────────────────────────
+const LT_WIZARD_STEPS = [
+  { id: 1, label: 'Tag' },
+  { id: 2, label: 'Input' },
+  { id: 3, label: 'Header' },
+  { id: 4, label: 'Specs' },
+  { id: 5, label: 'Vendor' },
+  { id: 6, label: 'Preview & Generate' },
+];
+
+function LTStepBar({ current }: { current: number }) {
+  return (
+    <div className="flex items-center gap-0 mb-6">
+      {LT_WIZARD_STEPS.map((s, i) => {
+        const done   = current > s.id;
+        const active = current === s.id;
+        return (
+          <div key={s.id} className="flex items-center flex-1 last:flex-none">
+            <div className="flex flex-col items-center gap-1">
+              <div className="w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-bold transition-all"
+                style={{
+                  background: done ? 'var(--em)' : active ? 'var(--em-dim)' : 'var(--s3)',
+                  border: `2px solid ${done || active ? 'var(--em)' : 'var(--b2)'}`,
+                  color: done ? '#fff' : active ? 'var(--em-lt)' : 'var(--t2)',
+                }}>
+                {done ? <CheckCircle2 className="w-3 h-3" /> : s.id}
+              </div>
+              <span className="text-[9px] font-medium whitespace-nowrap"
+                style={{ color: active ? 'var(--em-lt)' : done ? 'var(--t1)' : 'var(--t2)' }}>
+                {s.label}
+              </span>
+            </div>
+            {i < LT_WIZARD_STEPS.length - 1 && (
+              <div className="flex-1 h-px mx-1 mb-4"
+                style={{ background: done ? 'var(--em)' : 'var(--b2)', transition: 'background 0.3s' }} />
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 // ── Validation rules ───────────────────────────────────────────────────────────
 const BEAM_ANGLE_MAP: Record<string, string[]> = {
@@ -396,7 +437,15 @@ export default function LTRadarWizard({ iodbFile, instrumentType, onBack, onStep
     finally { setBusy(false); }
   }, [iodbFile]);
 
-  const handleTagSelect = (t: ITag) => { setSelectedTag(t); loadSpecMeta(t); };
+  // Tag select: just store the tag, NO auto-fill here
+  const handleTagSelect = (t: ITag) => { setSelectedTag(t); };
+
+  // Called when user clicks Continue from Header → Specs
+  const proceedToSpecs = async () => {
+    if (!selectedTag) return;
+    await loadSpecMeta(selectedTag);
+    setStep(4);
+  };
 
   // ── AI extraction ──────────────────────────────────────────────────────────
   const runAiExtract = async () => {
@@ -688,10 +737,10 @@ export default function LTRadarWizard({ iodbFile, instrumentType, onBack, onStep
           <button onClick={() => setStep(2)} className="px-5 py-2.5 rounded-xl text-sm font-semibold flex items-center gap-2" style={{ background: 'var(--s3)', color: 'var(--t1)', border: '1px solid var(--b2)' }}>
             <ChevronLeft className="w-4 h-4" /> Back
           </button>
-          <button onClick={() => setStep(4)}
+          <button onClick={proceedToSpecs} disabled={busy}
             className="flex-1 py-2.5 rounded-xl text-sm font-bold flex items-center justify-center gap-2"
-            style={{ background: 'linear-gradient(135deg,var(--em),#1d4ed8)', color: '#fff' }}>
-            Configure Specifications <ChevronRight className="w-4 h-4" />
+            style={{ background: busy ? 'var(--s3)' : 'linear-gradient(135deg,var(--em),#1d4ed8)', color: busy ? 'var(--t2)' : '#fff' }}>
+            {busy ? <><Loader2 className="w-4 h-4 animate-spin" /> Loading specs…</> : <>Configure Specifications <ChevronRight className="w-4 h-4" /></>}
           </button>
         </div>
       </div>
@@ -956,17 +1005,18 @@ export default function LTRadarWizard({ iodbFile, instrumentType, onBack, onStep
 
   // ── Layout ─────────────────────────────────────────────────────────────────
   return (
-    <div className="space-y-6">
-      {/* Sub-header showing selected tag */}
-      {selectedTag && (
-        <div className="flex items-center gap-2 px-4 py-2.5 rounded-xl"
-          style={{ background: 'var(--em-dim)', border: '1px solid rgba(59,130,246,0.25)' }}>
+    <div className="space-y-4">
+      {/* LT wizard step bar */}
+      <div className="rounded-2xl px-5 py-4" style={{ background: 'var(--s2)', border: '1px solid var(--b1)' }}>
+        <div className="flex items-center gap-2 mb-4">
           <Radio className="w-3.5 h-3.5 flex-shrink-0" style={{ color: 'var(--em-lt)' }} />
           <span className="text-xs font-semibold" style={{ color: 'var(--em-lt)' }}>
-            {instrumentType} · Tag: {selectedTag.tag}
+            LT Non-Contact Radar
+            {selectedTag ? ` · Tag: ${selectedTag.tag}` : ''}
           </span>
         </div>
-      )}
+        <LTStepBar current={step} />
+      </div>
 
       {error && (
         <div className="flex items-center gap-2 px-4 py-3 rounded-xl text-sm"

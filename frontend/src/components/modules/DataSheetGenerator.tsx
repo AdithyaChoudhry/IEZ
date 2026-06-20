@@ -18,8 +18,11 @@ import Button from '../ui/Button';
 import Alert from '../ui/Alert';
 import LTRadarWizard from './LTRadarWizard';
 
-const isLTRadar = (type: string) =>
-  /\bLT\b|non.?contact.*radar|radar.*level|FMCW/i.test(type);
+const isLTRadar = (type: string) => {
+  const result = /\bLT\b|non.?contact.*radar|radar.*level|FMCW/i.test(type);
+  console.log(`[DSG] isLTRadar("${type}") =`, result);
+  return result;
+};
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 interface FieldSpec {
@@ -329,6 +332,7 @@ export default function DataSheetGenerator() {
   };
 
   const handleTypeSelect = (t: string) => {
+    console.log('[DSG] handleTypeSelect:', t);
     setSelectedType(t);
     loadTags(t);
   };
@@ -532,7 +536,10 @@ export default function DataSheetGenerator() {
               </div>
 
               {selectedType && (
-                <Button onClick={() => { setLtStep(1); setStep(2); }} className="mt-4 w-full">
+                <Button onClick={() => {
+                  console.log(`[DSG] Continue clicked. selectedType="${selectedType}" isLT=${isLTRadar(selectedType)}`);
+                  setLtStep(1); setStep(2);
+                }} className="mt-4 w-full">
                   Continue <ChevronRight className="w-3.5 h-3.5" />
                 </Button>
               )}
@@ -542,7 +549,7 @@ export default function DataSheetGenerator() {
       )}
 
       {/* ── LT RADAR SUB-FLOW (steps 2-7 when LT type selected) ── */}
-      {step >= 2 && isLTRadar(selectedType) && iodbFile && (
+      {step >= 2 && (() => { console.log(`[DSG] step=${step} selectedType="${selectedType}" isLT=${isLTRadar(selectedType)} iodbFile=${!!iodbFile} → LTWizard renders=${step >= 2 && isLTRadar(selectedType) && !!iodbFile}`); return true; })() && isLTRadar(selectedType) && iodbFile && (
         <LTRadarWizard
           iodbFile={iodbFile}
           instrumentType={selectedType}

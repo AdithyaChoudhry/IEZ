@@ -354,7 +354,15 @@ function VendorCard({
 export default function LTRadarWizard({ iodbFile, instrumentType, onBack, onStepChange }: Props) {
   const [step, setStep]       = useState(1);
 
-  useEffect(() => { onStepChange?.(step); }, [step, onStepChange]);
+  useEffect(() => {
+    console.log('[LTWizard] step changed to:', step);
+    onStepChange?.(step);
+  }, [step, onStepChange]);
+
+  useEffect(() => {
+    console.log('[LTWizard] MOUNTED. instrumentType:', instrumentType, 'iodbFile:', iodbFile?.name);
+    return () => console.log('[LTWizard] UNMOUNTED');
+  }, []);
   const [busy, setBusy]       = useState(false);
   const [error, setError]     = useState('');
 
@@ -404,9 +412,9 @@ export default function LTRadarWizard({ iodbFile, instrumentType, onBack, onStep
         // Backend /lt-radar/tags returns { tags: string[], count: number }
         const res = await api.post('/lt-radar/tags', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
         const rawTags: string[] = res.data.tags || [];
-        // Wrap into ITag shape; iodb_data populated later on selection
+        console.log('[LTWizard] Tags loaded:', rawTags.length, rawTags.slice(0, 5));
         setTags(rawTags.map(t => ({ tag: t, iodb_data: {} })));
-      } catch { setError('Failed to load tags from IODB'); }
+      } catch (e) { console.error('[LTWizard] Tags load error:', e); setError('Failed to load tags from IODB'); }
       finally { setBusy(false); }
     })();
   }, [iodbFile]);

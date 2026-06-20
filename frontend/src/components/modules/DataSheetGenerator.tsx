@@ -48,7 +48,7 @@ const role = (f: FieldSpec): 'iodb' | 'simre' | 'manual' => {
 
 // ── Step indicator ─────────────────────────────────────────────────────────────
 const STEPS_NORMAL = ['IODB & Type', 'Tags & SOP', 'Spec Config', 'Notes & Vendor', 'Generate'];
-const STEPS_LT = ['IODB & Type', 'Tag', 'Input', 'Header', 'Specs', 'Vendor', 'Preview & Generate'];
+const STEPS_LT = ['IODB & Type', 'Tag', 'Input', 'Header', 'Specs', 'Vendor', 'Purchase', 'Generate'];
 
 function StepBar({ current, ltMode }: { current: number; ltMode?: boolean }) {
   const steps = ltMode ? STEPS_LT : STEPS_NORMAL;

@@ -19,7 +19,7 @@ import Alert from '../ui/Alert';
 import LTRadarWizard from './LTRadarWizard';
 
 const isLTRadar = (type: string) => {
-  const result = /\bLT\b|non.?contact.*radar|radar.*level|FMCW/i.test(type);
+  const result = /\bLT\b|\bNCR\b|non.?contact.*radar|radar.*level|FMCW/i.test(type);
   console.log(`[DSG] isLTRadar("${type}") =`, result);
   return result;
 };

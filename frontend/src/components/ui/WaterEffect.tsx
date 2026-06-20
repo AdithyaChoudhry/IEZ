@@ -1,136 +1,231 @@
 import { useEffect, useRef } from 'react';
 
-/* ─────────────────────────────────────────────────────────────────────────────
-   WATER EFFECT  —  CEO-Grade Premium Animation
-   Three-depth-layer rainfall + gravity acceleration + speed-elongation +
-   dual-highlight shimmer + bottom-splash particles + multi-ring click ripples
-───────────────────────────────────────────────────────────────────────────── */
+/* ═══════════════════════════════════════════════════════════════════════════
+   WABAG WATER EFFECT  —  Designed around VA Tech WABAG's core identity:
+   Water treatment · Aeration · Purification · Clean water flow
 
-type Layer = 'far' | 'mid' | 'near';
+   Visual metaphor: looking through the glass wall of a water treatment tank —
+   bubbles rising from aerators below, water surface rippling above,
+   occasional droplets disturbing the calm surface.
+
+   Palette: WABAG ocean blues  →  #0077b6 · #0096c7 · #00b4d8 · #48cae4 · #90e0ef
+═══════════════════════════════════════════════════════════════════════════ */
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+type Bubble = {
+  x: number; y: number;
+  r: number;
+  vy: number;           // rise speed
+  wobble: number;       // horizontal oscillation amplitude
+  wobbleSpeed: number;
+  phase: number;
+  opacity: number;
+  popping: boolean;
+  popR: number;
+};
 
 type Drop = {
   x: number; y: number;
-  r: number;           // base radius
-  vy: number;          // current vertical speed
-  vx: number;          // subtle horizontal drift
-  phase: number;       // sway phase offset
+  vy: number;
+  r: number;
   opacity: number;
-  layer: Layer;
-  trail: { x: number; y: number; o: number }[];
+  active: boolean;
+  impactY: number;      // y where it hits the "surface"
 };
 
-type Splash = {
+type Ring = {
   x: number; y: number;
-  particles: { vx: number; vy: number; r: number; life: number }[];
+  r: number;
+  maxR: number;
+  speed: number;        // starts fast, decelerates
+  opacity: number;
+  lineW: number;
 };
 
-type Ripple = {
-  x: number; y: number;
-  rings: { r: number; maxR: number; opacity: number; speed: number; lineWidth: number }[];
-  splashPts: { angle: number; dist: number; opacity: number; r: number }[];
-};
+// ─── Config ───────────────────────────────────────────────────────────────────
 
-/* Layer config: far = tiny + very faint, near = larger + faster + more visible */
-const LAYER: Record<Layer, { rMin: number; rMax: number; sMin: number; sMax: number; oMin: number; oMax: number; count: number }> = {
-  far:  { rMin: 0.6, rMax: 1.1, sMin: 0.5,  sMax: 1.1,  oMin: 0.03, oMax: 0.08, count: 18 },
-  mid:  { rMin: 1.2, rMax: 2.0, sMin: 1.0,  sMax: 2.0,  oMin: 0.06, oMax: 0.13, count: 14 },
-  near: { rMin: 2.1, rMax: 3.2, sMin: 1.8,  sMax: 3.2,  oMin: 0.09, oMax: 0.18, count: 8  },
+const WABAG = {
+  deep:   { r: 0,   g: 119, b: 182 },  // #0077b6
+  mid:    { r: 0,   g: 150, b: 199 },  // #0096c7
+  light:  { r: 0,   g: 180, b: 216 },  // #00b4d8
+  bright: { r: 72,  g: 202, b: 228 },  // #48cae4
+  pale:   { r: 144, g: 224, b: 239 },  // #90e0ef
 };
+function wc(c: typeof WABAG[keyof typeof WABAG], a: number) {
+  return `rgba(${c.r},${c.g},${c.b},${a})`;
+}
 
-function makeDrop(layer: Layer, w: number, h: number, randomY = true): Drop {
-  const lc = LAYER[layer];
-  const r  = lc.rMin + Math.random() * (lc.rMax - lc.rMin);
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function randBetween(a: number, b: number) { return a + Math.random() * (b - a); }
+
+function makeBubble(w: number, h: number, startAtBottom = false): Bubble {
+  const r = randBetween(1.2, 5.5);
   return {
-    x: Math.random() * w,
-    y: randomY ? Math.random() * h : -(r * 5 + Math.random() * 60),
+    x:          randBetween(0, w),
+    y:          startAtBottom ? h + r + randBetween(0, h * 0.4) : randBetween(h * 0.2, h + r),
     r,
-    vy: lc.sMin + Math.random() * (lc.sMax - lc.sMin),
-    vx: (Math.random() - 0.5) * 0.18,
-    phase: Math.random() * Math.PI * 2,
-    opacity: lc.oMin + Math.random() * (lc.oMax - lc.oMin),
-    layer,
-    trail: [],
+    vy:         randBetween(0.28, 0.85),
+    wobble:     randBetween(0.4, 1.4),
+    wobbleSpeed:randBetween(0.012, 0.028),
+    phase:      randBetween(0, Math.PI * 2),
+    opacity:    randBetween(0.06, 0.22),
+    popping:    false,
+    popR:       0,
   };
 }
 
+function makeDrop(w: number): Drop {
+  return {
+    x:       randBetween(w * 0.05, w * 0.95),
+    y:       -20,
+    vy:      randBetween(1.8, 3.2),
+    r:       randBetween(2.2, 3.8),
+    opacity: randBetween(0.25, 0.55),
+    active:  true,
+    impactY: randBetween(window.innerHeight * 0.55, window.innerHeight * 0.85),
+  };
+}
+
+// ─── Draw Bubble ──────────────────────────────────────────────────────────────
+
+function drawBubble(ctx: CanvasRenderingContext2D, b: Bubble) {
+  if (b.popping) {
+    // Pop ring expands and fades
+    ctx.save();
+    ctx.strokeStyle = wc(WABAG.bright, Math.max(0, 0.5 - b.popR / (b.r * 6)));
+    ctx.lineWidth   = 0.8;
+    ctx.beginPath();
+    ctx.arc(b.x, b.y, b.r + b.popR, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+    return;
+  }
+
+  ctx.save();
+  ctx.translate(b.x, b.y);
+
+  // Ambient glow (faint halo)
+  const glow = ctx.createRadialGradient(0, 0, b.r * 0.5, 0, 0, b.r * 2.8);
+  glow.addColorStop(0,   wc(WABAG.bright, b.opacity * 0.2));
+  glow.addColorStop(1,   'rgba(0,0,0,0)');
+  ctx.beginPath();
+  ctx.arc(0, 0, b.r * 2.8, 0, Math.PI * 2);
+  ctx.fillStyle = glow;
+  ctx.fill();
+
+  // Bubble body — transparent, edge-lit
+  const body = ctx.createRadialGradient(-b.r * 0.3, -b.r * 0.3, 0, 0, 0, b.r);
+  body.addColorStop(0,   wc(WABAG.pale,   b.opacity * 0.12));
+  body.addColorStop(0.6, wc(WABAG.light,  b.opacity * 0.07));
+  body.addColorStop(1,   wc(WABAG.deep,   b.opacity * 0.04));
+  ctx.beginPath();
+  ctx.arc(0, 0, b.r, 0, Math.PI * 2);
+  ctx.fillStyle = body;
+  ctx.fill();
+
+  // Rim — bright edge
+  ctx.beginPath();
+  ctx.arc(0, 0, b.r, 0, Math.PI * 2);
+  ctx.strokeStyle = wc(WABAG.bright, b.opacity * 0.7);
+  ctx.lineWidth   = 0.6;
+  ctx.stroke();
+
+  // Main highlight — top-left crescent (real bubble physics)
+  const hl1 = ctx.createRadialGradient(-b.r * 0.38, -b.r * 0.42, 0, -b.r * 0.3, -b.r * 0.35, b.r * 0.52);
+  hl1.addColorStop(0,   `rgba(255,255,255,${b.opacity * 0.95})`);
+  hl1.addColorStop(0.5, `rgba(202,240,248,${b.opacity * 0.35})`);
+  hl1.addColorStop(1,   'rgba(202,240,248,0)');
+  ctx.beginPath();
+  ctx.arc(0, 0, b.r, 0, Math.PI * 2);
+  ctx.fillStyle = hl1;
+  ctx.fill();
+
+  // Micro spark — tiny bright dot
+  ctx.beginPath();
+  ctx.arc(-b.r * 0.42, -b.r * 0.46, b.r * 0.14, 0, Math.PI * 2);
+  ctx.fillStyle = `rgba(255,255,255,${b.opacity * 0.9})`;
+  ctx.fill();
+
+  ctx.restore();
+}
+
+// ─── Draw Drop ────────────────────────────────────────────────────────────────
+
 function drawDrop(ctx: CanvasRenderingContext2D, d: Drop) {
-  const speed   = Math.abs(d.vy);
-  const stretch = 1 + speed * 0.35;         // elongate with speed
-  const rw      = d.r;                      // horizontal radius
-  const rh      = d.r * stretch;            // vertical radius (stretched)
+  const stretch = 1 + d.vy * 0.28;
+  const rw = d.r, rh = d.r * stretch;
 
   ctx.save();
   ctx.translate(d.x, d.y);
 
-  /* ── Trailing streak ── */
-  if (speed > 1.5 && d.trail.length > 0) {
-    d.trail.forEach((pt, i) => {
-      const alpha = pt.o * (i / d.trail.length) * 0.45;
-      ctx.beginPath();
-      ctx.ellipse(pt.x - d.x, pt.y - d.y, rw * 0.55, rh * 0.28, 0, 0, Math.PI * 2);
-      ctx.fillStyle = `rgba(96,165,250,${alpha})`;
-      ctx.fill();
-    });
-  }
-
-  /* ── Ambient outer glow ── */
-  const grd = ctx.createRadialGradient(0, rh * 0.2, 0, 0, 0, rh * 2.2);
-  grd.addColorStop(0,   `rgba(59,130,246,${d.opacity * 0.18})`);
-  grd.addColorStop(1,   'rgba(59,130,246,0)');
+  // Outer glow
+  const og = ctx.createRadialGradient(0, 0, 0, 0, 0, rh * 2.5);
+  og.addColorStop(0,   wc(WABAG.bright, d.opacity * 0.15));
+  og.addColorStop(1,   'rgba(0,0,0,0)');
   ctx.beginPath();
-  ctx.ellipse(0, 0, rw * 2.2, rh * 2.2, 0, 0, Math.PI * 2);
-  ctx.fillStyle = grd;
+  ctx.ellipse(0, 0, rh * 2.5, rh * 2.5, 0, 0, Math.PI * 2);
+  ctx.fillStyle = og;
   ctx.fill();
 
-  /* ── Drop body — premium teardrop ── */
-  const body = ctx.createRadialGradient(-rw * 0.22, -rh * 0.3, 0, 0, 0, rh * 1.4);
-  body.addColorStop(0,   `rgba(147,197,253,${d.opacity * 1.4})`);
-  body.addColorStop(0.45,`rgba(96,165,250,${d.opacity * 1.1})`);
-  body.addColorStop(0.78,`rgba(37,99,235,${d.opacity})`);
-  body.addColorStop(1,   `rgba(29,78,216,${d.opacity * 0.7})`);
-
+  // Body — teardrop
   ctx.beginPath();
-  ctx.moveTo(0, -rh * 2.4);
-  ctx.bezierCurveTo( rw * 1.1, -rh * 0.85,  rw * 1.1,  rh * 0.8,  0,  rh * 1.25);
-  ctx.bezierCurveTo(-rw * 1.1,  rh * 0.8, -rw * 1.1, -rh * 0.85,  0, -rh * 2.4);
+  ctx.moveTo(0, -rh * 2.2);
+  ctx.bezierCurveTo( rw * 1.05, -rh * 0.75,  rw * 1.05,  rh * 0.65,  0,  rh * 1.1);
+  ctx.bezierCurveTo(-rw * 1.05,  rh * 0.65, -rw * 1.05, -rh * 0.75,  0, -rh * 2.2);
+
+  const body = ctx.createLinearGradient(-rw, -rh * 2.2, rw, rh * 1.1);
+  body.addColorStop(0,    wc(WABAG.pale,   d.opacity * 0.9));
+  body.addColorStop(0.35, wc(WABAG.bright, d.opacity));
+  body.addColorStop(0.7,  wc(WABAG.mid,    d.opacity));
+  body.addColorStop(1,    wc(WABAG.deep,   d.opacity * 0.8));
   ctx.fillStyle = body;
   ctx.fill();
 
-  /* ── Primary highlight (bright crescent, top-left) ── */
-  ctx.save();
-  ctx.clip();  // clip to drop shape (re-use path above — rebuild)
-  ctx.beginPath();
-  ctx.moveTo(0, -rh * 2.4);
-  ctx.bezierCurveTo( rw * 1.1, -rh * 0.85,  rw * 1.1,  rh * 0.8,  0,  rh * 1.25);
-  ctx.bezierCurveTo(-rw * 1.1,  rh * 0.8, -rw * 1.1, -rh * 0.85,  0, -rh * 2.4);
-
-  const h1 = ctx.createRadialGradient(-rw * 0.3, -rh * 1.5, 0, -rw * 0.3, -rh * 1.5, rh * 0.85);
-  h1.addColorStop(0,   `rgba(255,255,255,${d.opacity * 1.2})`);
-  h1.addColorStop(0.5, `rgba(219,234,254,${d.opacity * 0.4})`);
-  h1.addColorStop(1,   'rgba(219,234,254,0)');
-  ctx.fillStyle = h1;
-  ctx.fill();
-
-  /* ── Secondary micro-highlight (tiny spark) ── */
-  const h2 = ctx.createRadialGradient(-rw * 0.55, -rh * 1.85, 0, -rw * 0.55, -rh * 1.85, rw * 0.28);
-  h2.addColorStop(0,   `rgba(255,255,255,${d.opacity * 0.95})`);
-  h2.addColorStop(1,   'rgba(255,255,255,0)');
-  ctx.fillStyle = h2;
-  ctx.fill();
-
-  ctx.restore();
-
-  /* ── Refraction edge ── */
-  ctx.beginPath();
-  ctx.moveTo(0, -rh * 2.4);
-  ctx.bezierCurveTo( rw * 1.1, -rh * 0.85,  rw * 1.1,  rh * 0.8,  0,  rh * 1.25);
-  ctx.bezierCurveTo(-rw * 1.1,  rh * 0.8, -rw * 1.1, -rh * 0.85,  0, -rh * 2.4);
-  ctx.strokeStyle = `rgba(147,197,253,${d.opacity * 0.35})`;
-  ctx.lineWidth = 0.5;
+  // Edge refraction
+  ctx.strokeStyle = wc(WABAG.pale, d.opacity * 0.5);
+  ctx.lineWidth   = 0.4;
   ctx.stroke();
+
+  // Highlight
+  ctx.beginPath();
+  ctx.ellipse(-rw * 0.28, -rh * 1.4, rw * 0.22, rh * 0.48, -0.35, 0, Math.PI * 2);
+  ctx.fillStyle = `rgba(255,255,255,${d.opacity * 0.8})`;
+  ctx.fill();
 
   ctx.restore();
 }
+
+// ─── Draw Wave Lines ──────────────────────────────────────────────────────────
+
+function drawWaves(ctx: CanvasRenderingContext2D, t: number, w: number, h: number) {
+  const waveParams = [
+    { freq: 0.008, amp: 22, speed: 0.3,  yBase: 0.30, op: 0.022 },
+    { freq: 0.012, amp: 16, speed: 0.45, yBase: 0.45, op: 0.018 },
+    { freq: 0.006, amp: 28, speed: 0.22, yBase: 0.60, op: 0.015 },
+    { freq: 0.015, amp: 12, speed: 0.55, yBase: 0.72, op: 0.020 },
+    { freq: 0.009, amp: 19, speed: 0.35, yBase: 0.82, op: 0.016 },
+  ];
+
+  waveParams.forEach(wp => {
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(0, h * wp.yBase);
+    for (let x = 0; x <= w; x += 3) {
+      const y = h * wp.yBase
+        + Math.sin(x * wp.freq + t * wp.speed) * wp.amp
+        + Math.sin(x * wp.freq * 1.6 + t * wp.speed * 0.7 + 1.2) * wp.amp * 0.4;
+      ctx.lineTo(x, y);
+    }
+    ctx.strokeStyle = wc(WABAG.light, wp.op);
+    ctx.lineWidth   = 1;
+    ctx.stroke();
+    ctx.restore();
+  });
+}
+
+// ─── Main Component ───────────────────────────────────────────────────────────
 
 export default function WaterEffect() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -151,154 +246,120 @@ export default function WaterEffect() {
     resize();
     window.addEventListener('resize', resize);
 
-    /* ── Populate drops for each layer ── */
+    // ── Init bubbles ──
+    const BUBBLE_COUNT = 42;
+    const bubbles: Bubble[] = Array.from({ length: BUBBLE_COUNT }, () =>
+      makeBubble(w, h, false)
+    );
+
+    // ── Drops (max 3 active at a time, spawn slowly) ──
     const drops: Drop[] = [];
-    (['far', 'mid', 'near'] as Layer[]).forEach(layer => {
-      for (let i = 0; i < LAYER[layer].count; i++) drops.push(makeDrop(layer, w, h, true));
-    });
+    let lastDropTime = 0;
+    const DROP_INTERVAL_MS = 2200;
 
-    /* ── Sort so far renders first (behind) ── */
-    const ORDER: Record<Layer, number> = { far: 0, mid: 1, near: 2 };
-    drops.sort((a, b) => ORDER[a.layer] - ORDER[b.layer]);
+    // ── Ripple pool (auto + click) ──
+    const rings: Ring[] = [];
 
-    /* ── Splash pool ── */
-    const splashes: Splash[] = [];
-
-    /* ── Click ripple pool ── */
-    const ripples: Ripple[] = [];
-
-    const spawnRipple = (x: number, y: number) => {
-      const pts = Array.from({ length: 8 }, (_, i) => ({
-        angle:   (Math.PI * 2 * i) / 8,
-        dist:    0,
-        opacity: 0.7,
-        r:       1.2 + Math.random() * 1.0,
-      }));
-
-      ripples.push({
-        x, y,
-        splashPts: pts,
-        rings: [
-          { r: 0, maxR: 48,  opacity: 0.75, speed: 3.8, lineWidth: 2.0 },
-          { r: 0, maxR: 88,  opacity: 0.50, speed: 3.2, lineWidth: 1.4 },
-          { r: 0, maxR: 130, opacity: 0.32, speed: 2.6, lineWidth: 1.0 },
-          { r: 0, maxR: 175, opacity: 0.18, speed: 2.0, lineWidth: 0.7 },
-        ],
+    function spawnRipples(x: number, y: number, scale = 1.0) {
+      [
+        { maxR: 38  * scale, speed: 4.2, op: 0.75, lw: 1.8 },
+        { maxR: 70  * scale, speed: 3.5, op: 0.55, lw: 1.3 },
+        { maxR: 108 * scale, speed: 2.9, op: 0.38, lw: 1.0 },
+        { maxR: 148 * scale, speed: 2.4, op: 0.24, lw: 0.7 },
+        { maxR: 190 * scale, speed: 1.9, op: 0.14, lw: 0.5 },
+        { maxR: 235 * scale, speed: 1.5, op: 0.07, lw: 0.4 },
+      ].forEach(cfg => {
+        rings.push({ x, y, r: 0, maxR: cfg.maxR, speed: cfg.speed, opacity: cfg.op, lineW: cfg.lw });
       });
-    };
+    }
 
-    const onClick = (e: MouseEvent) => spawnRipple(e.clientX, e.clientY);
+    const onClick = (e: MouseEvent) => spawnRipples(e.clientX, e.clientY, 1.3);
     window.addEventListener('click', onClick);
 
-    let frame = 0;
+    // ── Tick ──
+    let t      = 0;
     let raf: number;
+    let lastTs = 0;
 
-    function tick() {
+    function tick(ts: number) {
+      const dt = Math.min(ts - lastTs, 32);
+      lastTs   = ts;
+      t        += dt * 0.001;
+
       ctx.clearRect(0, 0, w, h);
-      frame++;
 
-      /* ── Gravity constant ── */
-      const GRAVITY = 0.018;
+      // 1. Subtle animated wave lines (water surface texture)
+      drawWaves(ctx, t, w, h);
 
-      /* ── Update + draw drops ── */
-      drops.forEach(d => {
-        /* trail history */
-        d.trail.push({ x: d.x, y: d.y, o: d.opacity });
-        if (d.trail.length > 6) d.trail.shift();
-
-        /* physics: gravity accelerates, gentle sway */
-        d.vy += GRAVITY;
-        d.x  += d.vx + Math.sin(frame * 0.012 + d.phase) * 0.22;
-        d.y  += d.vy;
-
-        /* clamp sway */
-        if (d.x < -20) d.x = w + 10;
-        if (d.x > w + 20) d.x = -10;
-
-        /* hit bottom → spawn splash → reset */
-        if (d.y > h + d.r * 3) {
-          /* splash only for mid/near */
-          if (d.layer !== 'far' && Math.random() < 0.7) {
-            splashes.push({
-              x: d.x,
-              y: h - 2,
-              particles: Array.from({ length: 5 + Math.floor(Math.random() * 4) }, () => ({
-                vx:   (Math.random() - 0.5) * 2.4,
-                vy:   -(Math.random() * 1.8 + 0.6),
-                r:    0.4 + Math.random() * 0.8,
-                life: 1.0,
-              })),
-            });
+      // 2. Bubbles rising
+      bubbles.forEach(b => {
+        if (b.popping) {
+          b.popR += 0.9;
+          if (b.popR > b.r * 5) {
+            Object.assign(b, makeBubble(w, h, true));
+            b.popping = false; b.popR = 0;
           }
-          const reset = makeDrop(d.layer, w, h, false);
-          Object.assign(d, reset);
-          d.trail = [];
-        }
+        } else {
+          b.y -= b.vy;
+          b.x += Math.sin(t * b.wobbleSpeed * 60 + b.phase) * b.wobble * 0.06;
 
-        drawDrop(ctx, d);
+          if (b.y < -b.r * 3) {
+            // bubble reaches surface — pop
+            b.popping = true;
+            b.popR    = 0;
+          }
+        }
+        drawBubble(ctx, b);
       });
 
-      /* ── Splash particles ── */
-      for (let si = splashes.length - 1; si >= 0; si--) {
-        const sp = splashes[si];
-        let alive = false;
-        sp.particles.forEach(p => {
-          if (p.life <= 0) return;
-          p.life -= 0.045;
-          p.vx   *= 0.94;
-          p.vy   += 0.12;
-          sp.x   += p.vx;
-          sp.y   += p.vy;
-          alive   = true;
-
-          ctx.beginPath();
-          ctx.arc(sp.x, sp.y, p.r, 0, Math.PI * 2);
-          ctx.fillStyle = `rgba(96,165,250,${p.life * 0.22})`;
-          ctx.fill();
-        });
-        if (!alive) splashes.splice(si, 1);
+      // 3. Spawn drops
+      if (ts - lastDropTime > DROP_INTERVAL_MS && drops.filter(d => d.active).length < 3) {
+        drops.push(makeDrop(w));
+        lastDropTime = ts;
+        // Remove old completed drops
+        while (drops.length > 12) drops.shift();
       }
 
-      /* ── Click ripples ── */
-      for (let ri = ripples.length - 1; ri >= 0; ri--) {
-        const rip = ripples[ri];
-        let alive = false;
+      // 4. Update + draw drops
+      drops.forEach(d => {
+        if (!d.active) return;
+        d.vy += 0.06;   // gravity
+        d.y  += d.vy;
 
-        /* rings */
-        rip.rings.forEach(ring => {
-          if (ring.opacity <= 0) return;
-          ring.r       += ring.speed;
-          ring.opacity -= 0.012;
-          if (ring.opacity < 0) ring.opacity = 0;
-          alive = true;
+        if (d.y >= d.impactY) {
+          // Impact — spawn ripples + mark done
+          spawnRipples(d.x, d.impactY, 0.85);
+          d.active = false;
+        } else {
+          drawDrop(ctx, d);
+        }
+      });
 
-          /* elliptical ring — perspective (wider than tall) */
-          ctx.save();
-          ctx.strokeStyle = `rgba(96,165,250,${ring.opacity})`;
-          ctx.lineWidth   = ring.lineWidth;
-          ctx.shadowBlur  = 4;
-          ctx.shadowColor = `rgba(59,130,246,${ring.opacity * 0.5})`;
-          ctx.beginPath();
-          ctx.ellipse(rip.x, rip.y, ring.r, ring.r * 0.36, 0, 0, Math.PI * 2);
-          ctx.stroke();
-          ctx.restore();
-        });
+      // 5. Ripple rings (decelerate with easing)
+      for (let ri = rings.length - 1; ri >= 0; ri--) {
+        const ring = rings[ri];
+        const progress = ring.r / ring.maxR;
+        // Decelerate: rings start fast, slow to near-stop at edge
+        const decel = ring.speed * Math.max(0.1, 1 - progress * 0.85);
+        ring.r       += decel;
+        ring.opacity -= 0.0085;
 
-        /* centre splash dots */
-        rip.splashPts.forEach(pt => {
-          if (pt.opacity <= 0) return;
-          pt.dist    += 2.8;
-          pt.opacity -= 0.05;
-          alive       = true;
-          const px = rip.x + Math.cos(pt.angle) * pt.dist;
-          const py = rip.y + Math.sin(pt.angle) * pt.dist * 0.38;
-          ctx.beginPath();
-          ctx.arc(px, py, pt.r * pt.opacity, 0, Math.PI * 2);
-          ctx.fillStyle = `rgba(147,197,253,${pt.opacity * 0.75})`;
-          ctx.fill();
-        });
+        if (ring.opacity <= 0 || ring.r > ring.maxR) {
+          rings.splice(ri, 1);
+          continue;
+        }
 
-        if (!alive) ripples.splice(ri, 1);
+        ctx.save();
+        // Soft outer glow on ring
+        ctx.shadowBlur  = 6;
+        ctx.shadowColor = wc(WABAG.bright, ring.opacity * 0.6);
+        ctx.strokeStyle = wc(WABAG.bright, ring.opacity);
+        ctx.lineWidth   = ring.lineW;
+        ctx.beginPath();
+        // Ellipse: horizontal perspective for water surface
+        ctx.ellipse(ring.x, ring.y, ring.r, ring.r * 0.32, 0, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
       }
 
       raf = requestAnimationFrame(tick);
@@ -318,8 +379,7 @@ export default function WaterEffect() {
       ref={canvasRef}
       style={{
         position:      'fixed',
-        top:           0,
-        left:          0,
+        top: 0, left: 0,
         width:         '100%',
         height:        '100%',
         pointerEvents: 'none',

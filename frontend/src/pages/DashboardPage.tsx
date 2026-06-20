@@ -138,9 +138,6 @@ export default function DashboardPage() {
         <div className="relative px-8 py-10 flex flex-col lg:flex-row lg:items-center gap-8">
           {/* Greeting */}
           <div className="flex-1">
-            <p className="text-[11px] font-semibold tracking-widest uppercase mb-3" style={{ color: 'var(--t2)' }}>
-              WABAG Water Treatment · Engineering Platform
-            </p>
             <h1
               className="text-4xl font-black leading-tight mb-3"
               style={{ fontFamily: "'Space Grotesk', sans-serif", color: 'var(--t0)', letterSpacing: '-0.025em' }}

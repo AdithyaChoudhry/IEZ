@@ -1,62 +1,7 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '@/context/AuthContext';
-import { LogIn, Droplets, Eye, EyeOff, Zap, Shield, BarChart3, Waves } from 'lucide-react';
-
-/* ── Rising particle canvas ─────────────────────────────────────────────── */
-function ParticleCanvas() {
-  const ref = useRef<HTMLCanvasElement>(null);
-  useEffect(() => {
-    const canvas = ref.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    const resize = () => { canvas.width = canvas.offsetWidth; canvas.height = canvas.offsetHeight; };
-    resize();
-    window.addEventListener('resize', resize);
-
-    type P = { x: number; y: number; r: number; vy: number; vx: number; o: number; color: string };
-    const colors = ['rgba(59,130,246,', 'rgba(96,165,250,', 'rgba(147,197,253,'];
-    const pts: P[] = Array.from({ length: 35 }, () => ({
-      x: Math.random() * (canvas.width || 600),
-      y: Math.random() * (canvas.height || 800),
-      r: Math.random() * 2 + 0.5,
-      vy: -(Math.random() * 0.35 + 0.08),
-      vx: (Math.random() - 0.5) * 0.12,
-      o: Math.random() * 0.35 + 0.08,
-      color: colors[Math.floor(Math.random() * colors.length)],
-    }));
-
-    let raf: number;
-    function draw() {
-      ctx!.clearRect(0, 0, canvas!.width, canvas!.height);
-      pts.forEach(p => {
-        ctx!.beginPath();
-        ctx!.arc(p.x, p.y, p.r, 0, Math.PI * 2);
-        ctx!.fillStyle = p.color + p.o + ')';
-        ctx!.fill();
-        p.y += p.vy; p.x += p.vx; p.o -= 0.0006;
-        if (p.y < -5 || p.o <= 0) {
-          p.x = Math.random() * canvas!.width;
-          p.y = canvas!.height + 5;
-          p.o = Math.random() * 0.35 + 0.08;
-          p.r = Math.random() * 2 + 0.5;
-        }
-      });
-      raf = requestAnimationFrame(draw);
-    }
-    draw();
-    return () => { cancelAnimationFrame(raf); window.removeEventListener('resize', resize); };
-  }, []);
-  return <canvas ref={ref} className="absolute inset-0 w-full h-full pointer-events-none" />;
-}
-
-const features = [
-  { icon: Zap,       label: 'AI spec extraction from tender PDFs' },
-  { icon: BarChart3, label: 'Auto-generate datasheets & I/O lists' },
-  { icon: Shield,    label: 'IODB validation with custom rules' },
-  { icon: Waves,     label: 'Built for WABAG water treatment' },
-];
+import { LogIn, Droplets, Eye, EyeOff } from 'lucide-react';
 
 export default function LoginPage() {
   const [username, setUsername] = useState('');
@@ -82,60 +27,57 @@ export default function LoginPage() {
         className="hidden lg:flex flex-col justify-between w-[46%] relative overflow-hidden p-12"
         style={{ background: 'var(--s1)', borderRight: '1px solid var(--b1)' }}
       >
-        <ParticleCanvas />
         {/* Mesh blobs */}
         <div className="absolute inset-0 pointer-events-none overflow-hidden">
           <div className="mesh-blob-a absolute -top-20 -left-20 w-80 h-80 rounded-full blur-3xl" style={{ background: 'rgba(59,130,246,0.08)' }} />
-          <div className="mesh-blob-b absolute bottom-0 right-0 w-72 h-72 rounded-full blur-3xl" style={{ background: 'rgba(245,158,11,0.04)' }} />
+          <div className="mesh-blob-b absolute bottom-0 right-0 w-72 h-72 rounded-full blur-3xl" style={{ background: 'rgba(59,130,246,0.05)' }} />
+          <div className="mesh-blob-c absolute top-1/2 left-1/4 w-56 h-56 rounded-full blur-3xl" style={{ background: 'rgba(96,165,250,0.04)' }} />
         </div>
 
         {/* Logo */}
         <div className="relative">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ background: 'linear-gradient(135deg, var(--em), #1d4ed8)', boxShadow: '0 0 20px var(--em-glow)' }}>
+            <div
+              className="w-10 h-10 rounded-xl flex items-center justify-center"
+              style={{ background: 'linear-gradient(135deg, var(--em), #1d4ed8)', boxShadow: '0 0 20px var(--em-glow)' }}
+            >
               <Droplets className="w-5 h-5 text-white" />
             </div>
             <div>
-              <span className="text-xl font-black" style={{ fontFamily: "'Space Grotesk', sans-serif", color: 'var(--t0)', letterSpacing: '-0.02em' }}>
+              <span
+                className="text-xl font-black"
+                style={{ fontFamily: "'Space Grotesk', sans-serif", color: 'var(--t0)', letterSpacing: '-0.02em' }}
+              >
                 i<span className="text-gradient">EZ</span>
               </span>
-              <p className="text-[10px] tracking-widest uppercase" style={{ color: 'var(--t2)' }}>Intelligent Engineering Zone</p>
+              <p className="text-[10px] tracking-widest uppercase" style={{ color: 'var(--t2)' }}>
+                Intelligent automation of Instrumentation documentation
+              </p>
             </div>
           </div>
         </div>
 
-        {/* Hero text */}
+        {/* Centre content */}
         <div className="relative flex-1 flex flex-col justify-center py-8">
-          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full mb-8 w-fit text-xs font-medium"
-            style={{ background: 'var(--em-dim)', border: '1px solid rgba(59,130,246,0.18)', color: 'var(--em-lt)' }}>
+          <div
+            className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full mb-10 w-fit text-xs font-medium"
+            style={{ background: 'var(--em-dim)', border: '1px solid rgba(59,130,246,0.18)', color: 'var(--em-lt)' }}
+          >
             <span className="w-1.5 h-1.5 rounded-full bg-blue-400" />
-            WABAG Water Treatment · India
+            Developed for VA TECH WABAG Water Treatment
           </div>
 
-          <h2
-            className="text-4xl font-black mb-5 leading-tight"
-            style={{ fontFamily: "'Space Grotesk', sans-serif", color: 'var(--t0)', letterSpacing: '-0.025em' }}
-          >
-            Engineering<br />
-            <span className="text-gradient">automation</span><br />
-            redefined.
-          </h2>
-          <p className="text-sm mb-10" style={{ color: 'var(--t1)', lineHeight: '1.75' }}>
-            Purpose-built for WABAG instrumentation teams — from IODB validation to AI-powered datasheet generation.
-          </p>
-
-          <div className="space-y-3">
-            {features.map((f, i) => {
-              const Icon = f.icon;
-              return (
-                <div key={i} className="flex items-center gap-3 animate-rise" style={{ animationDelay: `${i * 80 + 200}ms` }}>
-                  <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0" style={{ background: 'var(--s2)', border: '1px solid var(--b1)' }}>
-                    <Icon className="w-3.5 h-3.5" style={{ color: 'var(--em)' }} />
-                  </div>
-                  <span className="text-sm" style={{ color: 'var(--t1)' }}>{f.label}</span>
-                </div>
-              );
-            })}
+          {/* decorative water rings */}
+          <div className="relative w-48 h-48 mx-auto">
+            <div className="absolute inset-0 rounded-full border border-blue-500/10 animate-ping" style={{ animationDuration: '3s' }} />
+            <div className="absolute inset-4 rounded-full border border-blue-500/15 animate-ping" style={{ animationDuration: '3.6s', animationDelay: '0.6s' }} />
+            <div className="absolute inset-8 rounded-full border border-blue-400/20 animate-ping" style={{ animationDuration: '4.2s', animationDelay: '1.2s' }} />
+            <div
+              className="absolute inset-16 rounded-full flex items-center justify-center"
+              style={{ background: 'radial-gradient(circle, rgba(59,130,246,0.18) 0%, transparent 70%)' }}
+            >
+              <Droplets className="w-10 h-10" style={{ color: 'rgba(96,165,250,0.6)' }} />
+            </div>
           </div>
         </div>
 
@@ -164,8 +106,10 @@ export default function LoginPage() {
           </div>
 
           {error && (
-            <div className="mb-6 px-4 py-3 rounded-xl text-sm animate-rise"
-              style={{ background: 'rgba(248,113,113,0.08)', border: '1px solid rgba(248,113,113,0.2)', color: 'var(--rose)' }}>
+            <div
+              className="mb-6 px-4 py-3 rounded-xl text-sm animate-rise"
+              style={{ background: 'rgba(248,113,113,0.08)', border: '1px solid rgba(248,113,113,0.2)', color: 'var(--rose)' }}
+            >
               {error}
             </div>
           )}
@@ -173,7 +117,11 @@ export default function LoginPage() {
           <form onSubmit={submit} className="space-y-4">
             <div>
               <label className="block text-xs font-semibold mb-2 uppercase tracking-wider" style={{ color: 'var(--t2)' }}>Username</label>
-              <input type="text" required autoComplete="username" value={username} onChange={e => setUsername(e.target.value)} placeholder="your username" className="input-field" />
+              <input
+                type="text" required autoComplete="username"
+                value={username} onChange={e => setUsername(e.target.value)}
+                placeholder="your username" className="input-field"
+              />
             </div>
             <div>
               <label className="block text-xs font-semibold mb-2 uppercase tracking-wider" style={{ color: 'var(--t2)' }}>Password</label>
@@ -181,13 +129,13 @@ export default function LoginPage() {
                 <input
                   type={showPw ? 'text' : 'password'} required autoComplete="current-password"
                   value={password} onChange={e => setPassword(e.target.value)}
-                  placeholder="••••••••"
-                  className="input-field"
-                  style={{ paddingRight: '40px' }}
+                  placeholder="••••••••" className="input-field" style={{ paddingRight: '40px' }}
                 />
-                <button type="button" tabIndex={-1} onClick={() => setShowPw(!showPw)}
+                <button
+                  type="button" tabIndex={-1} onClick={() => setShowPw(!showPw)}
                   className="absolute right-3 top-1/2 -translate-y-1/2 opacity-40 hover:opacity-80 transition-opacity"
-                  style={{ color: 'var(--t1)' }}>
+                  style={{ color: 'var(--t1)' }}
+                >
                   {showPw ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                 </button>
               </div>

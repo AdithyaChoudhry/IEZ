@@ -522,21 +522,12 @@ export default function DataSheetGenerator() {
                 ))}
               </div>
 
-              {selectedType && !isLTRadar(selectedType) && (
+              {selectedType && (
                 <Button onClick={() => setStep(2)} className="mt-4 w-full">
                   Continue <ChevronRight className="w-3.5 h-3.5" />
                 </Button>
               )}
             </>
-          )}
-
-          {/* LT Non-Contact Radar sub-flow */}
-          {selectedType && isLTRadar(selectedType) && iodbFile && (
-            <LTRadarWizard
-              iodbFile={iodbFile}
-              instrumentType={selectedType}
-              onBack={() => setSelectedType('')}
-            />
           )}
         </div>
       )}
@@ -618,14 +609,23 @@ export default function DataSheetGenerator() {
           <div className="lg:col-span-2 flex gap-3">
             <Button variant="secondary" onClick={() => setStep(1)}>← Back</Button>
             <Button onClick={() => setStep(3)} disabled={!canProceedStep2} className="flex-1">
-              Configure Specs <ChevronRight className="w-3.5 h-3.5" />
+              {isLTRadar(selectedType) ? 'Continue to LT Radar Specs' : 'Configure Specs'} <ChevronRight className="w-3.5 h-3.5" />
             </Button>
           </div>
         </div>
       )}
 
-      {/* ── STEP 3: Spec Configuration ── */}
-      {step === 3 && (
+      {/* ── STEP 3 (LT Radar): LT Radar sub-wizard ── */}
+      {step === 3 && isLTRadar(selectedType) && iodbFile && (
+        <LTRadarWizard
+          iodbFile={iodbFile}
+          instrumentType={selectedType}
+          onBack={() => setStep(2)}
+        />
+      )}
+
+      {/* ── STEP 3: Spec Configuration (non-LT) ── */}
+      {step === 3 && !isLTRadar(selectedType) && (
         <div className="space-y-4">
           {/* IODB auto section (collapsible) */}
           {card(
@@ -750,7 +750,7 @@ export default function DataSheetGenerator() {
       )}
 
       {/* ── STEP 4: Notes + Vendor ── */}
-      {step === 4 && (
+      {step === 4 && !isLTRadar(selectedType) && (
         <div className="space-y-4">
           {card(
             <>
@@ -860,7 +860,7 @@ export default function DataSheetGenerator() {
       )}
 
       {/* ── STEP 5: Generate & Download ── */}
-      {step === 5 && (
+      {step === 5 && !isLTRadar(selectedType) && (
         <div className="space-y-4">
           {card(
             <div className="text-center py-6">

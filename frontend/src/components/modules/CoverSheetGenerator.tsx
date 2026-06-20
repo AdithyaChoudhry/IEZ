@@ -7,11 +7,11 @@
  *  • Upload your own template OR start with a blank canvas
  *  • Admin Employee ID + Password required before Generate
  */
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import {
   FileSpreadsheet, Upload, Download, Plus, Trash2, Save,
   Eye, ImagePlus, ChevronDown, ChevronRight, FileUp, X, CheckCircle2,
-  Lock, LayoutGrid, AlertTriangle, Loader2,
+  Lock, LayoutGrid, AlertTriangle, Loader2, FileUp as FileUpIcon,
 } from 'lucide-react';
 import api from '@/services/api';
 import CoverSheetPreview, { colLetter } from './coversheet/CoverSheetPreview';
@@ -40,6 +40,15 @@ interface AuthInfo { employee_name: string; role: string; employee_id: string; }
 const MASTER_KEY = 'iez_coversheet_project_master';
 const MAX_REVISIONS = 7;
 const DOC_CLASSES = ['APPROVAL', 'IFC', 'IFA', 'INFORMATION', 'INTERNAL', 'CONSTRUCTION'];
+
+const PAPER_SIZES = [
+  { label: 'A4  (210 × 297 mm)', value: '9' },
+  { label: 'A3  (297 × 420 mm)', value: '8' },
+  { label: 'A5  (148 × 210 mm)', value: '11' },
+  { label: 'Letter  (8.5 × 11 in)', value: '1' },
+  { label: 'Legal  (8.5 × 14 in)', value: '5' },
+  { label: 'Tabloid  (11 × 17 in)', value: '3' },
+];
 
 const FIXED_IMAGE_FIELDS: { key: ImageKey; label: string }[] = [
   { key: 'client_logo', label: 'Client Logo' },
@@ -222,6 +231,12 @@ export default function CoverSheetGenerator() {
   const [imagePlacements, setImagePlacements] = useState<Partial<Record<ImageKey, PlacementState>>>({});
   const [mergeRanges, setMergeRanges] = useState<MergeRange[]>([]);
   const [unmergeCoords, setUnmergeCoords] = useState<string[]>([]);
+  const [colOverrides, setColOverrides] = useState<Record<number, number>>({});
+  const [rowOverrides, setRowOverrides] = useState<Record<number, number>>({});
+  const [paperSize, setPaperSize] = useState('9'); // A4 default
+  const [orientation, setOrientation] = useState<'portrait' | 'landscape'>('portrait');
+  const mdlInputRef = useRef<HTMLInputElement>(null);
+  const [mdlFile, setMdlFile] = useState<File | null>(null);
 
   const [masterSaved, setMasterSaved] = useState(false);
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -290,6 +305,12 @@ export default function CoverSheetGenerator() {
       `${colLetter(mr.minCol)}${mr.minRow}:${colLetter(mr.maxCol)}${mr.maxRow}`
     );
 
+    // Convert 1-based col/row overrides to string-keyed for JSON
+    const colWidthOverrides: Record<string, number> = {};
+    const rowHeightOverrides: Record<string, number> = {};
+    Object.entries(colOverrides).forEach(([k, v]) => { colWidthOverrides[colLetter(+k)] = v; });
+    Object.entries(rowOverrides).forEach(([k, v]) => { rowHeightOverrides[k] = v; });
+
     fd.append('data', JSON.stringify({
       project_info: projectInfo,
       revisions,
@@ -300,6 +321,10 @@ export default function CoverSheetGenerator() {
         merge_ranges: mergeStrings,
         unmerge_coords: unmergeCoords,
         blank_mode: isBlank,
+        paper_size: paperSize,
+        orientation,
+        col_width_overrides: colWidthOverrides,
+        row_height_overrides: rowHeightOverrides,
         approved_by: ai?.employee_name || '',
         approver_id: ai?.employee_id || '',
       } : {}),
@@ -359,9 +384,35 @@ export default function CoverSheetGenerator() {
 
   return (
     <div className="p-6 max-w-6xl mx-auto space-y-5">
-      <PageHeader icon={FileSpreadsheet}
-        title="Cover Sheet Generator"
-        description="Click any cell to edit · Shift+click to select range · Merge / Unmerge · Drag images · Admin auth required to generate" />
+      {/* ── Top bar with header + Upload MDL ── */}
+      <div className="flex items-start gap-4">
+        <div className="flex-1">
+          <PageHeader icon={FileSpreadsheet}
+            title="Cover Sheet Generator"
+            description="Click any cell to edit · Shift+click to select range · Merge / Unmerge · Drag images · Admin auth required to generate" />
+        </div>
+
+        {/* Upload MDL — top right, no processing yet */}
+        <div className="flex-shrink-0 pt-1">
+          <input ref={mdlInputRef} type="file" accept=".xlsx,.xls,.csv" className="hidden"
+            onChange={e => setMdlFile(e.target.files?.[0] || null)} />
+          <button onClick={() => mdlInputRef.current?.click()}
+            className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold transition-all"
+            style={{
+              background: mdlFile ? 'rgba(74,222,128,0.08)' : 'var(--s2)',
+              color: mdlFile ? '#4ade80' : 'var(--t1)',
+              border: `1.5px dashed ${mdlFile ? 'rgba(74,222,128,0.4)' : 'var(--b2)'}`,
+            }}>
+            <FileUpIcon className="w-3.5 h-3.5" />
+            {mdlFile ? mdlFile.name.length > 22 ? mdlFile.name.slice(0, 20) + '…' : mdlFile.name : 'Upload MDL'}
+          </button>
+          {mdlFile && (
+            <button onClick={() => setMdlFile(null)}
+              className="text-[10px] mt-1 ml-1 opacity-50 hover:opacity-100"
+              style={{ color: 'var(--rose)' }}>✕ Remove</button>
+          )}
+        </div>
+      </div>
 
       {error && <Alert variant="error" onClose={() => setError(null)}>{error}</Alert>}
 
@@ -400,6 +451,34 @@ export default function CoverSheetGenerator() {
               onChange={e => setTemplateFile(e.target.files?.[0] || null)} />
           </label>
         )}
+      </Section>
+
+      {/* ── Page Layout ── */}
+      <Section title="Page Layout" subtitle="Paper size and orientation applied to the generated Excel file" defaultOpen={false}>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div>
+            <label className={lc} style={lcSt}>Paper Size</label>
+            <select className={ic} style={icSt} value={paperSize} onChange={e => setPaperSize(e.target.value)}>
+              {PAPER_SIZES.map(ps => <option key={ps.value} value={ps.value}>{ps.label}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className={lc} style={lcSt}>Orientation</label>
+            <div className="flex gap-2">
+              {(['portrait', 'landscape'] as const).map(o => (
+                <button key={o} onClick={() => setOrientation(o)}
+                  className="flex-1 py-2 rounded-xl text-xs font-bold capitalize"
+                  style={{
+                    background: orientation === o ? 'rgba(59,130,246,0.08)' : 'var(--s3)',
+                    color: orientation === o ? 'var(--em-lt)' : 'var(--t1)',
+                    border: `1.5px solid ${orientation === o ? 'var(--em)' : 'var(--b2)'}`,
+                  }}>
+                  {o === 'portrait' ? '⬛ Portrait' : '▬ Landscape'}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
       </Section>
 
       {/* ── Quick Fill ── */}
@@ -589,6 +668,10 @@ export default function CoverSheetGenerator() {
               onMergeRangesChange={setMergeRanges}
               unmergeCoords={unmergeCoords}
               onUnmergeCoordsChange={setUnmergeCoords}
+              colOverrides={colOverrides}
+              onColOverridesChange={setColOverrides}
+              rowOverrides={rowOverrides}
+              onRowOverridesChange={setRowOverrides}
             />
           </div>
         ) : (

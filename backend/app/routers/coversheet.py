@@ -157,6 +157,10 @@ async def generate(
         merge_ranges=getattr(payload, "merge_ranges", []) or [],
         unmerge_coords=getattr(payload, "unmerge_coords", []) or [],
         blank_mode=getattr(payload, "blank_mode", False),
+        paper_size=getattr(payload, "paper_size", "9"),
+        orientation=getattr(payload, "orientation", "portrait"),
+        col_width_overrides=getattr(payload, "col_width_overrides", {}) or {},
+        row_height_overrides=getattr(payload, "row_height_overrides", {}) or {},
     )
     if err:
         raise HTTPException(status_code=400, detail=err)

@@ -65,6 +65,7 @@ export interface CellOverride {
     shrinkToFit: boolean;
   }>;
   font?: Partial<{
+    name: string;
     size: number;
     bold: boolean;
     italic: boolean;

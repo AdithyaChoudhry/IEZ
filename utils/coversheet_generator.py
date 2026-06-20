@@ -201,14 +201,19 @@ def generate_cover_sheet(
     merge_ranges: list[str] | None = None,
     unmerge_coords: list[str] | None = None,
     blank_mode: bool = False,
+    paper_size: str = "9",
+    orientation: str = "portrait",
+    col_width_overrides: dict | None = None,
+    row_height_overrides: dict | None = None,
 ) -> tuple[bytes | None, str | None, str | None]:
     """
     Fill the cover sheet template with project information, revision
     history, repositioned images, and cell-formatting overrides.
 
-    merge_ranges: list of Excel range strings ("A1:C3") to merge
-    unmerge_coords: list of Excel range strings ("A1:C3") to unmerge
-    blank_mode: if True, start from a fresh blank workbook instead of template
+    paper_size: openpyxl paper size code string (e.g. "9" = A4, "8" = A3, "1" = Letter)
+    orientation: "portrait" or "landscape"
+    col_width_overrides: {"A": px, "B": px, ...}  (column letter → pixel width)
+    row_height_overrides: {"1": px, "3": px, ...} (1-based row number string → pixel height)
 
     Returns (output_bytes, filename, error_message).
     """
@@ -222,6 +227,8 @@ def generate_cover_sheet(
         cell_overrides = cell_overrides or {}
         merge_ranges = merge_ranges or []
         unmerge_coords = unmerge_coords or []
+        col_width_overrides = col_width_overrides or {}
+        row_height_overrides = row_height_overrides or {}
 
         if blank_mode:
             from openpyxl import Workbook as _Workbook
@@ -314,6 +321,30 @@ def generate_cover_sheet(
                 continue
             if info and info.get("bytes") and info.get("placement"):
                 place_image(ws, info["bytes"], info["placement"], col_widths, row_heights)
+
+        # ── Page setup: paper size and orientation ──────────────────────────────
+        try:
+            ws.page_setup.paperSize = int(paper_size)
+        except Exception:
+            ws.page_setup.paperSize = 9  # fallback A4
+        ws.page_setup.orientation = (
+            ws.ORIENTATION_LANDSCAPE if orientation == "landscape"
+            else ws.ORIENTATION_PORTRAIT
+        )
+
+        # ── Column width overrides (px → openpyxl character units, ~7 px/char) ─
+        for col_letter_str, px in col_width_overrides.items():
+            try:
+                ws.column_dimensions[col_letter_str.upper()].width = max(1.0, px / 7.0)
+            except Exception:
+                pass
+
+        # ── Row height overrides (px → points, 1 pt ≈ 1.333 px) ─────────────
+        for row_str, px in row_height_overrides.items():
+            try:
+                ws.row_dimensions[int(row_str)].height = max(1.0, px * 0.75)
+            except Exception:
+                pass
 
         out_bytes = workbook_to_bytes(wb)
         doc_code = project_info.get("doc_code", "COVER")

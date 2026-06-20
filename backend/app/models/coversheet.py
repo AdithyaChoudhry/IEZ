@@ -52,6 +52,13 @@ class CoverSheetRequest(BaseModel):
     merge_ranges: List[str] = Field(default_factory=list)
     unmerge_coords: List[str] = Field(default_factory=list)
     blank_mode: bool = False
+    # Page layout
+    paper_size: str = "9"          # openpyxl paper size code; 9 = A4
+    orientation: str = "portrait"  # "portrait" | "landscape"
+    # Column width overrides: {"A": 80.0, "B": 120.0, ...} (px)
+    col_width_overrides: Dict[str, float] = Field(default_factory=dict)
+    # Row height overrides: {"1": 25.0, "3": 40.0, ...} (px, 1-based)
+    row_height_overrides: Dict[str, float] = Field(default_factory=dict)
     # Audit fields (who approved the generation)
     approved_by: str = ""
     approver_id: str = ""

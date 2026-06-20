@@ -25,6 +25,11 @@ const SCALE = 0.62;
 const ROW_HDR_W = 32; // px (screen-space, outside scaled canvas)
 const COL_HDR_H = 18; // px
 
+const FONT_LIST = [
+  'Calibri', 'Arial', 'Times New Roman', 'Courier New', 'Verdana',
+  'Georgia', 'Tahoma', 'Trebuchet MS', 'Impact', 'Comic Sans MS',
+];
+
 const FIXED_IMAGE_LABELS: Record<ImageKey, string> = {
   client_logo: 'Client Logo',
   pmc_logo: 'PMC Logo',
@@ -61,6 +66,11 @@ interface Props {
   onMergeRangesChange: (r: MergeRange[]) => void;
   unmergeCoords: string[];
   onUnmergeCoordsChange: (c: string[]) => void;
+  // Column width overrides (1-based col index → px) and row height overrides (1-based → px)
+  colOverrides: Record<number, number>;
+  onColOverridesChange: (o: Record<number, number>) => void;
+  rowOverrides: Record<number, number>;
+  onRowOverridesChange: (o: Record<number, number>) => void;
 }
 
 type ImageSel = { kind: 'fixed'; key: ImageKey } | { kind: 'custom'; id: string };
@@ -72,6 +82,8 @@ export default function CoverSheetPreview({
   customImages, onCustomImagesChange,
   mergeRanges, onMergeRangesChange,
   unmergeCoords, onUnmergeCoordsChange,
+  colOverrides, onColOverridesChange,
+  rowOverrides, onRowOverridesChange,
 }: Props) {
   const [selection, setSelection] = useState<Selection | null>(null);
   const [anchor, setAnchor] = useState<{ row: number; col: number } | null>(null);
@@ -283,8 +295,11 @@ export default function CoverSheetPreview({
     if (imageSel?.kind === 'custom' && imageSel.id === id) setImageSel(null);
   };
 
-  const canvasW = layout.width * SCALE;
-  const canvasH = layout.height * SCALE;
+  // Effective column widths and row heights (apply user overrides)
+  const effCols = layout.cols.map((w, i) => colOverrides[i + 1] ?? w);
+  const effRows = layout.rows.map((h, i) => rowOverrides[i + 1] ?? h);
+  const canvasW = effCols.reduce((a, b) => a + b, 0) * SCALE;
+  const canvasH = effRows.reduce((a, b) => a + b, 0) * SCALE;
   const colCount = layout.cols.length;
 
   const selFixedKey = imageSel?.kind === 'fixed' ? imageSel.key : null;
@@ -301,7 +316,7 @@ export default function CoverSheetPreview({
 
           {/* Column letter header row */}
           <div className="flex" style={{ marginLeft: ROW_HDR_W + 8 }}>
-            {layout.cols.map((w, i) => (
+            {effCols.map((w, i) => (
               <div key={i}
                 style={{
                   width: w * SCALE,
@@ -327,7 +342,7 @@ export default function CoverSheetPreview({
           <div className="flex">
             {/* Row number column */}
             <div style={{ width: ROW_HDR_W, flexShrink: 0 }}>
-              {layout.rows.map((h, i) => (
+              {effRows.map((h, i) => (
                 <div key={i}
                   style={{
                     width: ROW_HDR_W, height: h * SCALE,
@@ -346,15 +361,16 @@ export default function CoverSheetPreview({
             <div style={{ position: 'relative', width: canvasW, height: canvasH, flexShrink: 0 }}>
               <div style={{
                 position: 'absolute', top: 0, left: 0,
-                width: layout.width, height: layout.height,
+                width: effCols.reduce((a, b) => a + b, 0),
+                height: effRows.reduce((a, b) => a + b, 0),
                 transform: `scale(${SCALE})`, transformOrigin: 'top left',
               }}>
-                <table style={{ borderCollapse: 'collapse', width: layout.width, tableLayout: 'fixed' }}>
+                <table style={{ borderCollapse: 'collapse', width: effCols.reduce((a, b) => a + b, 0), tableLayout: 'fixed' }}>
                   <colgroup>
-                    {layout.cols.map((w, i) => <col key={i} style={{ width: `${w}px` }} />)}
+                    {effCols.map((w, i) => <col key={i} style={{ width: `${w}px` }} />)}
                   </colgroup>
                   <tbody>
-                    {layout.rows.map((h, rIdx) => {
+                    {effRows.map((h, rIdx) => {
                       const r = rIdx + 1;
                       return (
                         <tr key={r} style={{ height: `${h}px` }}>
@@ -528,15 +544,20 @@ export default function CoverSheetPreview({
                 ))}
               </div>
 
-              {/* Wrap / Shrink + font */}
+              {/* Font family */}
+              <div>
+                <label className="block text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--t2)' }}>Font</label>
+                <select
+                  value={selOverride?.font?.name ?? effFont.name ?? 'Calibri'}
+                  onChange={e => updateCellOverride(singleCell.coord, { font: { name: e.target.value } })}
+                  className="w-full px-2 py-1.5 rounded-lg text-xs"
+                  style={{ background: 'var(--s0)', border: '1px solid var(--b2)', color: 'var(--t0)', outline: 'none' }}>
+                  {FONT_LIST.map(f => <option key={f} value={f}>{f}</option>)}
+                </select>
+              </div>
+
+              {/* Font size + style + wrap/shrink */}
               <div className="flex items-center gap-1.5">
-                {[{ label: 'Wrap', I: WrapText, k: 'wrapText' as const }, { label: 'Shrink', I: Shrink, k: 'shrinkToFit' as const }].map(({ label, I, k }) => (
-                  <button key={k} onClick={() => updateCellOverride(singleCell.coord, { alignment: { [k]: !(effAlign as any)[k] } })}
-                    className="flex items-center gap-1 px-2 py-1.5 rounded-lg text-[11px] flex-1 justify-center"
-                    style={{ background: (effAlign as any)[k] ? 'var(--em)' : 'var(--s3)', color: (effAlign as any)[k] ? '#fff' : 'var(--t1)', border: '1px solid var(--b2)' }}>
-                    <I className="w-3 h-3" />{label}
-                  </button>
-                ))}
                 <input type="number" min={6} max={72} value={effFont.size || 10}
                   onChange={e => updateCellOverride(singleCell.coord, { font: { size: +e.target.value || 10 } })}
                   className="w-14 px-2 py-1.5 rounded-lg text-xs text-center"
@@ -549,6 +570,44 @@ export default function CoverSheetPreview({
                     <I className="w-3.5 h-3.5" />
                   </button>
                 ))}
+                <div className="w-px mx-0.5" style={{ background: 'var(--b2)' }} />
+                {[{ label: 'Wrap', I: WrapText, k: 'wrapText' as const }, { label: 'Fit', I: Shrink, k: 'shrinkToFit' as const }].map(({ label, I, k }) => (
+                  <button key={k} onClick={() => updateCellOverride(singleCell.coord, { alignment: { [k]: !(effAlign as any)[k] } })}
+                    className="flex items-center gap-0.5 px-1.5 py-1.5 rounded-lg text-[10px]"
+                    style={{ background: (effAlign as any)[k] ? 'var(--em)' : 'var(--s3)', color: (effAlign as any)[k] ? '#fff' : 'var(--t1)', border: '1px solid var(--b2)' }}>
+                    <I className="w-3 h-3" />{label}
+                  </button>
+                ))}
+              </div>
+
+              {/* Column width + Row height */}
+              <div className="grid grid-cols-2 gap-2 pt-1" style={{ borderTop: '1px solid var(--b1)' }}>
+                <div>
+                  <label className="block text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--t2)' }}>
+                    Col {colLetter(singleCell.col)} Width (px)
+                  </label>
+                  <input type="number" min={10} max={600}
+                    value={Math.round(effCols[singleCell.col - 1] ?? layout.cols[singleCell.col - 1])}
+                    onChange={e => {
+                      const v = Math.max(10, +e.target.value || 10);
+                      onColOverridesChange({ ...colOverrides, [singleCell.col]: v });
+                    }}
+                    className="w-full px-2 py-1.5 rounded-lg text-xs text-center"
+                    style={{ background: 'var(--s0)', border: '1px solid var(--b2)', color: 'var(--t0)', outline: 'none' }} />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--t2)' }}>
+                    Row {singleCell.row} Height (px)
+                  </label>
+                  <input type="number" min={5} max={400}
+                    value={Math.round(effRows[singleCell.row - 1] ?? layout.rows[singleCell.row - 1])}
+                    onChange={e => {
+                      const v = Math.max(5, +e.target.value || 5);
+                      onRowOverridesChange({ ...rowOverrides, [singleCell.row]: v });
+                    }}
+                    className="w-full px-2 py-1.5 rounded-lg text-xs text-center"
+                    style={{ background: 'var(--s0)', border: '1px solid var(--b2)', color: 'var(--t0)', outline: 'none' }} />
+                </div>
               </div>
             </div>
           </div>
@@ -613,10 +672,11 @@ export default function CoverSheetPreview({
         {!selection && !imageSel && (
           <div className="rounded-xl p-4 text-center" style={{ background: 'var(--s2)', border: '1px dashed var(--b2)' }}>
             <p className="text-xs leading-relaxed" style={{ color: 'var(--t2)' }}>
-              <strong style={{ color: 'var(--t1)' }}>Click</strong> a cell to edit value & formatting<br />
+              <strong style={{ color: 'var(--t1)' }}>Click</strong> a cell to edit value, font, size & alignment<br />
               <strong style={{ color: 'var(--t1)' }}>Shift+Click</strong> to select a range<br />
               Select 2+ cells → <strong style={{ color: 'var(--em-lt)' }}>Merge</strong><br />
-              Click merged cell → <strong style={{ color: 'var(--gold)' }}>Unmerge</strong>
+              Click merged cell → <strong style={{ color: 'var(--gold)' }}>Unmerge</strong><br />
+              Cell panel → set <strong style={{ color: 'var(--t1)' }}>Column Width</strong> &amp; <strong style={{ color: 'var(--t1)' }}>Row Height</strong>
             </p>
           </div>
         )}

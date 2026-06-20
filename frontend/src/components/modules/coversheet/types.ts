@@ -45,7 +45,7 @@ export interface ImagePlacement {
   y: number;
   width: number;
   height: number;
-  data?: string; // base64, present when an image is loaded for that key
+  data?: string;
 }
 
 export type ImageKey =
@@ -57,7 +57,7 @@ export type ImageKey =
   | 'approved_signature';
 
 export interface CellOverride {
-  value?: string; // direct cell value override (shown in preview + written to Excel)
+  value?: string;
   alignment?: Partial<{
     horizontal: string;
     vertical: string;
@@ -72,11 +72,20 @@ export interface CellOverride {
   }>;
 }
 
-// Custom image uploaded by user (unlimited, beyond the 6 fixed slots)
+// Custom image uploaded by user
 export interface CustomImageSlot {
-  id: string;       // uuid-ish
-  label: string;    // user-visible name
+  id: string;
+  label: string;
   file: File;
-  dataUrl: string;  // for preview canvas
+  dataUrl: string;
   placement: { x: number; y: number; width: number; height: number };
+}
+
+// Cell merge override (frontend creates, backend applies)
+export interface MergeRange {
+  id: string;
+  minRow: number;
+  maxRow: number;
+  minCol: number;
+  maxCol: number;
 }

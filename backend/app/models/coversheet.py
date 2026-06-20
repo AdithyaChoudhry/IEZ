@@ -47,8 +47,14 @@ class CoverSheetRequest(BaseModel):
     revisions: List[RevisionEntry] = Field(..., min_items=1, max_items=7)
     image_placements: Dict[str, ImagePlacement] = Field(default_factory=dict)
     cell_overrides: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
-    # custom image placements keyed by image id
     custom_image_placements: Dict[str, Dict[str, float]] = Field(default_factory=dict)
+    # Canvas merge/unmerge overrides (Excel range strings, e.g. "A1:C3")
+    merge_ranges: List[str] = Field(default_factory=list)
+    unmerge_coords: List[str] = Field(default_factory=list)
+    blank_mode: bool = False
+    # Audit fields (who approved the generation)
+    approved_by: str = ""
+    approver_id: str = ""
 
 
 class CoverSheetPreviewRequest(BaseModel):

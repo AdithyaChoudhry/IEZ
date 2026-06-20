@@ -198,29 +198,17 @@ def generate_cover_sheet(
     images: dict | None = None,
     cell_overrides: dict | None = None,
     template_bytes: bytes | None = None,
+    merge_ranges: list[str] | None = None,
+    unmerge_coords: list[str] | None = None,
+    blank_mode: bool = False,
 ) -> tuple[bytes | None, str | None, str | None]:
     """
     Fill the cover sheet template with project information, revision
     history, repositioned images, and cell-formatting overrides.
 
-    project_info keys:
-        client, pmc, contractor, project_description,
-        doc_title_short, doc_title_full,
-        job_no, unit_no, project_no, doc_code, serial_no, page_no,
-        doc_class, discipline
-
-    revisions: list of dicts (oldest first, max 7), each with:
-        rev_no, date, description, prepared_by, checked_by, approved_by
-
-    images: {
-        "client_logo" | "pmc_logo" | "wabag_logo" |
-        "prepared_signature" | "checked_signature" | "approved_signature": {
-            "bytes": <image bytes>,            # optional
-            "placement": {"x","y","width","height"},  # optional, in px
-        }
-    }
-
-    cell_overrides: {"A1": {"alignment": {...}, "font": {...}}, ...}
+    merge_ranges: list of Excel range strings ("A1:C3") to merge
+    unmerge_coords: list of Excel range strings ("A1:C3") to unmerge
+    blank_mode: if True, start from a fresh blank workbook instead of template
 
     Returns (output_bytes, filename, error_message).
     """
@@ -232,64 +220,91 @@ def generate_cover_sheet(
 
         images = images or {}
         cell_overrides = cell_overrides or {}
+        merge_ranges = merge_ranges or []
+        unmerge_coords = unmerge_coords or []
 
-        if template_bytes:
+        if blank_mode:
+            from openpyxl import Workbook as _Workbook
+            wb = _Workbook()
+            ws = wb.active
+            ws.title = "Coversheet"
+            existing_images = []
+            wabag_default = None
+        elif template_bytes:
             import io as _io
             wb = load_workbook(_io.BytesIO(template_bytes))
             ws_name = wb.sheetnames[0]
             ws = wb[ws_name]
+            existing_images = extract_existing_images(ws)
+            wabag_default = existing_images[0] if existing_images else None
         else:
             wb = load_workbook(TEMPLATE_PATH)
             ws = wb["Coversheet"]
+            existing_images = extract_existing_images(ws)
+            wabag_default = existing_images[0] if existing_images else None
 
-        existing_images = extract_existing_images(ws)
-        wabag_default = existing_images[0] if existing_images else None
+        if not blank_mode:
+            _fill_fields(ws, project_info, revisions)
+            _strip_placeholder_highlights(ws)
 
-        _fill_fields(ws, project_info, revisions)
-        _strip_placeholder_highlights(ws)
         apply_cell_overrides(ws, cell_overrides)
+
+        # Apply unmerges (split template merges the user removed)
+        for range_str in unmerge_coords:
+            try:
+                ws.unmerge_cells(range_str)
+            except Exception:
+                pass  # ignore if not actually merged
+
+        # Apply new merges (user added via canvas)
+        for range_str in merge_ranges:
+            try:
+                ws.merge_cells(range_str)
+            except Exception:
+                pass
 
         col_widths = get_col_widths_px(ws)
         row_heights = get_row_heights_px(ws)
-        defaults = _default_image_placements(col_widths, row_heights, revisions)
 
-        # Remove embedded images (e.g. WABAG logo) - re-added below at the
-        # (possibly repositioned) placement.
+        # Remove embedded images - re-added below at corrected placements
         ws._images = []
 
-        # --- Client logo ---
-        client_info = images.get("client_logo")
-        if client_info and client_info.get("bytes"):
-            placement = client_info.get("placement") or defaults["client_logo"]
-            place_image(ws, client_info["bytes"], placement, col_widths, row_heights)
-            ws["A1"] = ""
-        else:
-            ws["A1"] = project_info.get("client", "")
+        if not blank_mode:
+            defaults = _default_image_placements(col_widths, row_heights, revisions)
 
-        # --- WABAG logo (from template, optionally repositioned/replaced) ---
-        wabag_info = images.get("wabag_logo")
-        wabag_bytes = (wabag_info or {}).get("bytes")
-        if not wabag_bytes and wabag_default:
-            wabag_bytes = base64.b64decode(wabag_default["data"])
-        if wabag_bytes:
-            placement = (wabag_info or {}).get("placement")
-            if not placement and wabag_default:
-                placement = {k: wabag_default[k] for k in ("x", "y", "width", "height")}
-            if placement:
-                place_image(ws, wabag_bytes, placement, col_widths, row_heights)
+            # --- Client logo ---
+            client_info = images.get("client_logo")
+            if client_info and client_info.get("bytes"):
+                placement = client_info.get("placement") or defaults["client_logo"]
+                place_image(ws, client_info["bytes"], placement, col_widths, row_heights)
+                ws["A1"] = ""
+            else:
+                ws["A1"] = project_info.get("client", "")
 
-        # --- PMC logo (optional) ---
-        pmc_info = images.get("pmc_logo")
-        if pmc_info and pmc_info.get("bytes"):
-            placement = pmc_info.get("placement") or defaults["pmc_logo"]
-            place_image(ws, pmc_info["bytes"], placement, col_widths, row_heights)
+            # --- WABAG logo (from template, optionally repositioned/replaced) ---
+            wabag_info = images.get("wabag_logo")
+            wabag_bytes = (wabag_info or {}).get("bytes")
+            if not wabag_bytes and wabag_default:
+                wabag_bytes = base64.b64decode(wabag_default["data"])
+            if wabag_bytes:
+                placement = (wabag_info or {}).get("placement")
+                if not placement and wabag_default:
+                    placement = {k: wabag_default[k] for k in ("x", "y", "width", "height")}
+                if placement:
+                    place_image(ws, wabag_bytes, placement, col_widths, row_heights)
 
-        # --- Signatures (optional) ---
-        for key in _SIGNATURE_COLS:
-            info = images.get(key)
-            if info and info.get("bytes"):
-                placement = info.get("placement") or defaults[key]
-                place_image(ws, info["bytes"], placement, col_widths, row_heights)
+            # --- PMC logo (optional) ---
+            pmc_info = images.get("pmc_logo")
+            if pmc_info and pmc_info.get("bytes"):
+                placement = pmc_info.get("placement") or defaults["pmc_logo"]
+                place_image(ws, pmc_info["bytes"], placement, col_widths, row_heights)
+
+            # --- Signatures (optional) ---
+            for key in _SIGNATURE_COLS:
+                info = images.get(key)
+                if info and info.get("bytes"):
+                    placement = info.get("placement") or defaults[key]
+                    place_image(ws, info["bytes"], placement, col_widths, row_heights)
 
         # --- Custom / extra images (any id not in the known fixed keys) ---
         _known_keys = {"client_logo", "pmc_logo", "wabag_logo",

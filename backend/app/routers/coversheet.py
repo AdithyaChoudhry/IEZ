@@ -154,6 +154,9 @@ async def generate(
         images=images,
         cell_overrides=payload.cell_overrides,
         template_bytes=template_bytes,
+        merge_ranges=getattr(payload, "merge_ranges", []) or [],
+        unmerge_coords=getattr(payload, "unmerge_coords", []) or [],
+        blank_mode=getattr(payload, "blank_mode", False),
     )
     if err:
         raise HTTPException(status_code=400, detail=err)

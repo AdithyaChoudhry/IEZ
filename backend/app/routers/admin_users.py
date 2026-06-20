@@ -105,6 +105,24 @@ def reset_password(employee_id: str, body: ResetPasswordRequest, db: Session = D
     return u
 
 
+# ── Verify credentials (no log — used for cover sheet auth gate) ───────────────
+
+@router.post("/verify")
+def verify_credentials(body: dict, db: Session = Depends(get_db), _: User = Depends(get_current_user)):
+    """Check Employee ID + Password without creating any audit entry."""
+    emp_id = body.get("employee_id", "")
+    password = body.get("password", "")
+    if not emp_id or not password:
+        raise HTTPException(400, "employee_id and password are required")
+    admin = db.query(AdminUser).filter(
+        AdminUser.employee_id == emp_id,
+        AdminUser.status == "active",
+    ).first()
+    if not admin or not verify_password(password, admin.password_hash):
+        raise HTTPException(401, "Invalid Employee ID or Password")
+    return {"verified": True, "employee_name": admin.employee_name, "role": admin.role}
+
+
 # ── Engineering Approval ───────────────────────────────────────────────────────
 
 @router.post("/approve", response_model=ApprovalResponse)

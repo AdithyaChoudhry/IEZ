@@ -138,7 +138,7 @@ def _default_image_placements(col_widths, row_heights, revisions):
     return placements
 
 
-def build_preview(project_info: dict, revisions: list[dict], uploaded_images: dict | None = None):
+def build_preview(project_info: dict, revisions: list[dict], uploaded_images: dict | None = None, template_bytes: bytes | None = None):
     """
     Build a JSON-serialisable preview: the filled-in grid layout (cells,
     styles, merges, row/col sizes) plus image overlays (current WABAG logo
@@ -156,8 +156,14 @@ def build_preview(project_info: dict, revisions: list[dict], uploaded_images: di
         if len(revisions) > MAX_REVISIONS:
             return None, f"A maximum of {MAX_REVISIONS} revisions is supported."
 
-        wb = load_workbook(TEMPLATE_PATH)
-        ws = wb["Coversheet"]
+        if template_bytes:
+            import io as _io
+            wb = load_workbook(_io.BytesIO(template_bytes))
+            ws_name = wb.sheetnames[0]  # use first sheet of custom template
+            ws = wb[ws_name]
+        else:
+            wb = load_workbook(TEMPLATE_PATH)
+            ws = wb["Coversheet"]
 
         existing_images = extract_existing_images(ws)
 
@@ -191,6 +197,7 @@ def generate_cover_sheet(
     revisions: list[dict],
     images: dict | None = None,
     cell_overrides: dict | None = None,
+    template_bytes: bytes | None = None,
 ) -> tuple[bytes | None, str | None, str | None]:
     """
     Fill the cover sheet template with project information, revision
@@ -226,8 +233,14 @@ def generate_cover_sheet(
         images = images or {}
         cell_overrides = cell_overrides or {}
 
-        wb = load_workbook(TEMPLATE_PATH)
-        ws = wb["Coversheet"]
+        if template_bytes:
+            import io as _io
+            wb = load_workbook(_io.BytesIO(template_bytes))
+            ws_name = wb.sheetnames[0]
+            ws = wb[ws_name]
+        else:
+            wb = load_workbook(TEMPLATE_PATH)
+            ws = wb["Coversheet"]
 
         existing_images = extract_existing_images(ws)
         wabag_default = existing_images[0] if existing_images else None
@@ -277,6 +290,15 @@ def generate_cover_sheet(
             if info and info.get("bytes"):
                 placement = info.get("placement") or defaults[key]
                 place_image(ws, info["bytes"], placement, col_widths, row_heights)
+
+        # --- Custom / extra images (any id not in the known fixed keys) ---
+        _known_keys = {"client_logo", "pmc_logo", "wabag_logo",
+                       "prepared_signature", "checked_signature", "approved_signature"}
+        for img_id, info in images.items():
+            if img_id in _known_keys:
+                continue
+            if info and info.get("bytes") and info.get("placement"):
+                place_image(ws, info["bytes"], info["placement"], col_widths, row_heights)
 
         out_bytes = workbook_to_bytes(wb)
         doc_code = project_info.get("doc_code", "COVER")

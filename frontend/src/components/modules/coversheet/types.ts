@@ -57,6 +57,7 @@ export type ImageKey =
   | 'approved_signature';
 
 export interface CellOverride {
+  value?: string; // direct cell value override (shown in preview + written to Excel)
   alignment?: Partial<{
     horizontal: string;
     vertical: string;
@@ -69,4 +70,13 @@ export interface CellOverride {
     italic: boolean;
     underline: boolean;
   }>;
+}
+
+// Custom image uploaded by user (unlimited, beyond the 6 fixed slots)
+export interface CustomImageSlot {
+  id: string;       // uuid-ish
+  label: string;    // user-visible name
+  file: File;
+  dataUrl: string;  // for preview canvas
+  placement: { x: number; y: number; width: number; height: number };
 }

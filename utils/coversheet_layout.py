@@ -224,14 +224,18 @@ def place_image(ws, image_bytes, placement, col_widths, row_heights):
 
 
 def apply_cell_overrides(ws, overrides):
-    """Apply alignment/font overrides to cells.
+    """Apply value / alignment / font overrides to cells.
 
-    overrides: {"A1": {"alignment": {...}, "font": {...}}, ...}
+    overrides: {"A1": {"value": "...", "alignment": {...}, "font": {...}}, ...}
     Only the keys present in each override dict are changed; everything
     else (borders, fills, merges, sizing) is left untouched.
     """
     for coord, override in overrides.items():
         cell = ws[coord]
+
+        # Direct value override (from canvas cell editor)
+        if "value" in override:
+            cell.value = override["value"]
 
         align_override = override.get("alignment")
         if align_override:

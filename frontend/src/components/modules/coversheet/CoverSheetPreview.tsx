@@ -1,57 +1,58 @@
 /**
- * Interactive cover sheet preview: renders the filled-in grid (mirroring
- * the Excel template's fonts/borders/merges/alignment), lets the user
- * tweak alignment/font formatting per cell, and reposition/resize image
- * overlays (logos, signatures) before final generation.
+ * Canvas-first interactive cover sheet preview.
+ * – Click any cell to edit its value directly
+ * – Alignment / font controls update in real time
+ * – Fixed images (from preview API) + unlimited custom images can be dragged & resized
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { AlignLeft, AlignCenter, AlignRight, AlignStartVertical, AlignCenterVertical, AlignEndVertical, Bold, Italic, Underline, WrapText, Shrink, ArrowUp, ArrowDown, ArrowLeft, ArrowRight } from 'lucide-react';
-import type { CoverSheetLayout, ImagePlacement, ImageKey, CellOverride, LayoutCell } from './types';
+import {
+  AlignLeft, AlignCenter, AlignRight,
+  AlignStartVertical, AlignCenterVertical, AlignEndVertical,
+  Bold, Italic, Underline, WrapText, Shrink,
+  ArrowUp, ArrowDown, ArrowLeft, ArrowRight,
+  Image as ImageIcon, X, Lock, Unlock,
+} from 'lucide-react';
+import type { CoverSheetLayout, ImagePlacement, ImageKey, CellOverride, LayoutCell, CustomImageSlot } from './types';
 import { styleToCss } from './styleUtils';
 import ImageOverlay from './ImageOverlay';
 
 const SCALE = 0.62;
 
-const IMAGE_LABELS: Record<ImageKey, string> = {
+const FIXED_IMAGE_LABELS: Record<ImageKey, string> = {
   client_logo: 'Client Logo',
   pmc_logo: 'PMC Logo',
   wabag_logo: 'WABAG Logo',
-  prepared_signature: 'Prepared By Signature',
-  checked_signature: 'Checked By Signature',
-  approved_signature: 'Approved By Signature',
+  prepared_signature: 'Prepared Signature',
+  checked_signature: 'Checked Signature',
+  approved_signature: 'Approved Signature',
 };
 
-interface PlacementState {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}
+interface PlacementState { x: number; y: number; width: number; height: number; }
 
 interface Props {
   layout: CoverSheetLayout;
   images: Partial<Record<ImageKey, ImagePlacement>>;
   cellOverrides: Record<string, CellOverride>;
-  onCellOverridesChange: (overrides: Record<string, CellOverride>) => void;
+  onCellOverridesChange: (o: Record<string, CellOverride>) => void;
   imagePlacements: Partial<Record<ImageKey, PlacementState>>;
-  onImagePlacementsChange: (placements: Partial<Record<ImageKey, PlacementState>>) => void;
+  onImagePlacementsChange: (p: Partial<Record<ImageKey, PlacementState>>) => void;
+  customImages: CustomImageSlot[];
+  onCustomImagesChange: (imgs: CustomImageSlot[]) => void;
 }
 
+type SelectionKind = { kind: 'cell'; cell: LayoutCell } | { kind: 'fixed'; key: ImageKey } | { kind: 'custom'; id: string } | null;
+
 export default function CoverSheetPreview({
-  layout,
-  images,
-  cellOverrides,
-  onCellOverridesChange,
-  imagePlacements,
-  onImagePlacementsChange,
+  layout, images,
+  cellOverrides, onCellOverridesChange,
+  imagePlacements, onImagePlacementsChange,
+  customImages, onCustomImagesChange,
 }: Props) {
-  const [selectedCell, setSelectedCell] = useState<LayoutCell | null>(null);
-  const [selectedImage, setSelectedImage] = useState<ImageKey | null>(null);
-  const [aspectLocks, setAspectLocks] = useState<Partial<Record<ImageKey, boolean>>>({});
+  const [selection, setSelection] = useState<SelectionKind>(null);
+  const [aspectLocks, setAspectLocks] = useState<Record<string, boolean>>({});
   const initializedKeys = useRef<Set<string>>(new Set());
 
-  // Initialize placements for newly-seen images, preserving any
-  // user-adjusted placements for images we've already initialized.
+  // Initialize fixed image placements from preview API defaults
   useEffect(() => {
     const additions: Partial<Record<ImageKey, PlacementState>> = {};
     let changed = false;
@@ -63,13 +64,11 @@ export default function CoverSheetPreview({
         changed = true;
       }
     }
-    if (changed) {
-      onImagePlacementsChange({ ...imagePlacements, ...additions });
-    }
+    if (changed) onImagePlacementsChange({ ...imagePlacements, ...additions });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [images]);
 
-  // Build a grid map for rendering: cellGrid[row][col] = LayoutCell | 'covered' | undefined
+  // Build cell grid (handles merges)
   const cellGrid = useMemo(() => {
     const grid: (LayoutCell | 'covered' | undefined)[][] = [];
     for (let r = 0; r <= layout.rows.length; r++) grid.push([]);
@@ -86,72 +85,73 @@ export default function CoverSheetPreview({
     return grid;
   }, [layout]);
 
-  const handleCellClick = (cell: LayoutCell) => {
-    setSelectedCell(cell);
-    setSelectedImage(null);
+  // ── Helpers ────────────────────────────────────────────────────────────────
+  const updateCellOverride = (coord: string, patch: CellOverride) => {
+    const cur = cellOverrides[coord] || {};
+    onCellOverridesChange({
+      ...cellOverrides,
+      [coord]: {
+        value: patch.value !== undefined ? patch.value : cur.value,
+        alignment: { ...cur.alignment, ...patch.alignment },
+        font: { ...cur.font, ...patch.font },
+      },
+    });
   };
 
-  const updateCellOverride = (coord: string, update: CellOverride) => {
-    const current = cellOverrides[coord] || {};
-    const next: CellOverride = {
-      alignment: { ...current.alignment, ...update.alignment },
-      font: { ...current.font, ...update.font },
-    };
-    onCellOverridesChange({ ...cellOverrides, [coord]: next });
-  };
-
-  const updateImagePlacement = (key: ImageKey, next: PlacementState) => {
+  const updateFixedPlacement = (key: ImageKey, next: PlacementState) =>
     onImagePlacementsChange({ ...imagePlacements, [key]: next });
+
+  const updateCustomPlacement = (id: string, next: PlacementState) =>
+    onCustomImagesChange(customImages.map(ci => ci.id === id ? { ...ci, placement: next } : ci));
+
+  const nudgeFixed = (key: ImageKey, dx: number, dy: number) => {
+    const p = imagePlacements[key]; if (!p) return;
+    updateFixedPlacement(key, { ...p, x: p.x + dx, y: p.y + dy });
   };
 
-  const toggleAspectLock = (key: ImageKey) => {
-    setAspectLocks((prev) => ({ ...prev, [key]: !prev[key] }));
+  const nudgeCustom = (id: string, dx: number, dy: number) => {
+    const ci = customImages.find(c => c.id === id); if (!ci) return;
+    updateCustomPlacement(id, { ...ci.placement, x: ci.placement.x + dx, y: ci.placement.y + dy });
   };
 
-  const nudge = (key: ImageKey, dx: number, dy: number) => {
-    const p = imagePlacements[key];
-    if (!p) return;
-    updateImagePlacement(key, { ...p, x: p.x + dx, y: p.y + dy });
+  const removeCustom = (id: string) => {
+    onCustomImagesChange(customImages.filter(c => c.id !== id));
+    if (selection?.kind === 'custom' && selection.id === id) setSelection(null);
   };
 
-  const canvasWidth = layout.width * SCALE;
-  const canvasHeight = layout.height * SCALE;
+  const toggleAspect = (key: string) => setAspectLocks(prev => ({ ...prev, [key]: !prev[key] }));
 
-  const selectedOverride = selectedCell ? cellOverrides[selectedCell.coord] : undefined;
-  const effectiveAlignment = selectedCell
-    ? { ...selectedCell.style.alignment, ...(selectedOverride?.alignment || {}) }
-    : null;
-  const effectiveFont = selectedCell
-    ? { ...selectedCell.style.font, ...(selectedOverride?.font || {}) }
-    : null;
+  // ── Derived state ──────────────────────────────────────────────────────────
+  const selCell = selection?.kind === 'cell' ? selection.cell : null;
+  const selOverride = selCell ? (cellOverrides[selCell.coord] || {}) : null;
+  const effAlign = selCell ? { ...selCell.style.alignment, ...selOverride?.alignment } : null;
+  const effFont = selCell ? { ...selCell.style.font, ...selOverride?.font } : null;
 
+  const selFixedKey = selection?.kind === 'fixed' ? selection.key : null;
+  const selFixedPlacement = selFixedKey ? imagePlacements[selFixedKey] : null;
+
+  const selCustom = selection?.kind === 'custom' ? customImages.find(c => c.id === selection.id) : null;
+
+  const canvasW = layout.width * SCALE;
+  const canvasH = layout.height * SCALE;
+
+  // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <div className="flex flex-col lg:flex-row gap-4">
-      {/* Canvas */}
-      <div className="flex-1 overflow-auto border border-gray-200 rounded-lg bg-gray-50 p-4">
-        <div
-          style={{
-            position: 'relative',
-            width: canvasWidth,
-            height: canvasHeight,
-          }}
-        >
-          <div
-            style={{
-              position: 'absolute',
-              top: 0,
-              left: 0,
-              width: layout.width,
-              height: layout.height,
-              transform: `scale(${SCALE})`,
-              transformOrigin: 'top left',
-            }}
-          >
+
+      {/* ── Canvas ── */}
+      <div className="flex-1 overflow-auto rounded-xl p-3"
+        style={{ background: 'var(--s3)', border: '1px solid var(--b1)' }}>
+        <div style={{ position: 'relative', width: canvasW, height: canvasH }}>
+          <div style={{
+            position: 'absolute', top: 0, left: 0,
+            width: layout.width, height: layout.height,
+            transform: `scale(${SCALE})`, transformOrigin: 'top left',
+          }}>
+            {/* Grid */}
             <table style={{ borderCollapse: 'collapse', width: layout.width, tableLayout: 'fixed' }}>
               <colgroup>
-                {layout.cols.map((w, i) => (
-                  <col key={i} style={{ width: `${w}px` }} />
-                ))}
+                {layout.cols.map((w, i) => <col key={i} style={{ width: `${w}px` }} />)}
               </colgroup>
               <tbody>
                 {layout.rows.map((h, rIdx) => {
@@ -164,19 +164,23 @@ export default function CoverSheetPreview({
                         if (entry === 'covered' || entry === undefined) return null;
                         const cell = entry as LayoutCell;
                         const override = cellOverrides[cell.coord];
+                        const displayValue = override?.value !== undefined ? override.value : cell.value;
+                        const isSelected = selCell?.coord === cell.coord;
                         return (
                           <td
                             key={c}
                             rowSpan={cell.rowspan}
                             colSpan={cell.colspan}
-                            onClick={() => handleCellClick(cell)}
+                            onClick={() => setSelection({ kind: 'cell', cell })}
+                            title={`Cell ${cell.coord}${cell.value ? ': ' + cell.value : ''}`}
                             style={{
                               ...styleToCss(cell.style, override),
                               cursor: 'pointer',
-                              outline: selectedCell?.coord === cell.coord ? '2px solid #2563eb' : undefined,
+                              outline: isSelected ? '2px solid #3b82f6' : undefined,
+                              position: 'relative',
                             }}
                           >
-                            {cell.value}
+                            {displayValue}
                           </td>
                         );
                       })}
@@ -186,216 +190,355 @@ export default function CoverSheetPreview({
               </tbody>
             </table>
 
-            {/* Image overlays */}
-            {Object.entries(images).map(([key, img]) => {
+            {/* Fixed image overlays */}
+            {(Object.entries(images) as [ImageKey, ImagePlacement][]).map(([key, img]) => {
               if (!img?.data) return null;
-              const placement = imagePlacements[key as ImageKey];
+              const placement = imagePlacements[key];
               if (!placement) return null;
               const ratio = placement.width / placement.height;
               return (
-                <ImageOverlay
-                  key={key}
-                  x={placement.x}
-                  y={placement.y}
-                  width={placement.width}
-                  height={placement.height}
-                  data={img.data}
+                <ImageOverlay key={key}
+                  x={placement.x} y={placement.y} width={placement.width} height={placement.height}
+                  data={img.data} scale={SCALE}
+                  selected={selFixedKey === key}
+                  lockAspect={aspectLocks[key] ? ratio : null}
+                  onSelect={() => setSelection({ kind: 'fixed', key })}
+                  onChange={next => updateFixedPlacement(key, next)} />
+              );
+            })}
+
+            {/* Custom image overlays */}
+            {customImages.map(ci => {
+              const p = ci.placement;
+              const ratio = p.width / p.height;
+              return (
+                <ImageOverlay key={ci.id}
+                  x={p.x} y={p.y} width={p.width} height={p.height}
+                  data={ci.dataUrl.replace(/^data:image\/\w+;base64,/, '')}
                   scale={SCALE}
-                  selected={selectedImage === key}
-                  lockAspect={aspectLocks[key as ImageKey] ? ratio : null}
-                  onSelect={() => {
-                    setSelectedImage(key as ImageKey);
-                    setSelectedCell(null);
-                  }}
-                  onChange={(next) => updateImagePlacement(key as ImageKey, next)}
-                />
+                  selected={selCustom?.id === ci.id}
+                  lockAspect={aspectLocks[ci.id] ? ratio : null}
+                  onSelect={() => setSelection({ kind: 'custom', id: ci.id })}
+                  onChange={next => updateCustomPlacement(ci.id, next)} />
               );
             })}
           </div>
         </div>
       </div>
 
-      {/* Side panel */}
-      <div className="w-full lg:w-80 space-y-4">
-        {/* Cell formatting */}
-        {selectedCell && effectiveAlignment && effectiveFont && (
-          <div className="bg-white border border-gray-200 rounded-lg p-4">
-            <h4 className="font-semibold text-gray-800 mb-1">Cell {selectedCell.coord}</h4>
-            <p className="text-xs text-gray-500 mb-3 truncate">{selectedCell.value || '(empty)'}</p>
+      {/* ── Side Panel ── */}
+      <div className="w-full lg:w-80 space-y-3 flex-shrink-0">
 
-            <p className="text-xs font-medium text-gray-600 mb-1">Horizontal Alignment</p>
-            <div className="flex gap-1 mb-3">
-              {[
-                { v: 'left', icon: AlignLeft },
-                { v: 'center', icon: AlignCenter },
-                { v: 'right', icon: AlignRight },
-              ].map(({ v, icon: Icon }) => (
-                <button
-                  key={v}
-                  onClick={() => updateCellOverride(selectedCell.coord, { alignment: { horizontal: v } })}
-                  className={`p-2 rounded border ${effectiveAlignment.horizontal === v ? 'bg-primary-600 text-white border-primary-600' : 'border-gray-300 text-gray-600'}`}
-                >
-                  <Icon className="w-4 h-4" />
+        {/* Hint when nothing selected */}
+        {!selection && (
+          <div className="rounded-xl p-4 text-center"
+            style={{ background: 'var(--s3)', border: '1px dashed var(--b2)' }}>
+            <p className="text-xs" style={{ color: 'var(--t2)' }}>
+              Click any cell to edit its value or formatting.<br />
+              Click an image to reposition or resize it.
+            </p>
+          </div>
+        )}
+
+        {/* ── Cell editor ── */}
+        {selCell && effAlign && effFont && (
+          <div className="rounded-xl overflow-hidden" style={{ background: 'var(--s2)', border: '1px solid var(--b1)' }}>
+            <div className="px-4 py-3" style={{ borderBottom: '1px solid var(--b1)' }}>
+              <div className="flex items-center justify-between">
+                <p className="text-xs font-bold" style={{ color: 'var(--em-lt)' }}>Cell {selCell.coord}</p>
+                <button onClick={() => setSelection(null)} style={{ color: 'var(--t2)' }} className="opacity-60 hover:opacity-100">
+                  <X className="w-3.5 h-3.5" />
                 </button>
-              ))}
+              </div>
+              {selCell.value && <p className="text-[10px] mt-0.5 truncate" style={{ color: 'var(--t2)' }}>Template: {selCell.value}</p>}
             </div>
 
-            <p className="text-xs font-medium text-gray-600 mb-1">Vertical Alignment</p>
-            <div className="flex gap-1 mb-3">
-              {[
-                { v: 'top', icon: AlignStartVertical },
-                { v: 'center', icon: AlignCenterVertical },
-                { v: 'bottom', icon: AlignEndVertical },
-              ].map(({ v, icon: Icon }) => (
-                <button
-                  key={v}
-                  onClick={() => updateCellOverride(selectedCell.coord, { alignment: { vertical: v } })}
-                  className={`p-2 rounded border ${effectiveAlignment.vertical === v ? 'bg-primary-600 text-white border-primary-600' : 'border-gray-300 text-gray-600'}`}
-                >
-                  <Icon className="w-4 h-4" />
-                </button>
-              ))}
-            </div>
+            <div className="p-4 space-y-4">
+              {/* Value override */}
+              <div>
+                <label className="block text-[10px] font-semibold uppercase tracking-wider mb-1.5" style={{ color: 'var(--t2)' }}>
+                  Cell Value
+                </label>
+                <textarea
+                  rows={3}
+                  value={selOverride?.value !== undefined ? selOverride.value : selCell.value}
+                  onChange={e => updateCellOverride(selCell.coord, { value: e.target.value })}
+                  placeholder="Type value here…"
+                  className="w-full resize-none rounded-lg px-2.5 py-2 text-xs"
+                  style={{ background: 'var(--s0)', border: '1px solid var(--b2)', color: 'var(--t0)', outline: 'none' }}
+                />
+                {selOverride?.value !== undefined && selOverride.value !== selCell.value && (
+                  <button onClick={() => updateCellOverride(selCell.coord, { value: undefined })}
+                    className="text-[10px] mt-1" style={{ color: 'var(--rose)' }}>
+                    ↩ Reset to template value
+                  </button>
+                )}
+              </div>
 
-            <div className="flex gap-1 mb-3">
-              <button
-                onClick={() => updateCellOverride(selectedCell.coord, { alignment: { wrapText: !effectiveAlignment.wrapText } })}
-                className={`flex items-center gap-1 px-2 py-1.5 rounded border text-xs ${effectiveAlignment.wrapText ? 'bg-primary-600 text-white border-primary-600' : 'border-gray-300 text-gray-600'}`}
-              >
-                <WrapText className="w-4 h-4" /> Wrap
-              </button>
-              <button
-                onClick={() => updateCellOverride(selectedCell.coord, { alignment: { shrinkToFit: !effectiveAlignment.shrinkToFit } })}
-                className={`flex items-center gap-1 px-2 py-1.5 rounded border text-xs ${effectiveAlignment.shrinkToFit ? 'bg-primary-600 text-white border-primary-600' : 'border-gray-300 text-gray-600'}`}
-              >
-                <Shrink className="w-4 h-4" /> Shrink
-              </button>
-            </div>
+              {/* Horizontal alignment */}
+              <div>
+                <p className="text-[10px] font-semibold uppercase tracking-wider mb-1.5" style={{ color: 'var(--t2)' }}>Horizontal</p>
+                <div className="flex gap-1">
+                  {[
+                    { v: 'left', icon: AlignLeft },
+                    { v: 'center', icon: AlignCenter },
+                    { v: 'right', icon: AlignRight },
+                  ].map(({ v, icon: Icon }) => (
+                    <button key={v}
+                      onClick={() => updateCellOverride(selCell.coord, { alignment: { horizontal: v } })}
+                      className="p-2 rounded-lg flex-1"
+                      style={{
+                        background: effAlign.horizontal === v ? 'var(--em)' : 'var(--s3)',
+                        color: effAlign.horizontal === v ? '#fff' : 'var(--t1)',
+                        border: '1px solid var(--b2)',
+                      }}>
+                      <Icon className="w-3.5 h-3.5 mx-auto" />
+                    </button>
+                  ))}
+                </div>
+              </div>
 
-            <p className="text-xs font-medium text-gray-600 mb-1">Font</p>
-            <div className="flex items-center gap-2 mb-2">
-              <input
-                type="number"
-                min={6}
-                max={72}
-                value={effectiveFont.size || 10}
-                onChange={(e) => updateCellOverride(selectedCell.coord, { font: { size: parseFloat(e.target.value) || 10 } })}
-                className="w-20 border border-gray-300 rounded px-2 py-1 text-sm"
-              />
-              <span className="text-xs text-gray-500">pt</span>
-            </div>
-            <div className="flex gap-1">
-              <button
-                onClick={() => updateCellOverride(selectedCell.coord, { font: { bold: !effectiveFont.bold } })}
-                className={`p-2 rounded border ${effectiveFont.bold ? 'bg-primary-600 text-white border-primary-600' : 'border-gray-300 text-gray-600'}`}
-              >
-                <Bold className="w-4 h-4" />
-              </button>
-              <button
-                onClick={() => updateCellOverride(selectedCell.coord, { font: { italic: !effectiveFont.italic } })}
-                className={`p-2 rounded border ${effectiveFont.italic ? 'bg-primary-600 text-white border-primary-600' : 'border-gray-300 text-gray-600'}`}
-              >
-                <Italic className="w-4 h-4" />
-              </button>
-              <button
-                onClick={() => updateCellOverride(selectedCell.coord, { font: { underline: !effectiveFont.underline } })}
-                className={`p-2 rounded border ${effectiveFont.underline ? 'bg-primary-600 text-white border-primary-600' : 'border-gray-300 text-gray-600'}`}
-              >
-                <Underline className="w-4 h-4" />
-              </button>
+              {/* Vertical alignment */}
+              <div>
+                <p className="text-[10px] font-semibold uppercase tracking-wider mb-1.5" style={{ color: 'var(--t2)' }}>Vertical</p>
+                <div className="flex gap-1">
+                  {[
+                    { v: 'top', icon: AlignStartVertical },
+                    { v: 'center', icon: AlignCenterVertical },
+                    { v: 'bottom', icon: AlignEndVertical },
+                  ].map(({ v, icon: Icon }) => (
+                    <button key={v}
+                      onClick={() => updateCellOverride(selCell.coord, { alignment: { vertical: v } })}
+                      className="p-2 rounded-lg flex-1"
+                      style={{
+                        background: effAlign.vertical === v ? 'var(--em)' : 'var(--s3)',
+                        color: effAlign.vertical === v ? '#fff' : 'var(--t1)',
+                        border: '1px solid var(--b2)',
+                      }}>
+                      <Icon className="w-3.5 h-3.5 mx-auto" />
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Wrap / Shrink */}
+              <div className="flex gap-1.5">
+                {[
+                  { label: 'Wrap', icon: WrapText, key: 'wrapText' as const },
+                  { label: 'Shrink', icon: Shrink, key: 'shrinkToFit' as const },
+                ].map(({ label, icon: Icon, key }) => (
+                  <button key={key}
+                    onClick={() => updateCellOverride(selCell.coord, { alignment: { [key]: !(effAlign as any)[key] } })}
+                    className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-medium flex-1 justify-center"
+                    style={{
+                      background: (effAlign as any)[key] ? 'var(--em)' : 'var(--s3)',
+                      color: (effAlign as any)[key] ? '#fff' : 'var(--t1)',
+                      border: '1px solid var(--b2)',
+                    }}>
+                    <Icon className="w-3 h-3" />{label}
+                  </button>
+                ))}
+              </div>
+
+              {/* Font size */}
+              <div>
+                <p className="text-[10px] font-semibold uppercase tracking-wider mb-1.5" style={{ color: 'var(--t2)' }}>Font Size</p>
+                <div className="flex items-center gap-2">
+                  <input type="number" min={6} max={72}
+                    value={effFont.size || 10}
+                    onChange={e => updateCellOverride(selCell.coord, { font: { size: +e.target.value || 10 } })}
+                    className="w-20 px-2 py-1.5 rounded-lg text-xs text-center"
+                    style={{ background: 'var(--s0)', border: '1px solid var(--b2)', color: 'var(--t0)', outline: 'none' }} />
+                  <span className="text-xs" style={{ color: 'var(--t2)' }}>pt</span>
+                  <div className="flex gap-1 ml-auto">
+                    {[
+                      { icon: Bold, key: 'bold' as const },
+                      { icon: Italic, key: 'italic' as const },
+                      { icon: Underline, key: 'underline' as const },
+                    ].map(({ icon: Icon, key }) => (
+                      <button key={key}
+                        onClick={() => updateCellOverride(selCell.coord, { font: { [key]: !(effFont as any)[key] } })}
+                        className="p-2 rounded-lg"
+                        style={{
+                          background: (effFont as any)[key] ? 'var(--em)' : 'var(--s3)',
+                          color: (effFont as any)[key] ? '#fff' : 'var(--t1)',
+                          border: '1px solid var(--b2)',
+                        }}>
+                        <Icon className="w-3.5 h-3.5" />
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         )}
 
-        {/* Image placement controls */}
-        <div className="bg-white border border-gray-200 rounded-lg p-4">
-          <h4 className="font-semibold text-gray-800 mb-3">Images</h4>
-          <div className="space-y-3">
-            {(Object.keys(IMAGE_LABELS) as ImageKey[]).map((key) => {
+        {/* ── Fixed image controls ── */}
+        {selFixedKey && selFixedPlacement && (
+          <ImagePanel
+            label={FIXED_IMAGE_LABELS[selFixedKey]}
+            placement={selFixedPlacement}
+            locked={!!aspectLocks[selFixedKey]}
+            onToggleLock={() => toggleAspect(selFixedKey)}
+            onChange={p => updateFixedPlacement(selFixedKey, p)}
+            onNudge={(dx, dy) => nudgeFixed(selFixedKey, dx, dy)}
+            onClose={() => setSelection(null)}
+          />
+        )}
+
+        {/* ── Custom image controls ── */}
+        {selCustom && (
+          <ImagePanel
+            label={selCustom.label}
+            placement={selCustom.placement}
+            locked={!!aspectLocks[selCustom.id]}
+            onToggleLock={() => toggleAspect(selCustom.id)}
+            onChange={p => updateCustomPlacement(selCustom.id, p)}
+            onNudge={(dx, dy) => nudgeCustom(selCustom.id, dx, dy)}
+            onClose={() => setSelection(null)}
+            onDelete={() => removeCustom(selCustom.id)}
+          />
+        )}
+
+        {/* ── Image list (all) ── */}
+        <div className="rounded-xl overflow-hidden" style={{ background: 'var(--s2)', border: '1px solid var(--b1)' }}>
+          <div className="px-4 py-3 flex items-center gap-2" style={{ borderBottom: '1px solid var(--b1)' }}>
+            <ImageIcon className="w-3.5 h-3.5" style={{ color: 'var(--gold)' }} />
+            <span className="text-xs font-bold" style={{ color: 'var(--t0)' }}>
+              Images ({Object.values(images).filter(i => i?.data).length + customImages.length})
+            </span>
+          </div>
+          <div className="p-3 space-y-1.5 max-h-56 overflow-y-auto">
+            {/* Fixed images */}
+            {(Object.keys(FIXED_IMAGE_LABELS) as ImageKey[]).map(key => {
               const img = images[key];
-              const placement = imagePlacements[key];
-              if (!img?.data || !placement) return null;
+              if (!img?.data) return null;
               return (
-                <div
-                  key={key}
-                  className={`border rounded-lg p-3 cursor-pointer ${selectedImage === key ? 'border-primary-500 bg-primary-50' : 'border-gray-200'}`}
-                  onClick={() => {
-                    setSelectedImage(key);
-                    setSelectedCell(null);
-                  }}
-                >
-                  <p className="text-sm font-medium text-gray-700 mb-2">{IMAGE_LABELS[key]}</p>
-                  <div className="grid grid-cols-2 gap-2 mb-2">
-                    <label className="text-xs text-gray-500">
-                      X
-                      <input
-                        type="number"
-                        value={Math.round(placement.x)}
-                        onChange={(e) => updateImagePlacement(key, { ...placement, x: parseFloat(e.target.value) || 0 })}
-                        className="w-full border border-gray-300 rounded px-2 py-1 text-sm mt-0.5"
-                      />
-                    </label>
-                    <label className="text-xs text-gray-500">
-                      Y
-                      <input
-                        type="number"
-                        value={Math.round(placement.y)}
-                        onChange={(e) => updateImagePlacement(key, { ...placement, y: parseFloat(e.target.value) || 0 })}
-                        className="w-full border border-gray-300 rounded px-2 py-1 text-sm mt-0.5"
-                      />
-                    </label>
-                    <label className="text-xs text-gray-500">
-                      Width
-                      <input
-                        type="number"
-                        value={Math.round(placement.width)}
-                        onChange={(e) => {
-                          const width = parseFloat(e.target.value) || 1;
-                          const height = aspectLocks[key] ? width / (placement.width / placement.height) : placement.height;
-                          updateImagePlacement(key, { ...placement, width, height });
-                        }}
-                        className="w-full border border-gray-300 rounded px-2 py-1 text-sm mt-0.5"
-                      />
-                    </label>
-                    <label className="text-xs text-gray-500">
-                      Height
-                      <input
-                        type="number"
-                        value={Math.round(placement.height)}
-                        onChange={(e) => {
-                          const height = parseFloat(e.target.value) || 1;
-                          const width = aspectLocks[key] ? height * (placement.width / placement.height) : placement.width;
-                          updateImagePlacement(key, { ...placement, width, height });
-                        }}
-                        className="w-full border border-gray-300 rounded px-2 py-1 text-sm mt-0.5"
-                      />
-                    </label>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <div className="flex gap-1">
-                      <button onClick={(e) => { e.stopPropagation(); nudge(key, -5, 0); }} className="p-1.5 border border-gray-300 rounded text-gray-600"><ArrowLeft className="w-3.5 h-3.5" /></button>
-                      <button onClick={(e) => { e.stopPropagation(); nudge(key, 5, 0); }} className="p-1.5 border border-gray-300 rounded text-gray-600"><ArrowRight className="w-3.5 h-3.5" /></button>
-                      <button onClick={(e) => { e.stopPropagation(); nudge(key, 0, -5); }} className="p-1.5 border border-gray-300 rounded text-gray-600"><ArrowUp className="w-3.5 h-3.5" /></button>
-                      <button onClick={(e) => { e.stopPropagation(); nudge(key, 0, 5); }} className="p-1.5 border border-gray-300 rounded text-gray-600"><ArrowDown className="w-3.5 h-3.5" /></button>
-                    </div>
-                    <label className="flex items-center gap-1 text-xs text-gray-500">
-                      <input
-                        type="checkbox"
-                        checked={!!aspectLocks[key]}
-                        onChange={() => toggleAspectLock(key)}
-                      />
-                      Lock ratio
-                    </label>
-                  </div>
-                </div>
+                <button key={key}
+                  onClick={() => setSelection({ kind: 'fixed', key })}
+                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs transition-all text-left"
+                  style={{
+                    background: selFixedKey === key ? 'var(--em-dim)' : 'var(--s3)',
+                    border: `1px solid ${selFixedKey === key ? 'rgba(59,130,246,0.4)' : 'transparent'}`,
+                    color: selFixedKey === key ? 'var(--em-lt)' : 'var(--t1)',
+                  }}>
+                  <img src={`data:image/png;base64,${img.data}`} alt="" className="w-8 h-5 object-contain rounded flex-shrink-0"
+                    style={{ background: '#fff' }} />
+                  <span className="truncate">{FIXED_IMAGE_LABELS[key]}</span>
+                </button>
               );
             })}
-            {Object.values(images).every((img) => !img?.data) && (
-              <p className="text-sm text-gray-500">
-                Upload logos/signatures in the form above to position them here.
-              </p>
+            {/* Custom images */}
+            {customImages.map(ci => (
+              <button key={ci.id}
+                onClick={() => setSelection({ kind: 'custom', id: ci.id })}
+                className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs transition-all text-left"
+                style={{
+                  background: selCustom?.id === ci.id ? 'rgba(245,158,11,0.08)' : 'var(--s3)',
+                  border: `1px solid ${selCustom?.id === ci.id ? 'rgba(245,158,11,0.4)' : 'transparent'}`,
+                  color: selCustom?.id === ci.id ? 'var(--gold)' : 'var(--t1)',
+                }}>
+                <img src={ci.dataUrl} alt="" className="w-8 h-5 object-contain rounded flex-shrink-0"
+                  style={{ background: '#fff' }} />
+                <span className="truncate flex-1">{ci.label}</span>
+                <X className="w-3 h-3 flex-shrink-0 opacity-50 hover:opacity-100"
+                  onClick={e => { e.stopPropagation(); removeCustom(ci.id); }}
+                  style={{ color: 'var(--rose)' }} />
+              </button>
+            ))}
+            {Object.values(images).every(i => !i?.data) && customImages.length === 0 && (
+              <p className="text-xs py-2 text-center" style={{ color: 'var(--t2)' }}>No images uploaded yet</p>
             )}
           </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Image placement panel ──────────────────────────────────────────────────────
+function ImagePanel({
+  label, placement, locked, onToggleLock, onChange, onNudge, onClose, onDelete,
+}: {
+  label: string;
+  placement: { x: number; y: number; width: number; height: number };
+  locked: boolean;
+  onToggleLock: () => void;
+  onChange: (p: { x: number; y: number; width: number; height: number }) => void;
+  onNudge: (dx: number, dy: number) => void;
+  onClose: () => void;
+  onDelete?: () => void;
+}) {
+  const ratio = placement.width / placement.height;
+
+  return (
+    <div className="rounded-xl overflow-hidden" style={{ background: 'var(--s2)', border: '1px solid var(--b1)' }}>
+      <div className="px-4 py-3 flex items-center gap-2" style={{ borderBottom: '1px solid var(--b1)' }}>
+        <ImageIcon className="w-3.5 h-3.5" style={{ color: 'var(--gold)' }} />
+        <p className="text-xs font-bold truncate flex-1" style={{ color: 'var(--t0)' }}>{label}</p>
+        {onDelete && (
+          <button onClick={onDelete} className="opacity-50 hover:opacity-100 mr-1" style={{ color: 'var(--rose)' }}>
+            <X className="w-3.5 h-3.5" />
+          </button>
+        )}
+        <button onClick={onClose} className="opacity-50 hover:opacity-100" style={{ color: 'var(--t2)' }}>
+          <X className="w-3.5 h-3.5" />
+        </button>
+      </div>
+
+      <div className="p-4 space-y-3">
+        {/* X/Y/W/H */}
+        <div className="grid grid-cols-2 gap-2">
+          {([
+            ['X', 'x'], ['Y', 'y'], ['Width', 'width'], ['Height', 'height'],
+          ] as [string, keyof typeof placement][]).map(([lbl, key]) => (
+            <label key={key}>
+              <span className="block text-[10px] mb-0.5" style={{ color: 'var(--t2)' }}>{lbl}</span>
+              <input type="number"
+                value={Math.round(placement[key])}
+                onChange={e => {
+                  const v = parseFloat(e.target.value) || 0;
+                  if (key === 'width' && locked) {
+                    onChange({ ...placement, width: v, height: Math.max(1, v / ratio) });
+                  } else if (key === 'height' && locked) {
+                    onChange({ ...placement, height: v, width: Math.max(1, v * ratio) });
+                  } else {
+                    onChange({ ...placement, [key]: v });
+                  }
+                }}
+                className="w-full px-2 py-1.5 rounded-lg text-xs text-center"
+                style={{ background: 'var(--s0)', border: '1px solid var(--b2)', color: 'var(--t0)', outline: 'none' }} />
+            </label>
+          ))}
+        </div>
+
+        {/* Nudge + aspect lock */}
+        <div className="flex items-center gap-2">
+          <div className="flex gap-1">
+            {[
+              { dx: -5, dy: 0, icon: ArrowLeft },
+              { dx: 5, dy: 0, icon: ArrowRight },
+              { dx: 0, dy: -5, icon: ArrowUp },
+              { dx: 0, dy: 5, icon: ArrowDown },
+            ].map(({ dx, dy, icon: Icon }) => (
+              <button key={`${dx}${dy}`} onClick={() => onNudge(dx, dy)}
+                className="p-1.5 rounded-lg"
+                style={{ background: 'var(--s3)', border: '1px solid var(--b2)', color: 'var(--t1)' }}>
+                <Icon className="w-3 h-3" />
+              </button>
+            ))}
+          </div>
+          <button onClick={onToggleLock}
+            className="ml-auto flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px]"
+            style={{
+              background: locked ? 'var(--em-dim)' : 'var(--s3)',
+              color: locked ? 'var(--em-lt)' : 'var(--t2)',
+              border: `1px solid ${locked ? 'rgba(59,130,246,0.3)' : 'var(--b2)'}`,
+            }}>
+            {locked ? <Lock className="w-3 h-3" /> : <Unlock className="w-3 h-3" />}
+            {locked ? 'Locked' : 'Free'}
+          </button>
         </div>
       </div>
     </div>

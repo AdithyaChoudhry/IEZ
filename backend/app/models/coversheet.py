@@ -47,6 +47,8 @@ class CoverSheetRequest(BaseModel):
     revisions: List[RevisionEntry] = Field(..., min_items=1, max_items=7)
     image_placements: Dict[str, ImagePlacement] = Field(default_factory=dict)
     cell_overrides: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
+    # custom image placements keyed by image id
+    custom_image_placements: Dict[str, Dict[str, float]] = Field(default_factory=dict)
 
 
 class CoverSheetPreviewRequest(BaseModel):

@@ -131,7 +131,7 @@ export default function Sidebar({ isOpen }: SidebarProps) {
           <Droplets className="w-3.5 h-3.5 flex-shrink-0" style={{ color: 'var(--em-lt)' }} />
           <div>
             <p className="text-[10px] font-semibold" style={{ color: 'var(--t1)' }}>iEZ v2.0</p>
-            <p className="text-[9px]" style={{ color: 'var(--t2)' }}>WABAG · AI-Powered</p>
+            <p className="text-[9px]" style={{ color: 'var(--t2)' }}>Akash</p>
           </div>
         </div>
       </div>

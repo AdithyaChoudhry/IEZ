@@ -16,6 +16,10 @@ import api from '@/services/api';
 import PageHeader from '../ui/PageHeader';
 import Button from '../ui/Button';
 import Alert from '../ui/Alert';
+import LTRadarWizard from './LTRadarWizard';
+
+const isLTRadar = (type: string) =>
+  /\bLT\b|non.?contact.*radar|radar.*level|FMCW/i.test(type);
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 interface FieldSpec {
@@ -518,12 +522,21 @@ export default function DataSheetGenerator() {
                 ))}
               </div>
 
-              {selectedType && (
+              {selectedType && !isLTRadar(selectedType) && (
                 <Button onClick={() => setStep(2)} className="mt-4 w-full">
                   Continue <ChevronRight className="w-3.5 h-3.5" />
                 </Button>
               )}
             </>
+          )}
+
+          {/* LT Non-Contact Radar sub-flow */}
+          {selectedType && isLTRadar(selectedType) && iodbFile && (
+            <LTRadarWizard
+              iodbFile={iodbFile}
+              instrumentType={selectedType}
+              onBack={() => setSelectedType('')}
+            />
           )}
         </div>
       )}

@@ -63,10 +63,19 @@ def _match_vendor_db_key(instrument_type: str) -> Optional[str]:
     return best if best_score >= 60 else list(VENDOR_DB.keys())[0]
 
 
+NOT_ACCEPTABLE_PHRASES = (
+    "not available", "not supported", "not applicable for this model",
+    "cannot", "not offered", "not provided", "does not support", "n/o",
+)
+
+
 def _evaluate_compliance(wabag: str, vendor: str) -> str:
     w, v = wabag.strip().lower(), vendor.strip().lower()
     if not v or v in ("n/a", "na", "tbd", "tbc", "-", ""):
         return "CLARIFICATION REQUIRED"
+    # vendor explicitly states not available
+    if any(phrase in v for phrase in NOT_ACCEPTABLE_PHRASES):
+        return "NOT ACCEPTABLE"
     # exact / strong match
     if _fuzzy(wabag, vendor) >= 80:
         return "COMPLIES"
@@ -77,7 +86,12 @@ def _evaluate_compliance(wabag: str, vendor: str) -> str:
         vn = float(re.search(r"[\d.]+", v).group())
         # For accuracy/tolerance smaller is better
         if any(k in w for k in ("accuracy", "tolerance", "error", "mm", "±")):
-            return "COMPLIES" if vn <= wn else "DEVIATION"
+            if vn <= wn:
+                return "COMPLIES"
+            elif vn <= wn * 1.5:
+                return "DEVIATION"
+            else:
+                return "NOT ACCEPTABLE"
         return "EXCEEDS REQUIREMENT" if vn >= wn else "DEVIATION"
     except Exception:
         pass
@@ -93,6 +107,8 @@ def _auto_reply(status: str) -> str:
         "EXCEEDS REQUIREMENT": "EXCEEDS REQUIREMENT — TECHNICALLY ACCEPTABLE",
         "DEVIATION": "DEVIATION — CLARIFICATION / WAIVER REQUIRED",
         "CLARIFICATION REQUIRED": "CLARIFICATION REQUIRED",
+        "NOT ACCEPTABLE": "NOT ACCEPTABLE — VENDOR TO PROPOSE ALTERNATIVE",
+        "TECHNICALLY ACCEPTABLE": "TECHNICALLY ACCEPTABLE",
     }
     return mapping.get(status, status)
 
@@ -275,8 +291,12 @@ def match_vendors(body: MatchRequest, _: User = Depends(get_current_user)):
 
 class GenerateRequest(BaseModel):
     instrument_type: str
-    vendors: list          # vendor result objects from /match
-    tbe_replies: dict = {} # {abbr: {param: reply}}
+    vendors: list                   # vendor result objects from /match
+    tbe_replies: dict = {}          # {abbr: {param: reply}}
+    deviation_severities: dict = {} # {abbr: {param: "Critical"|"Major"|"Minor"}}
+    recommended_vendor: str = ""
+    recommended_model: str = ""
+    recommendation_reason: str = ""
 
 
 @router.post("/generate")
@@ -304,7 +324,16 @@ def generate_tbe(body: GenerateRequest, _: User = Depends(get_current_user)):
         "EXCEEDS REQUIREMENT": "E3F2FD",
         "DEVIATION": "FFEBEE",
         "CLARIFICATION REQUIRED": "FFF8E1",
+        "NOT ACCEPTABLE": "FFCDD2",
+        "TECHNICALLY ACCEPTABLE": "E0F7FA",
     }
+
+    def _default_severity(status: str) -> str:
+        if status == "NOT ACCEPTABLE":
+            return "Critical"
+        if status == "DEVIATION":
+            return "Major"
+        return "Minor"
 
     # ── TBE Report ──
     wb_tbe = openpyxl.Workbook()
@@ -368,7 +397,9 @@ def generate_tbe(body: GenerateRequest, _: User = Depends(get_current_user)):
             c_reply.alignment = Alignment(wrap_text=True)
             row_data += [offer, reply]
 
-            if status in ("DEVIATION", "CLARIFICATION REQUIRED", "EXCEEDS REQUIREMENT"):
+            if status not in ("COMPLIES",):
+                sev = (body.deviation_severities.get(v["abbr"], {}).get(param)
+                       or _default_severity(status))
                 deviation_rows.append({
                     "param": param,
                     "wabag_req": wabag_req,
@@ -376,7 +407,7 @@ def generate_tbe(body: GenerateRequest, _: User = Depends(get_current_user)):
                     "model": v["model"],
                     "offer": offer,
                     "status": status,
-                    "severity": "Critical" if status == "DEVIATION" else "Minor",
+                    "severity": sev,
                     "abbr": v["abbr"],
                 })
 
@@ -455,11 +486,46 @@ def generate_tbe(body: GenerateRequest, _: User = Depends(get_current_user)):
         exceeds = sum(1 for r in sr if r["status"] == "EXCEEDS REQUIREMENT")
         devs = sum(1 for r in sr if r["status"] == "DEVIATION")
         clarif = sum(1 for r in sr if r["status"] == "CLARIFICATION REQUIRED")
-        vals = [v["vendor"], v["model"], f"{v['match_pct']}%", complies, exceeds, devs, clarif]
+        not_acc = sum(1 for r in sr if r["status"] == "NOT ACCEPTABLE")
+        vals = [v["vendor"], v["model"], f"{v['match_pct']}%", complies, exceeds, devs, clarif, not_acc]
         for ci, val in enumerate(vals, 1):
             c = ws_cs.cell(row=ri + 1, column=ci, value=val)
             c.font = Font(size=9)
             c.border = border
+
+    # Update header to include Not Acceptable column
+    ws_cs.cell(row=1, column=8, value="Not Acceptable").fill = hdr_fill("1B5E20")
+    ws_cs.cell(row=1, column=8).font = Font(bold=True, color="FFFFFF", size=10)
+    ws_cs.cell(row=1, column=8).border = border
+
+    # Recommendation sheet
+    ws_rec = wb_cs.create_sheet("Recommendation")
+    rec_data = [
+        ("Recommended Vendor", body.recommended_vendor or (vendors[0]["vendor"] if vendors else "")),
+        ("Recommended Model", body.recommended_model or (vendors[0]["model"] if vendors else "")),
+        ("Compliance Score", f"{vendors[0]['match_pct']}%" if vendors else ""),
+        ("Instrument Type", body.instrument_type),
+        ("Reason", body.recommendation_reason or (
+            f"Highest compliance score ({vendors[0]['match_pct']}%) among evaluated vendors"
+            + (" with no critical deviations." if not any(
+                r["status"] == "NOT ACCEPTABLE" for r in vendors[0].get("spec_results", [])
+            ) else ".")
+            if vendors else ""
+        )),
+        ("Generated On", datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+    ]
+    for ri, (k, v_val) in enumerate(rec_data, 1):
+        c_k = ws_rec.cell(row=ri, column=1, value=k)
+        c_k.font = Font(bold=True, size=10)
+        c_k.fill = hdr_fill("1E3A5F")
+        c_k.font = Font(bold=True, color="FFFFFF", size=10)
+        c_k.border = border
+        c_v = ws_rec.cell(row=ri, column=2, value=v_val)
+        c_v.font = Font(size=10)
+        c_v.border = border
+        c_v.alignment = Alignment(wrap_text=True)
+    ws_rec.column_dimensions["A"].width = 25
+    ws_rec.column_dimensions["B"].width = 60
 
     cs_path = out_dir / "Compliance_Summary.xlsx"
     wb_cs.save(cs_path)

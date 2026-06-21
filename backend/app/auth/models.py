@@ -98,6 +98,22 @@ class Notification(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+class NotificationRoute(Base):
+    """Admin-configurable routing rules — who gets notified for what events."""
+    __tablename__ = "notification_routes"
+    id = Column(Integer, primary_key=True, index=True)
+    trigger_event = Column(String, nullable=False)   # approval_submitted | approved | rejected
+    # reporting_authority | role | employee
+    notify_type = Column(String, nullable=False)
+    # role name or employee_id; null for reporting_authority type
+    notify_value = Column(String, nullable=True)
+    same_department_only = Column(Boolean, default=False)
+    description = Column(String, nullable=True)
+    priority = Column(Integer, default=10)           # lower number = resolved first
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 class ApprovalRequest(Base):
     """Raised by a junior/engineer for Lead Engineer review before proceeding."""
     __tablename__ = "approval_requests"

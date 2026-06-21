@@ -1,11 +1,11 @@
 /* ─────────────────────────────────────────────────────────────────────────────
-   Admin Management — Create / Edit / Disable / Delete / Reset Password
+   Admin Management — Users · Notification Routing
 ───────────────────────────────────────────────────────────────────────────── */
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   ShieldCheck, Plus, Edit2, Trash2, UserX, UserCheck,
   KeyRound, X, CheckCircle2, Search, User,
-  Loader2, RefreshCw,
+  Loader2, RefreshCw, Bell, BellOff, Route,
 } from 'lucide-react';
 import api from '@/services/api';
 import PageHeader from '../ui/PageHeader';
@@ -239,6 +239,255 @@ function ResetPasswordModal({ user, onClose, onSave }: { user: AdminUser; onClos
   );
 }
 
+// ── Notification Route types ──────────────────────────────────────────────────
+interface NotifRoute {
+  id: number;
+  trigger_event: string;
+  notify_type: string;
+  notify_value: string | null;
+  same_department_only: boolean;
+  description: string | null;
+  priority: number;
+  is_active: boolean;
+  created_at: string;
+}
+
+const NOTIFY_TYPE_LABELS: Record<string, string> = {
+  reporting_authority: "Reporting Authority",
+  role: "By Role",
+  employee: "Specific Employee",
+};
+
+const EVENT_LABELS: Record<string, string> = {
+  approval_submitted: "Approval Submitted",
+  approved: "Request Approved",
+  rejected: "Request Rejected",
+};
+
+// ── Notification Routing Panel ────────────────────────────────────────────────
+function NotificationRoutingPanel() {
+  const [routes, setRoutes] = useState<NotifRoute[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState<number | null>(null);
+  const [showAdd, setShowAdd] = useState(false);
+  const [err, setErr] = useState('');
+  const [success, setSuccess] = useState('');
+
+  const [form, setForm] = useState({
+    trigger_event: 'approval_submitted',
+    notify_type: 'reporting_authority',
+    notify_value: '',
+    same_department_only: false,
+    description: '',
+    priority: 10,
+    is_active: true,
+  });
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const r = await api.get('/notification-routes');
+      setRoutes(r.data);
+    } catch { setErr('Failed to load routes'); }
+    finally { setLoading(false); }
+  }, []);
+
+  useEffect(() => { void load(); }, [load]);
+
+  const toast = (msg: string) => { setSuccess(msg); setTimeout(() => setSuccess(''), 3000); };
+
+  const toggleActive = async (route: NotifRoute) => {
+    setBusy(route.id);
+    try {
+      await api.patch(`/notification-routes/${route.id}`, { is_active: !route.is_active });
+      toast(route.is_active ? 'Route disabled' : 'Route enabled');
+      void load();
+    } catch { setErr('Failed to update route'); }
+    finally { setBusy(null); }
+  };
+
+  const deleteRoute = async (route: NotifRoute) => {
+    if (!confirm('Delete this notification route?')) return;
+    setBusy(route.id);
+    try {
+      await api.delete(`/notification-routes/${route.id}`);
+      toast('Route deleted');
+      void load();
+    } catch { setErr('Failed to delete route'); }
+    finally { setBusy(null); }
+  };
+
+  const addRoute = async () => {
+    try {
+      await api.post('/notification-routes', {
+        ...form,
+        notify_value: form.notify_value || null,
+        description: form.description || null,
+      });
+      toast('Route added');
+      setShowAdd(false);
+      setForm({ trigger_event: 'approval_submitted', notify_type: 'reporting_authority', notify_value: '', same_department_only: false, description: '', priority: 10, is_active: true });
+      void load();
+    } catch (e: any) { setErr(e?.response?.data?.detail || 'Failed to add route'); }
+  };
+
+  const set = (k: string) => (v: string | boolean | number) =>
+    setForm(f => ({ ...f, [k]: v }));
+
+  return (
+    <div className="space-y-4">
+      {err && <Alert variant="error" onClose={() => setErr('')}>{err}</Alert>}
+      {success && <Alert variant="success">{success}</Alert>}
+
+      {/* Header row */}
+      <div className="flex items-center justify-between">
+        <div>
+          <p className="text-sm font-bold" style={{ color: 'var(--t0)' }}>Notification Routing Rules</p>
+          <p className="text-xs mt-0.5" style={{ color: 'var(--t2)' }}>
+            Define who receives notifications for each event. Rules are applied in priority order.
+          </p>
+        </div>
+        <Button size="sm" onClick={() => setShowAdd(s => !s)}>
+          <Plus className="w-3.5 h-3.5" /> Add Rule
+        </Button>
+      </div>
+
+      {/* Add rule form */}
+      {showAdd && (
+        <div className="rounded-2xl p-5 space-y-4" style={{ background: 'var(--s2)', border: '1px solid var(--b2)' }}>
+          <p className="text-xs font-bold uppercase tracking-wider" style={{ color: 'var(--t2)' }}>New Routing Rule</p>
+          <div className="grid grid-cols-2 gap-4">
+            <Field label="Trigger Event">
+              <Select value={form.trigger_event} onChange={set('trigger_event')}
+                options={['approval_submitted', 'approved', 'rejected']} />
+            </Field>
+            <Field label="Notify Type">
+              <Select value={form.notify_type} onChange={set('notify_type')}
+                options={['reporting_authority', 'role', 'employee']} />
+            </Field>
+            {form.notify_type !== 'reporting_authority' && (
+              <Field label={form.notify_type === 'role' ? 'Role Name' : 'Employee ID'}>
+                <Input value={form.notify_value} onChange={v => set('notify_value')(v)}
+                  placeholder={form.notify_type === 'role' ? 'e.g. Lead Engineer' : 'e.g. EMP-001'} />
+              </Field>
+            )}
+            <Field label="Priority (lower = first)">
+              <input type="number" value={form.priority}
+                onChange={e => set('priority')(parseInt(e.target.value) || 10)}
+                className="w-full px-3 py-2.5 rounded-xl text-sm"
+                style={{ background: 'var(--s1)', border: '1px solid var(--b2)', color: 'var(--t0)', outline: 'none' }} />
+            </Field>
+            <Field label="Description (optional)">
+              <Input value={form.description} onChange={v => set('description')(v)}
+                placeholder="e.g. Notify dept lead for new requests" />
+            </Field>
+            <Field label="Filters">
+              <label className="flex items-center gap-2 mt-2 cursor-pointer">
+                <input type="checkbox" checked={form.same_department_only}
+                  onChange={e => set('same_department_only')(e.target.checked)}
+                  className="rounded" />
+                <span className="text-xs" style={{ color: 'var(--t1)' }}>Same department only</span>
+              </label>
+            </Field>
+          </div>
+          <div className="flex gap-3">
+            <Button variant="secondary" size="sm" onClick={() => setShowAdd(false)}>Cancel</Button>
+            <Button size="sm" onClick={addRoute}>Save Rule</Button>
+          </div>
+        </div>
+      )}
+
+      {/* Routes table */}
+      <div className="rounded-2xl overflow-hidden" style={{ background: 'var(--s2)', border: '1px solid var(--b1)' }}>
+        {loading ? (
+          <div className="flex items-center justify-center py-12 gap-2" style={{ color: 'var(--t2)' }}>
+            <Loader2 className="w-4 h-4 animate-spin" /> Loading…
+          </div>
+        ) : routes.length === 0 ? (
+          <div className="text-center py-12" style={{ color: 'var(--t2)' }}>
+            <Route className="w-8 h-8 mx-auto mb-2 opacity-30" />
+            <p className="text-sm">No routing rules yet</p>
+          </div>
+        ) : (
+          <table className="w-full text-xs">
+            <thead>
+              <tr style={{ borderBottom: '1px solid var(--b1)' }}>
+                {['Pri', 'Event', 'Notify Type', 'Recipient', 'Dept Filter', 'Description', 'Status', 'Actions'].map(h => (
+                  <th key={h} className="text-left px-4 py-3 font-semibold uppercase tracking-wider"
+                    style={{ color: 'var(--t2)' }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {routes.map((r, i) => (
+                <tr key={r.id} style={{ borderBottom: i < routes.length - 1 ? '1px solid var(--b1)' : 'none', opacity: r.is_active ? 1 : 0.5 }}>
+                  <td className="px-4 py-3 font-mono font-bold" style={{ color: 'var(--em-lt)' }}>{r.priority}</td>
+                  <td className="px-4 py-3">
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold"
+                      style={{ background: 'var(--em-dim)', color: 'var(--em-lt)', border: '1px solid rgba(59,130,246,0.3)' }}>
+                      {EVENT_LABELS[r.trigger_event] || r.trigger_event}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3 font-medium" style={{ color: 'var(--t0)' }}>
+                    {NOTIFY_TYPE_LABELS[r.notify_type] || r.notify_type}
+                  </td>
+                  <td className="px-4 py-3" style={{ color: 'var(--t1)' }}>
+                    {r.notify_value || <span style={{ color: 'var(--t2)' }}>— (auto)</span>}
+                  </td>
+                  <td className="px-4 py-3">
+                    {r.same_department_only
+                      ? <span style={{ color: '#4ade80' }}>Same dept</span>
+                      : <span style={{ color: 'var(--t2)' }}>All</span>}
+                  </td>
+                  <td className="px-4 py-3 max-w-[200px] truncate" style={{ color: 'var(--t2)' }}>
+                    {r.description || '—'}
+                  </td>
+                  <td className="px-4 py-3">
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold"
+                      style={{
+                        background: r.is_active ? 'rgba(74,222,128,0.1)' : 'rgba(248,113,113,0.1)',
+                        color: r.is_active ? '#4ade80' : 'var(--rose)',
+                        border: `1px solid ${r.is_active ? 'rgba(74,222,128,0.3)' : 'rgba(248,113,113,0.3)'}`,
+                      }}>
+                      {r.is_active ? '● Active' : '○ Disabled'}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3">
+                    <div className="flex items-center gap-1">
+                      <button title={r.is_active ? 'Disable' : 'Enable'} onClick={() => toggleActive(r)}
+                        disabled={busy === r.id}
+                        className="p-1.5 rounded-lg hover:opacity-80"
+                        style={{ background: r.is_active ? 'rgba(248,113,113,0.1)' : 'rgba(74,222,128,0.1)', color: r.is_active ? 'var(--rose)' : '#4ade80' }}>
+                        {busy === r.id ? <Loader2 className="w-3 h-3 animate-spin" /> : r.is_active ? <BellOff className="w-3 h-3" /> : <Bell className="w-3 h-3" />}
+                      </button>
+                      <button title="Delete" onClick={() => deleteRoute(r)}
+                        disabled={busy === r.id}
+                        className="p-1.5 rounded-lg hover:opacity-80"
+                        style={{ background: 'rgba(248,113,113,0.08)', color: 'var(--rose)' }}>
+                        <Trash2 className="w-3 h-3" />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {/* Legend */}
+      <div className="rounded-xl p-4 space-y-2" style={{ background: 'var(--s2)', border: '1px solid var(--b1)' }}>
+        <p className="text-[10px] font-bold uppercase tracking-widest" style={{ color: 'var(--t2)' }}>How routing works</p>
+        <div className="grid grid-cols-3 gap-3 text-[11px]" style={{ color: 'var(--t2)' }}>
+          <div><span className="font-semibold" style={{ color: 'var(--t1)' }}>Reporting Authority</span> — Sends to the direct manager set on the submitter's employee profile.</div>
+          <div><span className="font-semibold" style={{ color: 'var(--t1)' }}>By Role</span> — Sends to all active users with the specified role. Enable "Same dept" to restrict to submitter's department.</div>
+          <div><span className="font-semibold" style={{ color: 'var(--t1)' }}>Specific Employee</span> — Always sends to one named employee by their Employee ID.</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Role badge ─────────────────────────────────────────────────────────────────
 const roleColors: Record<string, string> = {
   'Admin': '#f97316', 'Reviewer': '#a78bfa', 'Lead Engineer': 'var(--em)',
@@ -247,6 +496,7 @@ const roleColors: Record<string, string> = {
 
 // ── Main Component ─────────────────────────────────────────────────────────────
 export default function AdminManagement() {
+  const [tab, setTab] = useState<'users' | 'routing'>('users');
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -307,6 +557,28 @@ export default function AdminManagement() {
         description="Create and manage engineering team users, roles, and access control"
       />
 
+      {/* Tab bar */}
+      <div className="flex gap-1 p-1 rounded-xl w-fit" style={{ background: 'var(--s2)', border: '1px solid var(--b1)' }}>
+        {([['users', ShieldCheck, 'Users'], ['routing', Bell, 'Notification Routing']] as const).map(([key, Icon, label]) => (
+          <button
+            key={key}
+            onClick={() => setTab(key)}
+            className="flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold transition-all"
+            style={{
+              background: tab === key ? 'var(--em-dim)' : 'transparent',
+              color: tab === key ? 'var(--em-lt)' : 'var(--t2)',
+              border: tab === key ? '1px solid rgba(59,130,246,0.3)' : '1px solid transparent',
+            }}
+          >
+            <Icon className="w-3.5 h-3.5" />
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {tab === 'routing' && <NotificationRoutingPanel />}
+
+      {tab === 'users' && <>
       {error && <Alert variant="error" onClose={() => setError('')}>{error}</Alert>}
       {success && <Alert variant="success">{success}</Alert>}
 
@@ -436,6 +708,7 @@ export default function AdminManagement() {
       {modal === 'reset' && selected && (
         <ResetPasswordModal user={selected} onClose={() => { setModal(null); setSelected(null); }} onSave={() => toast('Password reset successfully')} />
       )}
+      </>}
     </div>
   );
 }

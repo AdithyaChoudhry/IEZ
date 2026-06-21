@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from typing import Optional, List
 
 from ..deps import get_db, get_current_user
-from ..auth.models import User, AdminUser, ApprovalRequest, Notification
+from ..auth.models import User, AdminUser, ApprovalRequest, Notification, Employee, NotificationRoute
 from ..auth.utils import verify_password
 
 logger = logging.getLogger(__name__)
@@ -33,6 +33,55 @@ def _notify(db, recipient_employee_id: str, title: str, body: str,
         notif_type=notif_type,
         related_request_id=related_request_id,
     ))
+
+
+def _notify_via_routes(db, submitted_by_id: str, req_id: int, label: str, submitted_by_name: str):
+    """Resolve recipients from admin-configured routing rules and create notifications."""
+    routes = (
+        db.query(NotificationRoute)
+        .filter(
+            NotificationRoute.trigger_event == "approval_submitted",
+            NotificationRoute.is_active == True,  # noqa: E712
+        )
+        .order_by(NotificationRoute.priority)
+        .all()
+    )
+
+    # Look up submitter's employee profile once
+    submitter_emp = db.query(Employee).filter(Employee.employee_id == submitted_by_id).first()
+
+    recipients: set = set()
+
+    for route in routes:
+        if route.notify_type == "reporting_authority":
+            if submitter_emp and submitter_emp.reporting_authority_id:
+                recipients.add(submitter_emp.reporting_authority_id)
+
+        elif route.notify_type == "role":
+            q = db.query(AdminUser).filter(
+                AdminUser.role == route.notify_value,
+                AdminUser.status == "active",
+            )
+            if route.same_department_only and submitter_emp:
+                q = q.filter(AdminUser.department == submitter_emp.department)
+            for u in q.all():
+                recipients.add(u.employee_id)
+
+        elif route.notify_type == "employee":
+            if route.notify_value:
+                recipients.add(route.notify_value)
+
+    # Remove submitter from recipients (don't notify yourself)
+    recipients.discard(submitted_by_id)
+
+    title = f"New {label} approval request"
+    body_text = (
+        f"{submitted_by_name} has raised a {label} approval request (#{req_id}). "
+        "Please review in the Approval Queue."
+    )
+    for emp_id in recipients:
+        _notify(db, emp_id, title=title, body=body_text,
+                notif_type="approval_submitted", related_request_id=req_id)
 
 
 # ── Pydantic schemas ───────────────────────────────────────────────────────────
@@ -95,20 +144,8 @@ def submit_approval(
     db.add(req)
     db.flush()  # get req.id before notifications
 
-    # Notify all Lead Engineers / Admins / Reviewers
-    leads = db.query(AdminUser).filter(
-        AdminUser.role.in_(LEAD_ROLES),
-        AdminUser.status == "active",
-    ).all()
     label = "spec extraction" if body.request_type == "spec" else "cover sheet"
-    for lead in leads:
-        _notify(
-            db, lead.employee_id,
-            title=f"New {label} approval request",
-            body=f"{body.submitted_by_name} has raised a {label} approval request (#{req.id}). Please review.",
-            notif_type="approval_submitted",
-            related_request_id=req.id,
-        )
+    _notify_via_routes(db, body.submitted_by_id, req.id, label, body.submitted_by_name)
 
     db.commit()
     db.refresh(req)

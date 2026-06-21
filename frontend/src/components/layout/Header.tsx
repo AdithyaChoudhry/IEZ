@@ -75,7 +75,7 @@ export default function Header({ onToggleSidebar }: HeaderProps) {
   const loadNotifs = useCallback(() => {
     api.get('/notifications?limit=20')
       .then(r => { setNotifs(r.data); setNotifsLoaded(true); })
-      .catch(() => {});
+      .catch(() => { setNotifsLoaded(true); }); // show empty state on error
   }, []);
 
   function openBell() {

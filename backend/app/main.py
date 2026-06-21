@@ -25,6 +25,7 @@ from .routers.admin_users import router as admin_router
 from .routers.approvals import router as approvals_router
 from .routers.employees import router as employees_router
 from .routers.notifications import router as notifications_router
+from .routers.notification_routes import router as notification_routes_router
 
 
 @asynccontextmanager
@@ -89,6 +90,7 @@ app.include_router(admin_router, prefix="/api")
 app.include_router(approvals_router, prefix="/api")
 app.include_router(employees_router, prefix="/api")
 app.include_router(notifications_router, prefix="/api")
+app.include_router(notification_routes_router, prefix="/api")
 
 
 @app.get("/")

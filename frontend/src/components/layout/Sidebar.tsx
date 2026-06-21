@@ -90,7 +90,12 @@ export default function Sidebar({ isOpen }: SidebarProps) {
       }}
     >
       <div className="flex-1 overflow-y-auto py-3 px-2">
-        {sections.map((section, si) => (
+        {sections.map((section, si) => {
+          const visibleItems = (section.items as SidebarItem[]).filter(
+            item => !item.allowedRoles || item.allowedRoles.includes(role)
+          );
+          if (visibleItems.length === 0) return null;
+          return (
           <div
             key={section.label}
             className={clsx('mb-4', si > 0 && 'border-t pt-3')}
@@ -107,9 +112,7 @@ export default function Sidebar({ isOpen }: SidebarProps) {
             </div>
 
             <nav className="space-y-0.5">
-              {(section.items as SidebarItem[]).filter(item =>
-                !item.allowedRoles || item.allowedRoles.includes(role)
-              ).map((item) => {
+              {visibleItems.map((item) => {
                 const Icon = item.icon;
                 const isActive = item.exact
                   ? location.pathname === item.path
@@ -163,7 +166,8 @@ export default function Sidebar({ isOpen }: SidebarProps) {
               })}
             </nav>
           </div>
-        ))}
+          );
+        })}
       </div>
 
       <div className="p-2 flex-shrink-0" style={{ borderTop: '1px solid var(--b0)' }}>

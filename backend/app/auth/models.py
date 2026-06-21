@@ -1,7 +1,7 @@
 """
 SQLAlchemy models for authentication.
 """
-from sqlalchemy import Boolean, Column, Integer, String, DateTime
+from sqlalchemy import Boolean, Column, Integer, String, DateTime, Text
 from sqlalchemy.ext.declarative import declarative_base
 from datetime import datetime
 
@@ -64,3 +64,23 @@ class VendorSelectionLog(Base):
     employee_id = Column(String, nullable=False)
     date = Column(String, nullable=False)
     time = Column(String, nullable=False)
+
+
+class ApprovalRequest(Base):
+    """Raised by a junior/engineer for Lead Engineer review before proceeding."""
+    __tablename__ = "approval_requests"
+    id = Column(Integer, primary_key=True, index=True)
+    request_type = Column(String, nullable=False)        # "spec" | "coversheet"
+    tag_numbers = Column(Text, nullable=True)            # JSON array string
+    instrument_type = Column(String, nullable=True)
+    payload_json = Column(Text, nullable=True)           # JSON: specs or coversheet summary
+    submitted_by_name = Column(String, nullable=False)
+    submitted_by_id = Column(String, nullable=False)     # submitter's employee ID (informational)
+    submitter_notes = Column(String, nullable=True)
+    status = Column(String, default="pending")           # pending | approved | rejected
+    reviewed_by_name = Column(String, nullable=True)
+    reviewed_by_id = Column(String, nullable=True)
+    reviewed_role = Column(String, nullable=True)
+    review_notes = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=True)

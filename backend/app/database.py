@@ -23,5 +23,8 @@ def init_db():
     Initialize database tables.
     Import all models here to ensure they're registered with SQLAlchemy.
     """
-    from .auth.models import Base, AdminUser, DatasheetApproval, VendorSelectionLog  # noqa: F401
+    # Import every model so it's registered in Base.metadata before create_all
+    from .auth.models import (  # noqa: F401
+        Base, User, AdminUser, DatasheetApproval, VendorSelectionLog, ApprovalRequest
+    )
     Base.metadata.create_all(bind=engine)

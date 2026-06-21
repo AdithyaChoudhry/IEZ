@@ -22,6 +22,7 @@ from .routers.sop_datasheet import router as sop_datasheet_router
 from .routers.lt_radar import router as lt_radar_router
 from .routers.deploy import router as deploy_router
 from .routers.admin_users import router as admin_router
+from .routers.approvals import router as approvals_router
 
 
 @asynccontextmanager
@@ -83,6 +84,7 @@ app.include_router(sop_datasheet_router, prefix="/api")
 app.include_router(lt_radar_router, prefix="/api")
 app.include_router(deploy_router, prefix="/api")
 app.include_router(admin_router, prefix="/api")
+app.include_router(approvals_router, prefix="/api")
 
 
 @app.get("/")

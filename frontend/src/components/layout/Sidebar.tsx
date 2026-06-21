@@ -1,10 +1,12 @@
 import { NavLink, useLocation } from 'react-router-dom';
+import { useEffect, useState } from 'react';
 import {
   Home, CheckCircle2, FileSpreadsheet, Network,
   FileText, Cable, GitBranch, Layers, ScanSearch,
-  Sparkles, Droplets, ShieldCheck,
+  Sparkles, Droplets, ShieldCheck, ClipboardCheck,
 } from 'lucide-react';
 import clsx from 'clsx';
+import api from '@/services/api';
 
 interface SidebarProps { isOpen: boolean; }
 
@@ -38,12 +40,27 @@ const sections = [
   },
   {
     label: 'Admin',
-    items: [{ path: '/admin', icon: ShieldCheck, label: 'Admin Management' }],
+    items: [
+      { path: '/admin', icon: ShieldCheck, label: 'Admin Management' },
+      { path: '/approval-queue', icon: ClipboardCheck, label: 'Approval Queue', badge: true },
+    ],
   },
 ];
 
 export default function Sidebar({ isOpen }: SidebarProps) {
   const location = useLocation();
+  const [pendingCount, setPendingCount] = useState(0);
+
+  useEffect(() => {
+    const fetchCount = () => {
+      api.get('/approvals/pending/count')
+        .then(r => setPendingCount(r.data.count ?? 0))
+        .catch(() => {/* ignore */});
+    };
+    fetchCount();
+    const interval = setInterval(fetchCount, 30_000); // refresh every 30 s
+    return () => clearInterval(interval);
+  }, []);
 
   return (
     <aside
@@ -81,6 +98,7 @@ export default function Sidebar({ isOpen }: SidebarProps) {
                 const isActive = 'exact' in item && item.exact
                   ? location.pathname === item.path
                   : (location.pathname.startsWith(item.path) && item.path !== '/');
+                const showBadge = 'badge' in item && item.badge && pendingCount > 0;
 
                 return (
                   <NavLink key={item.path} to={item.path} end={'exact' in item ? item.exact : false}>
@@ -114,7 +132,13 @@ export default function Sidebar({ isOpen }: SidebarProps) {
                         style={{ color: isActive ? 'var(--em)' : 'inherit', opacity: isActive ? 1 : 0.65 }}
                       />
                       <span>{item.label}</span>
-                      {isActive && (
+                      {showBadge && (
+                        <span className="ml-auto text-[9px] font-black px-1.5 py-0.5 rounded-full min-w-[18px] text-center"
+                          style={{ background: 'rgba(245,158,11,0.15)', color: 'var(--gold)', border: '1px solid rgba(245,158,11,0.3)' }}>
+                          {pendingCount > 99 ? '99+' : pendingCount}
+                        </span>
+                      )}
+                      {!showBadge && isActive && (
                         <span className="ml-auto w-1 h-1 rounded-full" style={{ background: 'var(--em)' }} />
                       )}
                     </div>

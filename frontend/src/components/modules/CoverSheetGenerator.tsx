@@ -11,7 +11,7 @@ import { useState, useEffect, useRef } from 'react';
 import {
   FileSpreadsheet, Upload, Download, Plus, Trash2, Save,
   Eye, ImagePlus, ChevronDown, ChevronRight, FileUp, X, CheckCircle2,
-  Lock, LayoutGrid, AlertTriangle, Loader2, FileUp as FileUpIcon,
+  Lock, LayoutGrid, AlertTriangle, Loader2, FileUp as FileUpIcon, Send,
 } from 'lucide-react';
 import api from '@/services/api';
 import CoverSheetPreview, { colLetter } from './coversheet/CoverSheetPreview';
@@ -208,6 +208,105 @@ function AdminVerifyModal({ onSuccess, onClose }: {
   );
 }
 
+// ── Cover Sheet Raise Request Modal ───────────────────────────────────────────
+function CSRaiseRequestModal({
+  projectTitle, projectInfo, onSuccess, onClose,
+}: {
+  projectTitle: string;
+  projectInfo: ProjectInfo;
+  onSuccess: (reqId: number) => void;
+  onClose: () => void;
+}) {
+  const [name, setName] = useState('');
+  const [empId, setEmpId] = useState('');
+  const [notes, setNotes] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault(); setErr(''); setBusy(true);
+    try {
+      const res = await api.post('/approvals', {
+        request_type: 'coversheet',
+        submitted_by_name: name,
+        submitted_by_id: empId,
+        submitter_notes: notes || null,
+        payload: {
+          doc_title: projectTitle,
+          client: projectInfo.client,
+          pmc: projectInfo.pmc,
+          contractor: projectInfo.contractor,
+          doc_class: projectInfo.doc_class,
+          discipline: projectInfo.discipline,
+          job_no: projectInfo.job_no,
+          doc_code: projectInfo.doc_code,
+          serial_no: projectInfo.serial_no,
+        },
+      });
+      onSuccess(res.data.id);
+      onClose();
+    } catch (ex: any) { setErr(ex?.response?.data?.detail || 'Failed to submit'); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center">
+      <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={onClose} />
+      <div className="relative w-full max-w-md rounded-2xl overflow-hidden"
+        style={{ background: 'var(--s1)', border: '1px solid var(--b2)' }}>
+        <div className="px-6 py-5 flex items-center gap-3" style={{ borderBottom: '1px solid var(--b1)' }}>
+          <div className="w-9 h-9 rounded-xl flex items-center justify-center"
+            style={{ background: 'rgba(245,158,11,0.12)', border: '1px solid rgba(245,158,11,0.3)' }}>
+            <Send className="w-4 h-4" style={{ color: 'var(--gold)' }} />
+          </div>
+          <div className="flex-1">
+            <p className="text-sm font-bold" style={{ color: 'var(--t0)' }}>Request Cover Sheet Approval</p>
+            <p className="text-xs" style={{ color: 'var(--t2)' }}>{projectTitle} · Lead Engineer will review before generation is enabled</p>
+          </div>
+          <button onClick={onClose} className="opacity-40 hover:opacity-80" style={{ color: 'var(--t1)' }}>
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+        <form onSubmit={submit} className="p-6 space-y-4">
+          {err && (
+            <div className="flex items-center gap-2 px-3 py-2.5 rounded-xl text-xs"
+              style={{ background: 'rgba(248,113,113,0.08)', border: '1px solid rgba(248,113,113,0.2)', color: 'var(--rose)' }}>
+              <AlertTriangle className="w-3.5 h-3.5" /> {err}
+            </div>
+          )}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-semibold uppercase tracking-wider mb-1.5" style={{ color: 'var(--t2)' }}>Your Name *</label>
+              <input type="text" required value={name} onChange={e => setName(e.target.value)}
+                placeholder="Full name" className="w-full px-3 py-2.5 rounded-xl text-sm"
+                style={{ background: 'var(--s0)', border: '1px solid var(--b2)', color: 'var(--t0)', outline: 'none' }} />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold uppercase tracking-wider mb-1.5" style={{ color: 'var(--t2)' }}>Employee ID *</label>
+              <input type="text" required value={empId} onChange={e => setEmpId(e.target.value)}
+                placeholder="WABAG-EMP-001" className="w-full px-3 py-2.5 rounded-xl text-sm"
+                style={{ background: 'var(--s0)', border: '1px solid var(--b2)', color: 'var(--t0)', outline: 'none' }} />
+            </div>
+          </div>
+          <div>
+            <label className="block text-xs font-semibold uppercase tracking-wider mb-1.5" style={{ color: 'var(--t2)' }}>Notes for Lead Engineer</label>
+            <textarea rows={2} value={notes} onChange={e => setNotes(e.target.value)}
+              placeholder="Any context or clarifications…"
+              className="w-full resize-none px-3 py-2.5 rounded-xl text-sm"
+              style={{ background: 'var(--s0)', border: '1px solid var(--b2)', color: 'var(--t0)', outline: 'none' }} />
+          </div>
+          <button type="submit" disabled={busy || !name || !empId}
+            className="w-full py-3 rounded-xl text-sm font-bold flex items-center justify-center gap-2"
+            style={{ background: 'linear-gradient(135deg,var(--gold),#d97706)', color: '#000', opacity: busy || !name || !empId ? 0.5 : 1, cursor: 'pointer' }}>
+            {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+            {busy ? 'Submitting…' : 'Send to Approval Queue'}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 // ── Main Component ─────────────────────────────────────────────────────────────
 export default function CoverSheetGenerator() {
   const [projectInfo, setProjectInfo] = useState<ProjectInfo>(emptyProjectInfo);
@@ -245,6 +344,11 @@ export default function CoverSheetGenerator() {
   const [authInfo, setAuthInfo] = useState<AuthInfo | null>(null);
   const [result, setResult] = useState<{ filename: string; message: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Cover sheet raise-request flow
+  const [showCSRaiseModal, setShowCSRaiseModal] = useState(false);
+  const [csPendingReqId, setCSPendingReqId] = useState<number | null>(null);
+  const [csReqStatus, setCSReqStatus] = useState<'idle' | 'pending' | 'approved' | 'rejected'>('idle');
+  const csPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Load project master
   useEffect(() => {
@@ -695,24 +799,48 @@ export default function CoverSheetGenerator() {
               <X className="w-3.5 h-3.5" />
             </button>
           </div>
+        ) : csReqStatus === 'pending' ? (
+          <div className="flex items-center gap-3 mb-4 px-4 py-3 rounded-xl"
+            style={{ background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.2)' }}>
+            <Loader2 className="w-4 h-4 animate-spin flex-shrink-0" style={{ color: 'var(--gold)' }} />
+            <p className="text-xs flex-1" style={{ color: 'var(--gold)' }}>
+              Request #{csPendingReqId} — Awaiting Lead Engineer Approval…
+            </p>
+            <button onClick={() => { if (csPollRef.current) clearInterval(csPollRef.current); setCSPendingReqId(null); setCSReqStatus('idle'); }}
+              className="opacity-40 hover:opacity-80" style={{ color: 'var(--t2)' }}><X className="w-3.5 h-3.5" /></button>
+          </div>
+        ) : csReqStatus === 'rejected' ? (
+          <div className="flex items-center gap-3 mb-4 px-4 py-3 rounded-xl"
+            style={{ background: 'rgba(248,113,113,0.06)', border: '1px solid rgba(248,113,113,0.2)' }}>
+            <AlertTriangle className="w-4 h-4 flex-shrink-0" style={{ color: 'var(--rose)' }} />
+            <p className="text-xs flex-1" style={{ color: 'var(--rose)' }}>Request rejected by Lead Engineer. Please review and resubmit.</p>
+            <button onClick={() => { setCSPendingReqId(null); setCSReqStatus('idle'); }}
+              className="opacity-40 hover:opacity-80" style={{ color: 'var(--t2)' }}><X className="w-3.5 h-3.5" /></button>
+          </div>
         ) : (
           <div className="flex items-center gap-3 mb-4 px-4 py-3 rounded-xl"
             style={{ background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.2)' }}>
             <Lock className="w-4 h-4" style={{ color: 'var(--gold)' }} />
             <p className="text-xs" style={{ color: 'var(--gold)' }}>
-              Admin Employee ID and Password required before generating the cover sheet
+              Raise an approval request for Lead Engineer review before generating.
             </p>
           </div>
         )}
 
         <div className="flex flex-wrap items-center gap-3">
-          {!authInfo ? (
-            <Button onClick={() => setShowAuthModal(true)} disabled={!previewLayout} size="lg"
-              style={{ background: 'linear-gradient(135deg,var(--em),#1d4ed8)' }}>
-              <Lock className="w-4 h-4" /> Authenticate to Generate
+          {/* Raise Request — shown when not yet pending or rejected */}
+          {(csReqStatus === 'idle' || csReqStatus === 'rejected') && !authInfo && (
+            <Button onClick={() => setShowCSRaiseModal(true)} disabled={!previewLayout} size="lg"
+              style={{ background: 'linear-gradient(135deg,var(--gold),#d97706)', color: '#000' }}>
+              <Send className="w-4 h-4" /> Request Lead Approval
             </Button>
-          ) : (
-            <Button onClick={() => doGenerate(authInfo)} loading={generating} disabled={!previewLayout} size="lg">
+          )}
+          {/* Generate — enabled once Lead approved OR if admin already authed */}
+          {(csReqStatus === 'approved' || authInfo) && (
+            <Button onClick={() => {
+              if (authInfo) { doGenerate(authInfo); }
+              else { setShowAuthModal(true); }
+            }} loading={generating} disabled={!previewLayout} size="lg">
               <FileSpreadsheet className="w-4 h-4" />
               {generating ? 'Generating…' : 'Generate Cover Sheet'}
             </Button>
@@ -732,6 +860,29 @@ export default function CoverSheetGenerator() {
 
       {showAuthModal && (
         <AdminVerifyModal onSuccess={handleAuthSuccess} onClose={() => setShowAuthModal(false)} />
+      )}
+      {showCSRaiseModal && (
+        <CSRaiseRequestModal
+          projectTitle={projectInfo.doc_title_short || projectInfo.doc_title_full || 'Cover Sheet'}
+          projectInfo={projectInfo}
+          onSuccess={(reqId) => {
+            setCSPendingReqId(reqId); setCSReqStatus('pending');
+            if (csPollRef.current) clearInterval(csPollRef.current);
+            csPollRef.current = setInterval(async () => {
+              try {
+                const r = await api.get(`/approvals/${reqId}`);
+                if (r.data.status === 'approved') {
+                  clearInterval(csPollRef.current!);
+                  setCSReqStatus('approved');
+                  setAuthInfo({ employee_name: r.data.reviewed_by_name, role: r.data.reviewed_role, employee_id: r.data.reviewed_by_id });
+                } else if (r.data.status === 'rejected') {
+                  clearInterval(csPollRef.current!);
+                  setCSReqStatus('rejected');
+                }
+              } catch { /* ignore */ }
+            }, 15_000);
+          }}
+          onClose={() => setShowCSRaiseModal(false)} />
       )}
     </div>
   );

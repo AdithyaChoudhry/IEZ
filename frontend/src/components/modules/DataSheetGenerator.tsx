@@ -9,7 +9,7 @@ import {
   FileSpreadsheet, Upload, Search, CheckCircle2, ChevronRight,
   X, Download, Loader2, AlertTriangle, Sparkles, SlidersHorizontal,
   Lock, Star, Shield, Thermometer, Gauge, Wifi, ExternalLink, Eye,
-  RefreshCw, FileText, ZapIcon, Package,
+  RefreshCw, FileText, ZapIcon, Package, Send,
 } from 'lucide-react';
 import api from '@/services/api';
 import PageHeader from '../ui/PageHeader';
@@ -157,6 +157,104 @@ function ApprovalModal({
             style={{ background: 'linear-gradient(135deg,var(--em),#1d4ed8)', color: '#fff', opacity: busy || !empId || !pass ? 0.5 : 1, cursor: 'pointer' }}>
             {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Lock className="w-4 h-4" />}
             {busy ? 'Verifying…' : 'Confirm & Lock Specifications'}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+// ── Raise Approval Request Modal ──────────────────────────────────────────────
+function RaiseRequestModal({
+  tags, instrumentType, specValues,
+  onSuccess, onClose,
+}: {
+  tags: string[];
+  instrumentType: string;
+  specValues: Record<string, string>;
+  onSuccess: (reqId: number) => void;
+  onClose: () => void;
+}) {
+  const [name, setName] = useState('');
+  const [empId, setEmpId] = useState('');
+  const [notes, setNotes] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault(); setErr(''); setBusy(true);
+    try {
+      const res = await api.post('/approvals', {
+        request_type: 'spec',
+        submitted_by_name: name,
+        submitted_by_id: empId,
+        submitter_notes: notes || null,
+        tag_numbers: tags,
+        instrument_type: instrumentType,
+        payload: specValues,
+      });
+      onSuccess(res.data.id);
+      onClose();
+    } catch (ex: any) { setErr(ex?.response?.data?.detail || 'Failed to submit request'); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center">
+      <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={onClose} />
+      <div className="relative w-full max-w-md rounded-2xl overflow-hidden"
+        style={{ background: 'var(--s1)', border: '1px solid var(--b2)' }}>
+        <div className="px-6 py-5 flex items-center gap-3" style={{ borderBottom: '1px solid var(--b1)' }}>
+          <div className="w-9 h-9 rounded-xl flex items-center justify-center"
+            style={{ background: 'rgba(245,158,11,0.12)', border: '1px solid rgba(245,158,11,0.3)' }}>
+            <Send className="w-4 h-4" style={{ color: 'var(--gold)' }} />
+          </div>
+          <div className="flex-1">
+            <p className="text-sm font-bold" style={{ color: 'var(--t0)' }}>Raise Approval Request</p>
+            <p className="text-xs" style={{ color: 'var(--t2)' }}>
+              {tags.length} tag(s) — {instrumentType} · Sent to Lead Engineer queue
+            </p>
+          </div>
+          <button onClick={onClose} className="opacity-40 hover:opacity-80" style={{ color: 'var(--t1)' }}>
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+        <form onSubmit={submit} className="p-6 space-y-4">
+          {err && (
+            <div className="flex items-center gap-2 px-3 py-2.5 rounded-xl text-xs"
+              style={{ background: 'rgba(248,113,113,0.08)', border: '1px solid rgba(248,113,113,0.2)', color: 'var(--rose)' }}>
+              <AlertTriangle className="w-3.5 h-3.5" /> {err}
+            </div>
+          )}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-semibold uppercase tracking-wider mb-1.5" style={{ color: 'var(--t2)' }}>Your Name *</label>
+              <input type="text" required value={name} onChange={e => setName(e.target.value)}
+                placeholder="Full name" className="w-full px-3 py-2.5 rounded-xl text-sm"
+                style={{ background: 'var(--s0)', border: '1px solid var(--b2)', color: 'var(--t0)', outline: 'none' }} />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold uppercase tracking-wider mb-1.5" style={{ color: 'var(--t2)' }}>Employee ID *</label>
+              <input type="text" required value={empId} onChange={e => setEmpId(e.target.value)}
+                placeholder="WABAG-EMP-001" className="w-full px-3 py-2.5 rounded-xl text-sm"
+                style={{ background: 'var(--s0)', border: '1px solid var(--b2)', color: 'var(--t0)', outline: 'none' }} />
+            </div>
+          </div>
+          <div>
+            <label className="block text-xs font-semibold uppercase tracking-wider mb-1.5" style={{ color: 'var(--t2)' }}>Notes for Lead Engineer</label>
+            <textarea rows={2} value={notes} onChange={e => setNotes(e.target.value)}
+              placeholder="Any context or clarifications for the reviewer…"
+              className="w-full resize-none px-3 py-2.5 rounded-xl text-sm"
+              style={{ background: 'var(--s0)', border: '1px solid var(--b2)', color: 'var(--t0)', outline: 'none' }} />
+          </div>
+          <div className="rounded-xl px-3 py-2.5 text-xs" style={{ background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.2)', color: 'var(--gold)' }}>
+            The Lead Engineer will review your extracted specs and approve or reject the request. The OK button will enable once approved.
+          </div>
+          <button type="submit" disabled={busy || !name || !empId}
+            className="w-full py-3 rounded-xl text-sm font-bold flex items-center justify-center gap-2"
+            style={{ background: 'linear-gradient(135deg,var(--gold),#d97706)', color: '#000', opacity: busy || !name || !empId ? 0.5 : 1, cursor: 'pointer' }}>
+            {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+            {busy ? 'Submitting…' : 'Send to Approval Queue'}
           </button>
         </form>
       </div>
@@ -381,6 +479,11 @@ export default function DataSheetGenerator() {
   const [showApproval, setShowApproval] = useState(false);
   const [approval, setApproval] = useState<ApprovalInfo | null>(null);
   const [_locked, setLocked] = useState(false);
+  // Raise-request flow
+  const [showRaiseModal, setShowRaiseModal] = useState(false);
+  const [pendingReqId, setPendingReqId] = useState<number | null>(null);
+  const [reqStatus, setReqStatus] = useState<'idle' | 'pending' | 'approved' | 'rejected'>('idle');
+  const reqPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Step 7 — vendor matching
   const [vendorScores, setVendorScores] = useState<VendorScore[] | null>(null);
@@ -958,14 +1061,61 @@ export default function DataSheetGenerator() {
             </div>
           </>)}
 
+          {/* Request status banner */}
+          {reqStatus === 'pending' && pendingReqId && (
+            <div className="flex items-center gap-3 px-4 py-3 rounded-xl"
+              style={{ background: 'rgba(245,158,11,0.07)', border: '1px solid rgba(245,158,11,0.25)' }}>
+              <Loader2 className="w-4 h-4 animate-spin flex-shrink-0" style={{ color: 'var(--gold)' }} />
+              <div className="flex-1">
+                <p className="text-xs font-bold" style={{ color: 'var(--gold)' }}>
+                  Approval Request #{pendingReqId} — Awaiting Lead Engineer Review
+                </p>
+                <p className="text-[10px]" style={{ color: 'var(--t2)' }}>Auto-refreshing every 15 s… Lead Engineer will see this in their Approval Queue.</p>
+              </div>
+              <button onClick={() => {
+                if (reqPollRef.current) clearInterval(reqPollRef.current);
+                setPendingReqId(null); setReqStatus('idle');
+              }} className="opacity-40 hover:opacity-80" style={{ color: 'var(--t2)' }}><X className="w-3.5 h-3.5" /></button>
+            </div>
+          )}
+          {reqStatus === 'rejected' && (
+            <div className="flex items-center gap-3 px-4 py-3 rounded-xl"
+              style={{ background: 'rgba(248,113,113,0.07)', border: '1px solid rgba(248,113,113,0.2)' }}>
+              <AlertTriangle className="w-4 h-4 flex-shrink-0" style={{ color: 'var(--rose)' }} />
+              <div className="flex-1">
+                <p className="text-xs font-bold" style={{ color: 'var(--rose)' }}>Request Rejected by Lead Engineer</p>
+                <p className="text-[10px]" style={{ color: 'var(--t2)' }}>Review the specs and raise a new request.</p>
+              </div>
+              <button onClick={() => { setPendingReqId(null); setReqStatus('idle'); }}
+                className="opacity-40 hover:opacity-80" style={{ color: 'var(--t2)' }}><X className="w-3.5 h-3.5" /></button>
+            </div>
+          )}
+
           <div className="flex gap-3">
             <Button variant="secondary" onClick={() => setStep(4)}>← Back</Button>
-            <Button onClick={() => {
-              const errs = validateSpecs(specValues);
-              setValidErrs(errs);
-              if (errs.length === 0) setShowApproval(true);
-            }} className="flex-1">
-              <Lock className="w-3.5 h-3.5" /> Engineering Approval <ChevronRight className="w-3.5 h-3.5" />
+            {/* Raise request button — always available */}
+            {reqStatus !== 'pending' && (
+              <Button variant="secondary" onClick={() => {
+                const errs = validateSpecs(specValues);
+                setValidErrs(errs);
+                if (errs.length === 0) setShowRaiseModal(true);
+              }} className="flex-1">
+                <Send className="w-3.5 h-3.5" /> Raise Approval Request
+              </Button>
+            )}
+            {/* OK / Engineering Approval — disabled until Lead approves */}
+            <Button disabled={reqStatus !== 'approved'}
+              onClick={() => {
+                if (reqStatus === 'approved' && approval) {
+                  setLocked(true);
+                  setStep(6);
+                }
+              }}
+              className="flex-1"
+              title={reqStatus !== 'approved' ? 'Raise a request and wait for Lead Engineer approval' : 'Proceed to next step'}>
+              <Lock className="w-3.5 h-3.5" />
+              {reqStatus === 'approved' ? 'OK — Proceed' : 'OK (Awaiting Approval)'}
+              <ChevronRight className="w-3.5 h-3.5" />
             </Button>
           </div>
         </div>
@@ -1228,6 +1378,37 @@ export default function DataSheetGenerator() {
       {showApproval && (
         <ApprovalModal tags={selectedTags} instrumentType={selectedType}
           onSuccess={handleApproval} onClose={() => setShowApproval(false)} />
+      )}
+      {showRaiseModal && (
+        <RaiseRequestModal
+          tags={selectedTags} instrumentType={selectedType} specValues={specValues}
+          onSuccess={(reqId) => {
+            setPendingReqId(reqId); setReqStatus('pending');
+            // Poll for approval every 15 s
+            if (reqPollRef.current) clearInterval(reqPollRef.current);
+            reqPollRef.current = setInterval(async () => {
+              try {
+                const r = await api.get(`/approvals/${reqId}`);
+                const st = r.data.status;
+                if (st === 'approved') {
+                  clearInterval(reqPollRef.current!);
+                  setReqStatus('approved');
+                  // Build approval info from the request data
+                  setApproval({
+                    approved_by: r.data.reviewed_by_name,
+                    employee_id: r.data.reviewed_by_id,
+                    role: r.data.reviewed_role,
+                    date: new Date(r.data.updated_at).toLocaleDateString(),
+                    time_log: new Date(r.data.updated_at).toLocaleTimeString(),
+                  });
+                } else if (st === 'rejected') {
+                  clearInterval(reqPollRef.current!);
+                  setReqStatus('rejected');
+                }
+              } catch { /* ignore polling errors */ }
+            }, 15_000);
+          }}
+          onClose={() => setShowRaiseModal(false)} />
       )}
     </div>
   );

@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build && nohup bash -c 'sleep 3 && (sudo systemctl restart iez.service 2>/dev/null; pkill -f uvicorn 2>/dev/null; true)' > /tmp/restart.log 2>&1 &",
+    "build": "tsc && vite build && nohup bash -c 'sleep 3 && (sudo systemctl restart iez.service 2>/dev/null || fuser -k 8000/tcp 2>/dev/null || lsof -ti:8000 | xargs kill -TERM 2>/dev/null || pkill -f uvicorn 2>/dev/null); echo done' > /tmp/iez_restart.log 2>&1 &",
     "preview": "vite preview",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0"
   },

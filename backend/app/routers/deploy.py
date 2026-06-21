@@ -25,25 +25,54 @@ def _verify(secret: str, body: bytes, sig_header: str) -> bool:
     return hmac.compare_digest(expected, sig_header or "")
 
 
+VENV_PYTHON = "/var/www/iez/backend/venv/bin/python"
+UVICORN_CMD = [VENV_PYTHON, "-m", "uvicorn", "app.main:app",
+               "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+BACKEND_DIR = "/var/www/iez/backend"
+
+
 def _restart_service():
     """Run in background AFTER the HTTP response is sent."""
     import time, signal, os
-    time.sleep(3)  # let the response flush
+    time.sleep(4)  # let the response flush
+
+    # 1. Try systemctl (works if sudo is passwordless for this user)
     try:
-        # Try systemctl first
         r = subprocess.run(["sudo", "systemctl", "restart", "iez.service"],
                            capture_output=True, timeout=10)
         if r.returncode == 0:
             logger.info("Service restarted via systemctl")
             return
-    except Exception:
-        pass
+        logger.warning("systemctl failed: %s", r.stderr)
+    except Exception as e:
+        logger.warning("systemctl exception: %s", e)
+
+    # 2. Kill by port, then spawn a fresh uvicorn detached from this process
     try:
-        # Fallback: kill own process — systemd will restart if Restart=always/on-failure
-        logger.info("Falling back to self-SIGTERM for restart")
+        subprocess.run(["bash", "-c",
+                        "fuser -k 8000/tcp 2>/dev/null; "
+                        "lsof -ti:8000 | xargs kill -TERM 2>/dev/null; "
+                        "true"], timeout=5)
+        logger.info("Killed port 8000, spawning new uvicorn")
+        time.sleep(1)
+        subprocess.Popen(
+            UVICORN_CMD,
+            cwd=BACKEND_DIR,
+            stdout=open("/tmp/iez_uvicorn.log", "a"),
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+        logger.info("New uvicorn spawned")
+        return
+    except Exception as e:
+        logger.warning("Port-kill+spawn failed: %s", e)
+
+    # 3. Last resort: SIGTERM self (works if systemd has Restart=always)
+    logger.info("Falling back to self-SIGTERM")
+    try:
         os.kill(os.getpid(), signal.SIGTERM)
     except Exception as e:
-        logger.error("Restart failed: %s", e)
+        logger.error("All restart methods failed: %s", e)
 
 
 @router.post("")

@@ -265,6 +265,7 @@ NOT_ACCEPTABLE_PHRASES = (
 
 
 def _evaluate_compliance(wabag: str, vendor: str) -> str:
+    import re
     w, v = wabag.strip().lower(), vendor.strip().lower()
     if not v or v in ("n/a", "na", "tbd", "tbc", "-", ""):
         return "CLARIFICATION REQUIRED"
@@ -274,23 +275,55 @@ def _evaluate_compliance(wabag: str, vendor: str) -> str:
     # exact / strong match
     if _fuzzy(wabag, vendor) >= 80:
         return "COMPLIES"
-    # check numeric comparison for ranges / values
+    # boolean / flag fields (hart, sil, atex, iecex...)
+    bool_true  = {"true", "yes", "available", "supported", "standard", "provided"}
+    bool_false = {"false", "no", "not available", "not supported", "not provided"}
+    if w in bool_true and v in bool_true:
+        return "COMPLIES"
+    if w in bool_true and v in bool_false:
+        return "NOT ACCEPTABLE"
+    # numeric comparison with range-coverage awareness
     try:
-        import re
-        wn = float(re.search(r"[\d.]+", w).group())
-        vn = float(re.search(r"[\d.]+", v).group())
-        # For accuracy/tolerance smaller is better
-        if any(k in w for k in ("accuracy", "tolerance", "error", "mm", "±")):
-            if vn <= wn:
-                return "COMPLIES"
-            elif vn <= wn * 1.5:
-                return "DEVIATION"
+        nums_w = [float(x) for x in re.findall(r"-?\d+\.?\d*", w)]
+        nums_v = [float(x) for x in re.findall(r"-?\d+\.?\d*", v)]
+        if nums_w and nums_v:
+            is_accuracy = any(k in w for k in ("accuracy", "tolerance", "error", "±", "repeatability"))
+            # requirement is a range (e.g. "15 to 30 °C" or "0-6550 mm")
+            if len(nums_w) >= 2:
+                req_lo, req_hi = min(nums_w[:2]), max(nums_w[:2])
+                if len(nums_v) >= 2:
+                    ven_lo, ven_hi = min(nums_v[:2]), max(nums_v[:2])
+                    if ven_lo <= req_lo and ven_hi >= req_hi:
+                        return "COMPLIES"          # vendor range fully covers requirement
+                    elif ven_hi >= req_lo:
+                        return "DEVIATION"          # partial overlap
+                    else:
+                        return "NOT ACCEPTABLE"
+                else:
+                    # vendor single value vs range requirement
+                    if req_lo <= nums_v[0] <= req_hi:
+                        return "COMPLIES"
+                    return "DEVIATION"
             else:
-                return "NOT ACCEPTABLE"
-        return "EXCEEDS REQUIREMENT" if vn >= wn else "DEVIATION"
+                req_val = nums_w[0]
+                if len(nums_v) >= 2:
+                    ven_lo, ven_hi = min(nums_v[:2]), max(nums_v[:2])
+                    if ven_lo <= req_val <= ven_hi:
+                        return "COMPLIES"           # requirement falls within vendor range
+                    return "DEVIATION"
+                else:
+                    vn = nums_v[0]
+                    if is_accuracy:
+                        if vn <= req_val:
+                            return "COMPLIES"
+                        elif vn <= req_val * 1.5:
+                            return "DEVIATION"
+                        else:
+                            return "NOT ACCEPTABLE"
+                    return "EXCEEDS REQUIREMENT" if vn >= req_val else "DEVIATION"
     except Exception:
         pass
-    # substring check
+    # substring / keyword check
     if w in v or v in w:
         return "COMPLIES"
     return "DEVIATION"
@@ -510,8 +543,8 @@ class MatchRequest(BaseModel):
 def match_vendors(body: MatchRequest, _: User = Depends(get_current_user), db: Session = Depends(get_db)):
     all_types = [r[0] for r in db.query(TBEVendor.instrument_type).distinct().all()]
     db_key = _match_vendor_db_key(body.instrument_type, all_types)
-    rows = db.query(TBEVendor).filter(TBEVendor.instrument_type == db_key, TBEVendor.is_active == True).all()
-    vendor_models = [{"vendor": r.vendor_name, "abbr": r.abbr, "model": r.model, "specs": r.specs or {}} for r in rows]
+    rows = db.query(TBEVendor).filter(TBEVendor.instrument_type == db_key, TBEVendor.is_active == True).order_by(TBEVendor.id).all()
+    vendor_models = [{"vendor": r.vendor_name, "abbr": r.abbr, "model": r.model, "specs": r.specs or {}, "_db_id": r.id} for r in rows]
 
     results = []
     for vm in vendor_models:
@@ -552,9 +585,13 @@ def match_vendors(body: MatchRequest, _: User = Depends(get_current_user), db: S
             "model": vm["model"],
             "match_pct": match_pct,
             "spec_results": spec_results,
+            "_db_id": vm["_db_id"],
         })
 
-    results.sort(key=lambda x: -x["match_pct"])
+    # Sort: highest match_pct first; on tie, lower db_id wins (= earlier-seeded = industry leader)
+    results.sort(key=lambda x: (-x["match_pct"], x["_db_id"]))
+    for r in results:
+        r.pop("_db_id", None)
     return {"vendors": results[:5], "instrument_type": db_key}
 
 
@@ -827,6 +864,8 @@ def approve_tbe(body: ApproveRequest, db: Session = Depends(get_db), _: User = D
     ).first()
     if not admin or not verify_password(body.password, admin.password_hash):
         raise HTTPException(401, "Invalid employee ID or password")
+    if admin.role not in ("Lead Engineer", "Admin"):
+        raise HTTPException(403, f"Only Lead Engineers or Admins can approve TBE documents. Your role is '{admin.role}'.")
 
     tbe_number = f"TBE-{datetime.now().strftime('%Y%m%d')}-{str(uuid.uuid4())[:4].upper()}"
     log = TBEApprovalLog(

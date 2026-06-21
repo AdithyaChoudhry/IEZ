@@ -480,7 +480,7 @@ export default function VendorTBE() {
   // ── approve ───────────────────────────────────────────────────────────────────
   const submitApproval = async (e: React.FormEvent) => {
     e.preventDefault(); setError(''); setApproving(true);
-    const best = activeVendors.sort((a, b) => b.match_pct - a.match_pct)[0];
+    const best = [...activeVendors].sort((a, b) => b.match_pct - a.match_pct)[0];
     try {
       const r = await api.post('/tbe/approve', {
         session_id: sessionId,
@@ -493,7 +493,15 @@ export default function VendorTBE() {
       setApprovalResult(r.data);
       setStep('done');
     } catch (e: any) {
-      setError(e?.response?.data?.detail || 'Approval failed');
+      const status = e?.response?.status;
+      const detail = e?.response?.data?.detail || 'Approval failed';
+      if (status === 403) {
+        setError(`Access denied: ${detail}`);
+      } else if (status === 401) {
+        setError('Invalid employee ID or password. Please try again.');
+      } else {
+        setError(detail);
+      }
     } finally { setApproving(false); }
   };
 
@@ -1096,7 +1104,7 @@ export default function VendorTBE() {
                 </div>
                 <div>
                   <p className="text-sm font-bold" style={{ color: 'var(--t0)' }}>TBE Approval</p>
-                  <p className="text-xs" style={{ color: 'var(--t2)' }}>Lead Engineer or Admin credentials required</p>
+                  <p className="text-xs" style={{ color: 'var(--t2)' }}>Only Lead Engineers & Admins can approve</p>
                 </div>
               </div>
 

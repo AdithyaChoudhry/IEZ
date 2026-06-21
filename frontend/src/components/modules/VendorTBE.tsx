@@ -29,6 +29,31 @@ const EMPTY_VENDOR: Omit<VendorEntry, 'id'> = {
 };
 
 interface SpecRow { param: string; value: string; source: string; resolved: boolean; }
+
+// Keywords that classify a spec as Project Information (not used for vendor matching)
+const PI_KEYWORDS = [
+  'tag number', 'tag no', 'tag #', 'tag',
+  'service description', 'service name', 'service',
+  'pid number', 'pid no', 'p&id number', 'p&id no', 'pid', 'p&id', 'p & id',
+  'tank number', 'tank no', 'tank id',
+  'equipment number', 'equipment no', 'equipment id',
+  'plant area', 'plant location', 'location', 'area',
+  'line number', 'line no', 'line size', 'line material', 'line id',
+  'piping class', 'pipe class', 'line schedule', 'line spec',
+  'requisition number', 'requisition no', 'po number', 'purchase order',
+  'fluid name', 'fluid description',
+  'equipment description', 'instrument description',
+  'document number', 'drawing number', 'doc no', 'drg no',
+  'unit number', 'unit no',
+];
+
+function classifySpec(param: string): 'project' | 'technical' {
+  const p = param.toLowerCase().trim();
+  for (const kw of PI_KEYWORDS) {
+    if (p === kw || p.startsWith(kw + ' ') || p.endsWith(' ' + kw) || p.includes(kw)) return 'project';
+  }
+  return 'technical';
+}
 interface SpecResult {
   param: string; wabag_req: string; vendor_offer: string;
   status: string; auto_reply: string;
@@ -312,9 +337,12 @@ export default function VendorTBE() {
   const [error, setError] = useState('');
 
   const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
-  // user-editable copy of specs
+  // project information (display only, not sent to vendor matching)
+  const [projectInfo, setProjectInfo] = useState<SpecRow[]>([]);
+  // technical requirements (sent to vendor matching engine)
   const [editedSpecs, setEditedSpecs] = useState<SpecRow[]>([]);
   const [editingIdx, setEditingIdx] = useState<number | null>(null);
+  const [piEditingIdx, setPiEditingIdx] = useState<number | null>(null);
 
   const [vendors, setVendors] = useState<VendorResult[]>([]);
   const [selectedVendors, setSelectedVendors] = useState<Set<string>>(new Set());
@@ -334,7 +362,7 @@ export default function VendorTBE() {
 
   const reset = () => {
     setStep('upload'); setFile(null); setError(''); setAnalysis(null);
-    setEditedSpecs([]); setVendors([]); setSelectedVendors(new Set());
+    setProjectInfo([]); setEditedSpecs([]); setVendors([]); setSelectedVendors(new Set());
     setTbeReplies({}); setDevSeverities({}); setSessionId('');
     setApprovalResult(null); setEmpId(''); setEmpPass('');
   };
@@ -358,8 +386,15 @@ export default function VendorTBE() {
       const r = await api.post('/tbe/analyze', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
       const result: AnalysisResult = r.data;
       setAnalysis(result);
-      // filter meaningful rows for editing
-      setEditedSpecs(result.specs.filter(s => s.param && s.value));
+      // classify into project information vs technical requirements
+      const meaningful = result.specs.filter(s => s.param && s.value);
+      const pi: SpecRow[] = [];
+      const tr: SpecRow[] = [];
+      for (const s of meaningful) {
+        if (classifySpec(s.param) === 'project') pi.push(s); else tr.push(s);
+      }
+      setProjectInfo(pi);
+      setEditedSpecs(tr);
       setStep('requirements');
     } catch (e: any) {
       const msg = e?.response?.data?.detail || e?.message || 'Analysis failed — check the file and try again';
@@ -395,7 +430,7 @@ export default function VendorTBE() {
       setStep('vendor_select');
     } catch (e: any) {
       setError(e?.response?.data?.detail || 'Vendor matching failed');
-      setStep('spec_edit');
+      setStep('requirements');
     }
   };
 
@@ -483,8 +518,7 @@ export default function VendorTBE() {
   // ── step bar ──────────────────────────────────────────────────────────────────
   const STEPS = [
     { key: 'upload',        label: 'Upload' },
-    { key: 'requirements',  label: 'Analysis' },
-    { key: 'spec_edit',     label: 'Review Specs' },
+    { key: 'requirements',  label: 'Req. Builder' },
     { key: 'vendor_select', label: 'Vendors' },
     { key: 'tbe_table',     label: 'TBE Table' },
     { key: 'dashboard',     label: 'Dashboard' },
@@ -530,7 +564,7 @@ export default function VendorTBE() {
         <div className="flex items-center gap-0 min-w-max">
           {STEPS.map((s, i) => {
             const done = stepIdx > i;
-            const active = stepIdx === i || (s.key === 'requirements' && step === 'analyzing') || (s.key === 'vendor_select' && step === 'matching') || (s.key === 'dashboard' && step === 'generating');
+            const active = stepIdx === i || (s.key === 'requirements' && (step === 'analyzing' || step === 'spec_edit')) || (s.key === 'vendor_select' && step === 'matching') || (s.key === 'dashboard' && step === 'generating');
             return (
               <div key={s.key} className="flex items-center">
                 <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg"
@@ -617,9 +651,10 @@ export default function VendorTBE() {
           </div>
         )}
 
-        {/* ── REQUIREMENTS SUMMARY (auto-analysis result) ── */}
+        {/* ── REQUIREMENT DATABASE BUILDER ── */}
         {step === 'requirements' && analysis && (
-          <div className="space-y-4">
+          <div className="space-y-5">
+            {/* Header */}
             <div className="flex items-center justify-between flex-wrap gap-3">
               <div className="flex items-center gap-2 flex-wrap">
                 <span className="text-xs font-bold px-3 py-1 rounded-full capitalize"
@@ -627,89 +662,127 @@ export default function VendorTBE() {
                   {analysis.instrument_type}
                 </span>
                 <span className="text-xs" style={{ color: 'var(--t2)' }}>
-                  {analysis.specs.filter(s => s.param && s.value).length} parameters extracted
+                  {projectInfo.length} project fields · {editedSpecs.length} technical requirements
                   {analysis.annexure_sheets.length > 0 && ` · ${analysis.annexure_sheets.length} annexure(s) resolved`}
                 </span>
               </div>
-              <button onClick={() => setStep('spec_edit')}
+              <button onClick={runMatching}
+                disabled={editedSpecs.filter(s => s.param && s.value).length === 0}
                 className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold"
-                style={{ background: 'linear-gradient(135deg,var(--em),#1d4ed8)', color: '#fff' }}>
-                <Pencil className="w-3.5 h-3.5" /> Review & Edit Specs <ChevronRight className="w-4 h-4" />
+                style={{ background: 'linear-gradient(135deg,var(--em),#1d4ed8)', color: '#fff', opacity: editedSpecs.filter(s => s.param && s.value).length ? 1 : 0.4 }}>
+                <ShieldCheck className="w-3.5 h-3.5" /> Lock & Run Vendor Analysis <ChevronRight className="w-4 h-4" />
               </button>
             </div>
 
-            <div className="rounded-2xl overflow-hidden" style={{ border: '1px solid var(--b1)' }}>
+            {/* Section A – Project Information Database */}
+            <div className="rounded-2xl overflow-hidden" style={{ border: '1px solid rgba(99,102,241,0.25)', background: 'rgba(99,102,241,0.03)' }}>
+              <div className="flex items-center justify-between px-4 py-3"
+                style={{ background: 'rgba(99,102,241,0.08)', borderBottom: '1px solid rgba(99,102,241,0.15)' }}>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-bold px-2.5 py-1 rounded-full"
+                    style={{ background: 'rgba(99,102,241,0.15)', color: '#a5b4fc' }}>Part A</span>
+                  <span className="text-sm font-bold" style={{ color: '#a5b4fc' }}>Project Information Database</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-[9px] font-bold px-2 py-1 rounded"
+                    style={{ background: 'rgba(99,102,241,0.12)', color: '#818cf8', border: '1px solid rgba(99,102,241,0.2)' }}>
+                    REFERENCE ONLY
+                  </span>
+                  <span className="text-[9px] font-bold px-2 py-1 rounded"
+                    style={{ background: 'rgba(248,113,113,0.1)', color: '#f87171', border: '1px solid rgba(248,113,113,0.2)' }}>
+                    NOT USED FOR VENDOR MATCHING
+                  </span>
+                </div>
+              </div>
               <table className="w-full text-xs">
                 <thead>
-                  <tr style={{ background: 'var(--s2)' }}>
-                    {['#', 'Parameter', 'Extracted Value', 'Source'].map(h => (
-                      <th key={h} className="text-left px-4 py-2.5 font-semibold" style={{ color: 'var(--t2)' }}>{h}</th>
+                  <tr style={{ background: 'rgba(99,102,241,0.05)' }}>
+                    {['#', 'Parameter', 'Value', 'Source'].map(h => (
+                      <th key={h} className="text-left px-4 py-2 font-semibold" style={{ color: '#818cf8', fontSize: 10 }}>{h}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
-                  {analysis.specs.filter(r => r.param && r.value).map((row, i) => (
-                    <tr key={i} style={{ borderTop: '1px solid var(--b0)', background: i % 2 ? 'var(--s1)' : 'transparent' }}>
-                      <td className="px-4 py-2 opacity-40" style={{ color: 'var(--t2)' }}>{i + 1}</td>
-                      <td className="px-4 py-2 font-medium" style={{ color: 'var(--t0)' }}>{row.param}</td>
-                      <td className="px-4 py-2" style={{ color: 'var(--t1)' }}>{row.value}</td>
+                  {projectInfo.length === 0 && (
+                    <tr><td colSpan={4} className="px-4 py-4 text-center text-xs" style={{ color: 'var(--t2)', opacity: 0.5 }}>No project information fields extracted</td></tr>
+                  )}
+                  {projectInfo.map((row, i) => (
+                    <tr key={i} style={{ borderTop: '1px solid rgba(99,102,241,0.08)', background: i % 2 ? 'rgba(99,102,241,0.03)' : 'transparent' }}>
+                      <td className="px-4 py-2 opacity-40 w-8" style={{ color: '#818cf8' }}>{i + 1}</td>
+                      <td className="px-4 py-2 font-medium" style={{ color: '#c7d2fe' }}>{row.param}</td>
+                      <td className="px-2 py-1.5">
+                        {piEditingIdx === i ? (
+                          <input
+                            autoFocus
+                            className="w-full px-2 py-1 rounded-lg text-xs"
+                            style={{ background: 'var(--s0)', border: '1px solid rgba(99,102,241,0.4)', color: 'var(--t0)', outline: 'none' }}
+                            value={row.value}
+                            onChange={e => setProjectInfo(prev => prev.map((r, j) => j === i ? { ...r, value: e.target.value } : r))}
+                            onBlur={() => setPiEditingIdx(null)}
+                          />
+                        ) : (
+                          <span className="cursor-pointer block px-2 py-1 rounded hover:bg-[rgba(99,102,241,0.08)]"
+                            style={{ color: 'var(--t1)' }}
+                            onClick={() => setPiEditingIdx(i)}>
+                            {row.value}
+                          </span>
+                        )}
+                      </td>
                       <td className="px-4 py-2">
                         {row.resolved
                           ? <span className="text-[9px] font-bold px-1.5 py-0.5 rounded" style={{ background: 'rgba(74,222,128,0.1)', color: '#4ade80' }}>✓ {row.source}</span>
-                          : <span className="text-[9px] opacity-50" style={{ color: 'var(--t2)' }}>{row.source}</span>}
+                          : <span className="text-[9px] opacity-40" style={{ color: 'var(--t2)' }}>{row.source}</span>}
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
-          </div>
-        )}
 
-        {/* ── SPEC EDIT (Step 5 in spec) ── */}
-        {step === 'spec_edit' && (
-          <div className="space-y-4">
-            <div className="flex items-center justify-between flex-wrap gap-3">
-              <div>
-                <p className="text-sm font-semibold" style={{ color: 'var(--t0)' }}>
-                  Review & Edit Specifications
-                </p>
-                <p className="text-xs mt-0.5" style={{ color: 'var(--t2)' }}>
-                  Correct values, add missing specs, or delete irrelevant rows before vendor analysis
-                </p>
+            {/* Section B – Technical Requirement Database */}
+            <div className="rounded-2xl overflow-hidden" style={{ border: '1px solid rgba(59,130,246,0.3)', background: 'rgba(59,130,246,0.02)' }}>
+              <div className="flex items-center justify-between px-4 py-3"
+                style={{ background: 'rgba(59,130,246,0.08)', borderBottom: '1px solid rgba(59,130,246,0.15)' }}>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-bold px-2.5 py-1 rounded-full"
+                    style={{ background: 'rgba(59,130,246,0.15)', color: '#60a5fa' }}>Part B</span>
+                  <span className="text-sm font-bold" style={{ color: '#60a5fa' }}>Technical Requirement Database</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-[9px] font-bold px-2 py-1 rounded"
+                    style={{ background: 'rgba(74,222,128,0.1)', color: '#4ade80', border: '1px solid rgba(74,222,128,0.2)' }}>
+                    USED FOR VENDOR MATCHING
+                  </span>
+                  <span className="text-[9px] font-bold px-2 py-1 rounded"
+                    style={{ background: 'rgba(74,222,128,0.08)', color: '#4ade80', border: '1px solid rgba(74,222,128,0.15)' }}>
+                    100% WEIGHT
+                  </span>
+                  <button onClick={addSpec}
+                    className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-semibold"
+                    style={{ background: 'var(--s2)', color: 'var(--t1)', border: '1px solid var(--b2)' }}>
+                    <Plus className="w-3 h-3" /> Add Requirement
+                  </button>
+                </div>
               </div>
-              <div className="flex items-center gap-2">
-                <button onClick={addSpec}
-                  className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold"
-                  style={{ background: 'var(--s2)', color: 'var(--t1)', border: '1px solid var(--b2)' }}>
-                  <Plus className="w-3.5 h-3.5" /> Add Row
-                </button>
-                <button onClick={runMatching}
-                  disabled={editedSpecs.filter(s => s.param && s.value).length === 0}
-                  className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold"
-                  style={{ background: 'linear-gradient(135deg,var(--em),#1d4ed8)', color: '#fff', opacity: editedSpecs.filter(s => s.param && s.value).length ? 1 : 0.4 }}>
-                  Confirm & Run Vendor Analysis <ChevronRight className="w-4 h-4" />
-                </button>
-              </div>
-            </div>
-
-            <div className="rounded-2xl overflow-hidden" style={{ border: '1px solid var(--b1)' }}>
               <table className="w-full text-xs">
                 <thead>
-                  <tr style={{ background: 'var(--s2)' }}>
-                    <th className="text-left px-3 py-2.5 font-semibold w-8" style={{ color: 'var(--t2)' }}>#</th>
-                    <th className="text-left px-3 py-2.5 font-semibold" style={{ color: 'var(--t2)' }}>Parameter</th>
-                    <th className="text-left px-3 py-2.5 font-semibold" style={{ color: 'var(--t2)' }}>Value / Requirement</th>
-                    <th className="text-left px-3 py-2.5 font-semibold w-20" style={{ color: 'var(--t2)' }}>Source</th>
+                  <tr style={{ background: 'rgba(59,130,246,0.05)' }}>
+                    <th className="text-left px-3 py-2 font-semibold w-8" style={{ color: '#60a5fa', fontSize: 10 }}>#</th>
+                    <th className="text-left px-3 py-2 font-semibold" style={{ color: '#60a5fa', fontSize: 10 }}>Parameter</th>
+                    <th className="text-left px-3 py-2 font-semibold" style={{ color: '#60a5fa', fontSize: 10 }}>Value / Requirement</th>
+                    <th className="text-left px-3 py-2 font-semibold w-20" style={{ color: '#60a5fa', fontSize: 10 }}>Source</th>
                     <th className="w-10" />
                   </tr>
                 </thead>
                 <tbody>
+                  {editedSpecs.length === 0 && (
+                    <tr><td colSpan={5} className="px-4 py-4 text-center text-xs" style={{ color: 'var(--t2)', opacity: 0.5 }}>No technical requirements extracted — add them manually</td></tr>
+                  )}
                   {editedSpecs.map((row, i) => {
                     const isEditing = editingIdx === i;
                     return (
-                      <tr key={i} style={{ borderTop: '1px solid var(--b0)', background: i % 2 ? 'var(--s1)' : 'transparent' }}>
-                        <td className="px-3 py-2 opacity-40" style={{ color: 'var(--t2)' }}>{i + 1}</td>
+                      <tr key={i} style={{ borderTop: '1px solid rgba(59,130,246,0.07)', background: i % 2 ? 'rgba(59,130,246,0.03)' : 'transparent' }}>
+                        <td className="px-3 py-2 opacity-40" style={{ color: '#60a5fa' }}>{i + 1}</td>
                         <td className="px-2 py-1.5">
                           {isEditing ? (
                             <input
@@ -721,7 +794,7 @@ export default function VendorTBE() {
                               onBlur={() => setEditingIdx(null)}
                             />
                           ) : (
-                            <span className="cursor-pointer font-medium block px-2 py-1.5 rounded hover:bg-[var(--s2)]"
+                            <span className="cursor-pointer font-medium block px-2 py-1.5 rounded hover:bg-[rgba(59,130,246,0.06)]"
                               style={{ color: 'var(--t0)' }}
                               onClick={() => setEditingIdx(i)}>
                               {row.param || <span className="opacity-30 italic">Click to edit</span>}
@@ -757,13 +830,19 @@ export default function VendorTBE() {
                   })}
                 </tbody>
               </table>
-            </div>
-
-            <div className="text-xs text-center" style={{ color: 'var(--t2)' }}>
-              {editedSpecs.filter(s => s.param && s.value).length} specifications will be used for vendor matching
+              <div className="px-4 py-2.5 flex items-center justify-between"
+                style={{ borderTop: '1px solid rgba(59,130,246,0.1)', background: 'rgba(59,130,246,0.04)' }}>
+                <span className="text-[10px]" style={{ color: 'var(--t2)' }}>
+                  {editedSpecs.filter(s => s.param && s.value).length} requirements · Vendor matching weight: 100%
+                </span>
+                <span className="text-[10px]" style={{ color: '#f87171' }}>
+                  Project information (Part A) is excluded from vendor analysis
+                </span>
+              </div>
             </div>
           </div>
         )}
+
 
         {/* ── VENDOR SELECTION ── */}
         {step === 'vendor_select' && (

@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build && nohup bash -c 'sleep 3; fuser -k 8000/tcp 2>/dev/null; lsof -ti:8000 2>/dev/null | xargs kill 2>/dev/null; sleep 2; cd /var/www/iez/backend; PYEXE=$([ -f venv/bin/python ] && echo venv/bin/python || echo python3); $PYEXE -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1 >> /tmp/iez_uvicorn.log 2>&1' > /tmp/iez_restart.log 2>&1 &",
+    "build": "tsc && vite build",
     "preview": "vite preview",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0"
   },

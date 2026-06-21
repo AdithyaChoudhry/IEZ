@@ -61,15 +61,48 @@ def _seed_notification_routes():
         db.close()
 
 
+def _seed_default_admin():
+    """Create the default admin user on first startup if none exist."""
+    from .auth.models import AdminUser, User
+    from .auth.utils import get_password_hash
+    db = SessionLocal()
+    try:
+        if db.query(AdminUser).count() > 0:
+            return  # already seeded
+        pw_hash = get_password_hash("Admin@iez2024")
+        admin = AdminUser(
+            employee_id="ADMIN001",
+            employee_name="System Admin",
+            designation="System Administrator",
+            department="IT",
+            email_id="admin@iez.co.in",
+            password_hash=pw_hash,
+            role="Admin",
+            status="active",
+        )
+        db.add(admin)
+        # JWT login account
+        if not db.query(User).filter(User.email == "admin@iez.co.in").first():
+            db.add(User(
+                email="admin@iez.co.in",
+                username="admin",
+                hashed_password=pw_hash,
+                is_active=True,
+            ))
+        db.commit()
+    finally:
+        db.close()
+
+
 def init_db():
     """
     Initialize database tables.
     Import all models here to ensure they're registered with SQLAlchemy.
     """
-    # Import every model so it's registered in Base.metadata before create_all
     from .auth.models import (  # noqa: F401
         Base, User, AdminUser, DatasheetApproval, VendorSelectionLog,
         ApprovalRequest, Employee, Notification, NotificationRoute
     )
     Base.metadata.create_all(bind=engine)
     _seed_notification_routes()
+    _seed_default_admin()

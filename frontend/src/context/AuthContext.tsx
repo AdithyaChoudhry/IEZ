@@ -28,7 +28,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (authService.isAuthenticated()) {
         try {
           const userData = await authService.getCurrentUser();
-          const cachedRole = localStorage.getItem('user_role') ?? 'Engineer';
+          // If no role cached (old session before RBAC), force re-login to get fresh role
+          if (!localStorage.getItem('user_role')) {
+            authService.logout();
+            setLoading(false);
+            return;
+          }
+          const cachedRole = localStorage.getItem('user_role')!;
           const cachedEmpId = localStorage.getItem('user_employee_id') ?? null;
           const cachedEmpName = localStorage.getItem('user_employee_name') ?? userData.username;
           setUser({ ...userData, role: cachedRole, employee_id: cachedEmpId, employee_name: cachedEmpName });

@@ -49,17 +49,20 @@ def create_user(body: AdminUserCreate, db: Session = Depends(get_db), _: User = 
     )
     db.add(admin)
 
+    # Username = email prefix (e.g. lead@iez.co.in → "lead"), lowercased, spaces→underscore
+    username = body.email_id.split('@')[0].lower().replace(' ', '_')
+
     # Sync: create or update the JWT login User so the employee can log in immediately
     jwt_user = db.query(User).filter(User.email == body.email_id).first()
     if jwt_user:
         # Already signed up manually — adopt their account, update password to match
-        jwt_user.username = body.employee_name
+        jwt_user.username = username
         jwt_user.hashed_password = pw_hash
         jwt_user.is_active = True
     else:
         db.add(User(
             email=body.email_id,
-            username=body.employee_name,
+            username=username,
             hashed_password=pw_hash,
             is_active=True,
         ))

@@ -144,7 +144,8 @@ def submit_approval(
     db.add(req)
     db.flush()  # get req.id before notifications
 
-    label = "spec extraction" if body.request_type == "spec" else "cover sheet"
+    _LABELS = {"spec": "spec extraction", "coversheet": "cover sheet", "tbe": "TBE"}
+    label = _LABELS.get(body.request_type, body.request_type)
     _notify_via_routes(db, body.submitted_by_id, req.id, label, body.submitted_by_name)
 
     db.commit()
@@ -240,7 +241,30 @@ def approve_request(
     req.updated_at = now
     lead.last_login = now
 
-    label = "spec extraction" if req.request_type == "spec" else "cover sheet"
+    LABELS = {"spec": "spec extraction", "coversheet": "cover sheet", "tbe": "TBE"}
+    label = LABELS.get(req.request_type, req.request_type)
+
+    # For TBE approvals: create TBEApprovalLog and stamp tbe_number into payload_json
+    if req.request_type == "tbe":
+        import uuid as _uuid
+        from ..auth.models import TBEApprovalLog
+        payload = json.loads(req.payload_json or "{}")
+        tbe_number = f"TBE-{now.strftime('%Y%m%d')}-{str(_uuid.uuid4())[:4].upper()}"
+        db.add(TBEApprovalLog(
+            tbe_number=tbe_number,
+            instrument_type=req.instrument_type or payload.get("instrument_type", ""),
+            approved_by=lead.employee_name,
+            employee_id=lead.employee_id,
+            approval_date=now,
+            recommended_vendor=payload.get("recommended_vendor", ""),
+            recommended_model=payload.get("recommended_model", ""),
+            session_id=payload.get("session_id", ""),
+        ))
+        payload["tbe_number"] = tbe_number
+        payload["approved_by"] = lead.employee_name
+        payload["approved_employee_id"] = lead.employee_id
+        req.payload_json = json.dumps(payload)
+
     _notify(
         db, req.submitted_by_id,
         title=f"Your {label} request was approved",

@@ -543,7 +543,8 @@ class MatchRequest(BaseModel):
 def match_vendors(body: MatchRequest, _: User = Depends(get_current_user), db: Session = Depends(get_db)):
     all_types = [r[0] for r in db.query(TBEVendor.instrument_type).distinct().all()]
     db_key = _match_vendor_db_key(body.instrument_type, all_types)
-    rows = db.query(TBEVendor).filter(TBEVendor.instrument_type == db_key, TBEVendor.is_active == True).order_by(TBEVendor.id).all()
+    # Take only the first 5 vendors per type by insertion order (= seeded shortlist: industry-standard vendors)
+    rows = db.query(TBEVendor).filter(TBEVendor.instrument_type == db_key, TBEVendor.is_active == True).order_by(TBEVendor.id).limit(5).all()
     vendor_models = [{"vendor": r.vendor_name, "abbr": r.abbr, "model": r.model, "specs": r.specs or {}, "_db_id": r.id} for r in rows]
 
     results = []

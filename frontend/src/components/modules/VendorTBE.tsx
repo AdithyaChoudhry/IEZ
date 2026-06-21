@@ -354,17 +354,20 @@ export default function VendorTBE() {
 
   const [sessionId, setSessionId] = useState('');
   const [approvalResult, setApprovalResult] = useState<any>(null);
-  const [empId, setEmpId] = useState('');
-  const [empPass, setEmpPass] = useState('');
+  const [approvalReqId, setApprovalReqId] = useState<number | null>(null);
+  const [approvalStatus, setApprovalStatus] = useState<'idle' | 'pending' | 'approved' | 'rejected'>('idle');
+  const [tbeNotes, setTbeNotes] = useState('');
   const [approving, setApproving] = useState(false);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const fileRef = useRef<HTMLInputElement>(null);
 
   const reset = () => {
+    if (pollRef.current) clearInterval(pollRef.current);
     setStep('upload'); setFile(null); setError(''); setAnalysis(null);
     setProjectInfo([]); setEditedSpecs([]); setVendors([]); setSelectedVendors(new Set());
     setTbeReplies({}); setDevSeverities({}); setSessionId('');
-    setApprovalResult(null); setEmpId(''); setEmpPass('');
+    setApprovalResult(null); setApprovalReqId(null); setApprovalStatus('idle'); setTbeNotes('');
   };
 
   const handleFile = (f: File) => {
@@ -481,27 +484,50 @@ export default function VendorTBE() {
   const submitApproval = async (e: React.FormEvent) => {
     e.preventDefault(); setError(''); setApproving(true);
     const best = [...activeVendors].sort((a, b) => b.match_pct - a.match_pct)[0];
+    const empId   = localStorage.getItem('user_employee_id') || '';
+    const empName = localStorage.getItem('user_employee_name') || '';
     try {
-      const r = await api.post('/tbe/approve', {
-        session_id: sessionId,
-        employee_id: empId,
-        password: empPass,
+      const r = await api.post('/approvals', {
+        request_type: 'tbe',
+        submitted_by_name: empName,
+        submitted_by_id: empId,
+        submitter_notes: tbeNotes || null,
         instrument_type: analysis?.instrument_type || '',
-        recommended_vendor: best?.vendor || '',
-        recommended_model: best?.model || '',
+        payload: {
+          session_id: sessionId,
+          instrument_type: analysis?.instrument_type || '',
+          recommended_vendor: best?.vendor || '',
+          recommended_model: best?.model || '',
+        },
       });
-      setApprovalResult(r.data);
-      setStep('done');
+      const reqId: number = r.data.id;
+      setApprovalReqId(reqId);
+      setApprovalStatus('pending');
+      // Poll every 12 s for Lead Engineer approval
+      pollRef.current = setInterval(async () => {
+        try {
+          const poll = await api.get(`/approvals/${reqId}`);
+          const st: string = poll.data.status;
+          if (st === 'approved') {
+            clearInterval(pollRef.current!);
+            const payload = JSON.parse(poll.data.payload_json || '{}');
+            setApprovalResult({
+              tbe_number: payload.tbe_number || '—',
+              approved_by: payload.approved_by || poll.data.reviewed_by_name || '—',
+              employee_id: payload.approved_employee_id || poll.data.reviewed_by_id || '—',
+              timestamp: poll.data.updated_at,
+            });
+            setApprovalStatus('approved');
+            setStep('done');
+          } else if (st === 'rejected') {
+            clearInterval(pollRef.current!);
+            setApprovalStatus('rejected');
+            setError('TBE approval was rejected by Lead Engineer. Please review and resubmit.');
+          }
+        } catch { /* ignore poll errors */ }
+      }, 12000);
     } catch (e: any) {
-      const status = e?.response?.status;
-      const detail = e?.response?.data?.detail || 'Approval failed';
-      if (status === 403) {
-        setError(`Access denied: ${detail}`);
-      } else if (status === 401) {
-        setError('Invalid employee ID or password. Please try again.');
-      } else {
-        setError(detail);
-      }
+      setError(e?.response?.data?.detail || 'Failed to submit approval request');
     } finally { setApproving(false); }
   };
 
@@ -1096,48 +1122,79 @@ export default function VendorTBE() {
 
         {/* ── APPROVAL ── */}
         {step === 'approval' && (
-          <div className="max-w-md mx-auto">
+          <div className="max-w-md mx-auto space-y-4">
             <div className="rounded-2xl overflow-hidden" style={{ background: 'var(--s1)', border: '1px solid var(--b2)' }}>
               <div className="px-6 py-5 flex items-center gap-3" style={{ borderBottom: '1px solid var(--b1)' }}>
                 <div className="w-9 h-9 rounded-xl flex items-center justify-center" style={{ background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.2)' }}>
                   <ShieldCheck className="w-4 h-4" style={{ color: 'var(--em-lt)' }} />
                 </div>
                 <div>
-                  <p className="text-sm font-bold" style={{ color: 'var(--t0)' }}>TBE Approval</p>
-                  <p className="text-xs" style={{ color: 'var(--t2)' }}>Only Lead Engineers & Admins can approve</p>
+                  <p className="text-sm font-bold" style={{ color: 'var(--t0)' }}>Submit TBE for Approval</p>
+                  <p className="text-xs" style={{ color: 'var(--t2)' }}>Request will go to Lead Engineer / Admin for review</p>
                 </div>
               </div>
 
               {bestVendor && (
                 <div className="px-6 py-3" style={{ background: 'rgba(245,158,11,0.06)', borderBottom: '1px solid var(--b1)' }}>
                   <p className="text-xs" style={{ color: 'var(--t2)' }}>
-                    Recommending: <strong style={{ color: '#fbbf24' }}>{bestVendor.vendor} — {bestVendor.model}</strong> ({bestVendor.match_pct}% compliance)
+                    Recommended: <strong style={{ color: '#fbbf24' }}>{bestVendor.vendor} — {bestVendor.model}</strong> ({bestVendor.match_pct}% match)
                   </p>
                 </div>
               )}
 
-              <form onSubmit={submitApproval} className="p-6 space-y-4">
-                <div>
-                  <label className="block text-xs font-semibold uppercase tracking-wider mb-1.5" style={{ color: 'var(--t2)' }}>Employee ID</label>
-                  <input type="text" required value={empId} onChange={e => setEmpId(e.target.value)}
-                    placeholder="e.g. LEAD001"
-                    className="w-full px-3 py-2.5 rounded-xl text-sm"
-                    style={{ background: 'var(--s0)', border: '1px solid var(--b2)', color: 'var(--t0)', outline: 'none' }} />
+              {approvalStatus === 'idle' && (
+                <form onSubmit={submitApproval} className="p-6 space-y-4">
+                  <div className="rounded-xl px-4 py-3 text-xs" style={{ background: 'var(--s2)', color: 'var(--t2)' }}>
+                    Submitting as: <strong style={{ color: 'var(--t0)' }}>
+                      {localStorage.getItem('user_employee_name') || '—'}
+                    </strong> ({localStorage.getItem('user_employee_id') || '—'})
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold uppercase tracking-wider mb-1.5" style={{ color: 'var(--t2)' }}>Notes for Reviewer (optional)</label>
+                    <textarea rows={3} value={tbeNotes} onChange={e => setTbeNotes(e.target.value)}
+                      placeholder="Any notes or context for the Lead Engineer…"
+                      className="w-full px-3 py-2.5 rounded-xl text-sm resize-none"
+                      style={{ background: 'var(--s0)', border: '1px solid var(--b2)', color: 'var(--t0)', outline: 'none' }} />
+                  </div>
+                  <button type="submit" disabled={approving}
+                    className="w-full py-3 rounded-xl text-sm font-bold flex items-center justify-center gap-2"
+                    style={{ background: 'linear-gradient(135deg,var(--em),#1d4ed8)', color: '#fff', opacity: approving ? 0.6 : 1 }}>
+                    {approving ? <Loader2 className="w-4 h-4 animate-spin" /> : <ShieldCheck className="w-4 h-4" />}
+                    {approving ? 'Submitting…' : 'Submit for Lead Engineer Approval'}
+                  </button>
+                </form>
+              )}
+
+              {approvalStatus === 'pending' && (
+                <div className="p-6 flex flex-col items-center gap-4">
+                  <Loader2 className="w-8 h-8 animate-spin" style={{ color: 'var(--em)' }} />
+                  <div className="text-center">
+                    <p className="text-sm font-semibold" style={{ color: 'var(--t0)' }}>Awaiting Lead Engineer Approval</p>
+                    <p className="text-xs mt-1" style={{ color: 'var(--t2)' }}>
+                      Request #{approvalReqId} submitted · Lead Engineer will approve from the Approval Queue
+                    </p>
+                  </div>
+                  <div className="flex gap-2 flex-wrap justify-center">
+                    <span className="text-[10px] px-2.5 py-1 rounded-full font-semibold"
+                      style={{ background: 'rgba(245,158,11,0.1)', color: '#fbbf24', border: '1px solid rgba(245,158,11,0.2)' }}>
+                      Checking every 12 s…
+                    </span>
+                  </div>
                 </div>
-                <div>
-                  <label className="block text-xs font-semibold uppercase tracking-wider mb-1.5" style={{ color: 'var(--t2)' }}>Password</label>
-                  <input type="password" required value={empPass} onChange={e => setEmpPass(e.target.value)}
-                    placeholder="••••••••"
-                    className="w-full px-3 py-2.5 rounded-xl text-sm"
-                    style={{ background: 'var(--s0)', border: '1px solid var(--b2)', color: 'var(--t0)', outline: 'none' }} />
+              )}
+
+              {approvalStatus === 'rejected' && (
+                <div className="p-6 text-center space-y-3">
+                  <AlertTriangle className="w-8 h-8 mx-auto" style={{ color: '#f87171' }} />
+                  <p className="text-sm font-semibold" style={{ color: '#f87171' }}>Approval Rejected</p>
+                  <p className="text-xs" style={{ color: 'var(--t2)' }}>The Lead Engineer has rejected this TBE. Review feedback in the Approval Queue and resubmit.</p>
+                  <button onClick={() => { setApprovalStatus('idle'); setTbeNotes(''); }}
+                    className="px-4 py-2 rounded-xl text-xs font-bold"
+                    style={{ background: 'var(--s2)', color: 'var(--t1)', border: '1px solid var(--b2)' }}>
+                    Revise & Resubmit
+                  </button>
                 </div>
-                <button type="submit" disabled={approving || !empId || !empPass}
-                  className="w-full py-3 rounded-xl text-sm font-bold flex items-center justify-center gap-2"
-                  style={{ background: 'linear-gradient(135deg,#22c55e,#16a34a)', color: '#fff', opacity: approving || !empId || !empPass ? 0.5 : 1 }}>
-                  {approving ? <Loader2 className="w-4 h-4 animate-spin" /> : <ShieldCheck className="w-4 h-4" />}
-                  {approving ? 'Validating…' : 'Approve & Finalize TBE'}
-                </button>
-              </form>
+              )}
             </div>
           </div>
         )}

@@ -21,6 +21,7 @@ from .routers.sdie import router as sdie_router
 from .routers.sop_datasheet import router as sop_datasheet_router
 from .routers.lt_radar import router as lt_radar_router
 from .routers.deploy import router as deploy_router
+from .routers.tbe import router as tbe_router
 from .routers.admin_users import router as admin_router
 from .routers.approvals import router as approvals_router
 from .routers.employees import router as employees_router
@@ -91,6 +92,7 @@ app.include_router(approvals_router, prefix="/api")
 app.include_router(employees_router, prefix="/api")
 app.include_router(notifications_router, prefix="/api")
 app.include_router(notification_routes_router, prefix="/api")
+app.include_router(tbe_router, prefix="/api")
 
 
 @app.get("/")

@@ -15,6 +15,7 @@ import LoopWiringGenerator from './components/modules/LoopWiringGenerator';
 import SmartDatasheetExtractor from './components/modules/SmartDatasheetExtractor';
 import AdminManagement from './components/modules/AdminManagement';
 import ApprovalQueue from './components/modules/ApprovalQueue';
+import VendorTBE from './components/modules/VendorTBE';
 import ErrorBoundary from './components/ui/ErrorBoundary';
 
 // Create React Query client
@@ -115,6 +116,7 @@ function AppRoutes() {
         <Route path="cable-schedule" element={<CableScheduleGenerator />} />
         <Route path="loop-wiring" element={<LoopWiringGenerator />} />
         <Route path="smart-datasheet" element={<SmartDatasheetExtractor />} />
+        <Route path="tbe" element={<VendorTBE />} />
         <Route path="admin" element={
           <RoleRoute roles={['Admin']}>
             <AdminManagement />

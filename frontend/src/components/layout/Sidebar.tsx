@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import {
   Home, CheckCircle2, FileSpreadsheet, Network,
   FileText, Cable, GitBranch, Layers, ScanSearch,
-  Sparkles, Droplets, ShieldCheck, ClipboardCheck,
+  Sparkles, Droplets, ShieldCheck, ClipboardCheck, BarChart2,
 } from 'lucide-react';
 import clsx from 'clsx';
 import api from '@/services/api';
@@ -50,6 +50,12 @@ const sections = [
     label: 'Smart AI',
     items: [{ path: '/smart-datasheet', icon: ScanSearch, label: 'Spec Extraction' }],
     ai: true,
+  },
+  {
+    label: 'Procurement',
+    items: [
+      { path: '/tbe', icon: BarChart2, label: 'Vendor Analysis & TBE' },
+    ],
   },
   {
     label: 'Admin',

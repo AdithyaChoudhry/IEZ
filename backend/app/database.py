@@ -101,7 +101,7 @@ def init_db():
     """
     from .auth.models import (  # noqa: F401
         Base, User, AdminUser, DatasheetApproval, VendorSelectionLog,
-        ApprovalRequest, Employee, Notification, NotificationRoute
+        ApprovalRequest, Employee, Notification, NotificationRoute, TBEApprovalLog
     )
     Base.metadata.create_all(bind=engine)
     _seed_notification_routes()

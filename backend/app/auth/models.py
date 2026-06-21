@@ -132,3 +132,16 @@ class ApprovalRequest(Base):
     review_notes = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, nullable=True)
+
+
+class TBEApprovalLog(Base):
+    __tablename__ = "tbe_approval_logs"
+    id = Column(Integer, primary_key=True, index=True)
+    tbe_number = Column(String, unique=True, index=True, nullable=False)
+    instrument_type = Column(String, nullable=False)
+    approved_by = Column(String, nullable=False)
+    employee_id = Column(String, nullable=False)
+    approval_date = Column(DateTime, default=datetime.utcnow)
+    recommended_vendor = Column(String, nullable=True)
+    recommended_model = Column(String, nullable=True)
+    session_id = Column(String, nullable=True)

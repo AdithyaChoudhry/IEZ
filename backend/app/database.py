@@ -94,6 +94,28 @@ def _seed_default_admin():
         db.close()
 
 
+def _seed_tbe_vendors():
+    """Populate tbe_vendors from the hardcoded dict if the table is empty."""
+    from .auth.models import TBEVendor
+    from .data.tbe_vendors import VENDOR_DB
+    db = SessionLocal()
+    try:
+        if db.query(TBEVendor).count() > 0:
+            return
+        for instrument_type, vendors in VENDOR_DB.items():
+            for v in vendors:
+                db.add(TBEVendor(
+                    instrument_type=instrument_type,
+                    vendor_name=v["vendor"],
+                    abbr=v["abbr"],
+                    model=v["model"],
+                    specs=v["specs"],
+                ))
+        db.commit()
+    finally:
+        db.close()
+
+
 def init_db():
     """
     Initialize database tables.
@@ -101,8 +123,10 @@ def init_db():
     """
     from .auth.models import (  # noqa: F401
         Base, User, AdminUser, DatasheetApproval, VendorSelectionLog,
-        ApprovalRequest, Employee, Notification, NotificationRoute, TBEApprovalLog
+        ApprovalRequest, Employee, Notification, NotificationRoute,
+        TBEApprovalLog, TBEVendor
     )
     Base.metadata.create_all(bind=engine)
     _seed_notification_routes()
     _seed_default_admin()
+    _seed_tbe_vendors()

@@ -2,17 +2,32 @@
  * Vendor Analysis & Technical Bid Evaluation (TBE) Module
  * Supports all instrument types — universal datasheet analysis engine.
  */
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 import {
   FileSpreadsheet, CheckCircle2, AlertTriangle,
   Loader2, BarChart2, Download, ShieldCheck, ChevronRight,
   Star, TrendingUp, AlertCircle, Award, RefreshCw,
-  Pencil, Plus, Trash2, XCircle,
+  Pencil, Plus, Trash2, XCircle, Database, X, Save,
 } from 'lucide-react';
 import api from '@/services/api';
 import PageHeader from '../ui/PageHeader';
+import { useAuth } from '@/context/AuthContext';
 
 // ── types ──────────────────────────────────────────────────────────────────────
+interface VendorEntry {
+  id: number;
+  instrument_type: string;
+  vendor_name: string;
+  abbr: string;
+  model: string;
+  specs: Record<string, string>;
+  is_active: boolean;
+}
+
+const EMPTY_VENDOR: Omit<VendorEntry, 'id'> = {
+  instrument_type: '', vendor_name: '', abbr: '', model: '', specs: {}, is_active: true,
+};
+
 interface SpecRow { param: string; value: string; source: string; resolved: boolean; }
 interface SpecResult {
   param: string; wabag_req: string; vendor_offer: string;
@@ -64,8 +79,233 @@ function MatchBar({ pct }: { pct: number }) {
   );
 }
 
+// ── Vendor Library ─────────────────────────────────────────────────────────────
+function VendorLibrary() {
+  const [vendors, setVendors] = useState<VendorEntry[]>([]);
+  const [types, setTypes] = useState<string[]>([]);
+  const [filterType, setFilterType] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [modal, setModal] = useState<{ open: boolean; data: Omit<VendorEntry, 'id'> & { id?: number }; specRows: [string, string][] }>({
+    open: false, data: { ...EMPTY_VENDOR }, specRows: [],
+  });
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const [vr, tr] = await Promise.all([
+        api.get('/tbe/vendors'),
+        api.get('/tbe/vendors/types'),
+      ]);
+      setVendors(vr.data);
+      setTypes(tr.data.types);
+    } catch { setError('Failed to load vendors'); }
+    finally { setLoading(false); }
+  };
+
+  useEffect(() => { load(); }, []);
+
+  const openCreate = () => setModal({ open: true, data: { ...EMPTY_VENDOR }, specRows: [] });
+  const openEdit = (v: VendorEntry) => setModal({
+    open: true,
+    data: { id: v.id, instrument_type: v.instrument_type, vendor_name: v.vendor_name, abbr: v.abbr, model: v.model, specs: v.specs, is_active: v.is_active },
+    specRows: Object.entries(v.specs || {}),
+  });
+
+  const saveModal = async () => {
+    setSaving(true); setError('');
+    const specs: Record<string, string> = {};
+    for (const [k, v] of modal.specRows) { if (k.trim()) specs[k.trim()] = v; }
+    const payload = { ...modal.data, specs };
+    try {
+      if (modal.data.id) await api.put(`/tbe/vendors/${modal.data.id}`, payload);
+      else await api.post('/tbe/vendors', payload);
+      setModal(m => ({ ...m, open: false }));
+      load();
+    } catch (e: any) { setError(e?.response?.data?.detail || 'Save failed'); }
+    finally { setSaving(false); }
+  };
+
+  const deleteVendor = async (id: number) => {
+    if (!confirm('Delete this vendor?')) return;
+    try { await api.delete(`/tbe/vendors/${id}`); load(); }
+    catch (e: any) { setError(e?.response?.data?.detail || 'Delete failed'); }
+  };
+
+  const filtered = filterType ? vendors.filter(v => v.instrument_type === filterType) : vendors;
+
+  return (
+    <div className="space-y-4">
+      {error && (
+        <div className="flex items-center gap-2 px-4 py-3 rounded-xl text-sm"
+          style={{ background: 'rgba(248,113,113,0.08)', border: '1px solid rgba(248,113,113,0.2)', color: '#f87171' }}>
+          <AlertTriangle className="w-4 h-4 flex-shrink-0" /> {error}
+          <button onClick={() => setError('')} className="ml-auto"><XCircle className="w-4 h-4" /></button>
+        </div>
+      )}
+
+      <div className="flex items-center gap-3 flex-wrap">
+        <select
+          className="px-3 py-2 rounded-xl text-xs"
+          style={{ background: 'var(--s2)', border: '1px solid var(--b2)', color: 'var(--t1)', outline: 'none', minWidth: 220 }}
+          value={filterType}
+          onChange={e => setFilterType(e.target.value)}>
+          <option value="">All Instrument Types ({vendors.length})</option>
+          {types.map(t => (
+            <option key={t} value={t}>{t} ({vendors.filter(v => v.instrument_type === t).length})</option>
+          ))}
+        </select>
+        <button onClick={openCreate}
+          className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold ml-auto"
+          style={{ background: 'linear-gradient(135deg,var(--em),#1d4ed8)', color: '#fff' }}>
+          <Plus className="w-3.5 h-3.5" /> Add Vendor
+        </button>
+      </div>
+
+      {loading ? (
+        <div className="flex items-center justify-center py-20">
+          <Loader2 className="w-8 h-8 animate-spin" style={{ color: 'var(--em)' }} />
+        </div>
+      ) : (
+        <div className="rounded-2xl overflow-hidden" style={{ border: '1px solid var(--b1)' }}>
+          <table className="w-full text-xs">
+            <thead>
+              <tr style={{ background: 'var(--s2)' }}>
+                {['Instrument Type', 'Vendor', 'Abbr', 'Model', 'Specs', 'Status', ''].map(h => (
+                  <th key={h} className="text-left px-4 py-2.5 font-semibold whitespace-nowrap" style={{ color: 'var(--t2)' }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((v, i) => (
+                <tr key={v.id} style={{ borderTop: '1px solid var(--b0)', background: i % 2 ? 'var(--s1)' : 'transparent' }}>
+                  <td className="px-4 py-2.5 capitalize" style={{ color: 'var(--t2)' }}>{v.instrument_type}</td>
+                  <td className="px-4 py-2.5 font-semibold" style={{ color: 'var(--t0)' }}>{v.vendor_name}</td>
+                  <td className="px-4 py-2.5" style={{ color: 'var(--t1)' }}>{v.abbr}</td>
+                  <td className="px-4 py-2.5" style={{ color: 'var(--t1)' }}>{v.model}</td>
+                  <td className="px-4 py-2.5" style={{ color: 'var(--t2)' }}>{Object.keys(v.specs || {}).length} specs</td>
+                  <td className="px-4 py-2.5">
+                    <span className="text-[9px] font-bold px-1.5 py-0.5 rounded"
+                      style={{ background: v.is_active ? 'rgba(74,222,128,0.1)' : 'rgba(248,113,113,0.1)', color: v.is_active ? '#4ade80' : '#f87171' }}>
+                      {v.is_active ? 'Active' : 'Inactive'}
+                    </span>
+                  </td>
+                  <td className="px-3 py-2">
+                    <div className="flex items-center gap-1.5">
+                      <button onClick={() => openEdit(v)} className="p-1.5 rounded-lg hover:bg-[var(--s2)]">
+                        <Pencil className="w-3.5 h-3.5" style={{ color: 'var(--em-lt)' }} />
+                      </button>
+                      <button onClick={() => deleteVendor(v.id)} className="p-1.5 rounded-lg hover:bg-red-500/10">
+                        <Trash2 className="w-3.5 h-3.5" style={{ color: '#f87171' }} />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+              {filtered.length === 0 && (
+                <tr><td colSpan={7} className="px-4 py-10 text-center text-xs" style={{ color: 'var(--t2)' }}>No vendors found</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* Modal */}
+      {modal.open && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.6)' }}>
+          <div className="w-full max-w-2xl rounded-2xl overflow-hidden flex flex-col max-h-[90vh]" style={{ background: 'var(--s0)', border: '1px solid var(--b2)' }}>
+            <div className="px-5 py-4 flex items-center justify-between flex-shrink-0" style={{ borderBottom: '1px solid var(--b1)' }}>
+              <p className="text-sm font-bold" style={{ color: 'var(--t0)' }}>{modal.data.id ? 'Edit Vendor' : 'Add Vendor'}</p>
+              <button onClick={() => setModal(m => ({ ...m, open: false }))}><X className="w-4 h-4" style={{ color: 'var(--t2)' }} /></button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-5 space-y-4">
+              {error && <p className="text-xs text-red-400">{error}</p>}
+
+              <div className="grid grid-cols-2 gap-3">
+                {([['instrument_type', 'Instrument Type'], ['vendor_name', 'Vendor Name'], ['abbr', 'Abbreviation'], ['model', 'Model']] as [keyof typeof modal.data, string][]).map(([field, label]) => (
+                  <div key={field}>
+                    <label className="block text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--t2)' }}>{label}</label>
+                    <input
+                      className="w-full px-3 py-2 rounded-xl text-xs"
+                      style={{ background: 'var(--s1)', border: '1px solid var(--b2)', color: 'var(--t0)', outline: 'none' }}
+                      value={modal.data[field] as string}
+                      onChange={e => setModal(m => ({ ...m, data: { ...m.data, [field]: e.target.value } }))}
+                    />
+                  </div>
+                ))}
+              </div>
+
+              <div className="flex items-center gap-2">
+                <input type="checkbox" id="is_active" checked={modal.data.is_active}
+                  onChange={e => setModal(m => ({ ...m, data: { ...m.data, is_active: e.target.checked } }))} />
+                <label htmlFor="is_active" className="text-xs" style={{ color: 'var(--t1)' }}>Active (included in matching)</label>
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <label className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: 'var(--t2)' }}>Specifications</label>
+                  <button onClick={() => setModal(m => ({ ...m, specRows: [...m.specRows, ['', '']] }))}
+                    className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-semibold"
+                    style={{ background: 'var(--s2)', color: 'var(--t1)', border: '1px solid var(--b2)' }}>
+                    <Plus className="w-3 h-3" /> Add Spec
+                  </button>
+                </div>
+                <div className="space-y-1.5 max-h-52 overflow-y-auto pr-1">
+                  {modal.specRows.map(([k, v], idx) => (
+                    <div key={idx} className="flex items-center gap-2">
+                      <input placeholder="Spec name (e.g. Accuracy)"
+                        className="flex-1 px-2.5 py-1.5 rounded-lg text-xs"
+                        style={{ background: 'var(--s1)', border: '1px solid var(--b1)', color: 'var(--t0)', outline: 'none' }}
+                        value={k}
+                        onChange={e => setModal(m => { const r = [...m.specRows]; r[idx] = [e.target.value, r[idx][1]]; return { ...m, specRows: r }; })}
+                      />
+                      <input placeholder="Value (e.g. ±1 mm)"
+                        className="flex-1 px-2.5 py-1.5 rounded-lg text-xs"
+                        style={{ background: 'var(--s1)', border: '1px solid var(--b1)', color: 'var(--t1)', outline: 'none' }}
+                        value={v}
+                        onChange={e => setModal(m => { const r = [...m.specRows]; r[idx] = [r[idx][0], e.target.value]; return { ...m, specRows: r }; })}
+                      />
+                      <button onClick={() => setModal(m => ({ ...m, specRows: m.specRows.filter((_, i) => i !== idx) }))}
+                        className="p-1 rounded hover:bg-red-500/10">
+                        <Trash2 className="w-3.5 h-3.5" style={{ color: '#f87171' }} />
+                      </button>
+                    </div>
+                  ))}
+                  {modal.specRows.length === 0 && (
+                    <p className="text-[10px] text-center py-4" style={{ color: 'var(--t2)' }}>No specs yet — click "Add Spec" to add rows</p>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div className="px-5 py-4 flex items-center justify-end gap-3 flex-shrink-0" style={{ borderTop: '1px solid var(--b1)' }}>
+              <button onClick={() => setModal(m => ({ ...m, open: false }))}
+                className="px-4 py-2 rounded-xl text-xs font-semibold"
+                style={{ background: 'var(--s2)', color: 'var(--t1)', border: '1px solid var(--b2)' }}>
+                Cancel
+              </button>
+              <button onClick={saveModal} disabled={saving}
+                className="flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold"
+                style={{ background: 'linear-gradient(135deg,var(--em),#1d4ed8)', color: '#fff', opacity: saving ? 0.6 : 1 }}>
+                {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+                {saving ? 'Saving…' : 'Save Vendor'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── main component ─────────────────────────────────────────────────────────────
 export default function VendorTBE() {
+  const { role } = useAuth();
+  const canManageVendors = role === 'Admin' || role === 'Lead Engineer';
+  const [mode, setMode] = useState<'wizard' | 'library'>('wizard');
+
   const [step, setStep] = useState<Step>('upload');
   const [file, setFile] = useState<File | null>(null);
   const [dragging, setDragging] = useState(false);
@@ -261,8 +501,32 @@ export default function VendorTBE() {
         description="Upload instrument datasheet · Analyze & review specs · Match vendors · Generate TBE"
       />
 
+      {/* Mode toggle */}
+      {canManageVendors && (
+        <div className="px-6 pt-3 flex items-center gap-2">
+          {([['wizard', BarChart2, 'TBE Wizard'], ['library', Database, 'Vendor Library']] as const).map(([m, Icon, label]) => (
+            <button key={m} onClick={() => setMode(m)}
+              className="flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold transition-all"
+              style={{
+                background: mode === m ? 'var(--em-dim)' : 'var(--s2)',
+                color: mode === m ? 'var(--em-lt)' : 'var(--t2)',
+                border: `1px solid ${mode === m ? 'rgba(59,130,246,0.3)' : 'var(--b1)'}`,
+              }}>
+              <Icon className="w-3.5 h-3.5" /> {label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Vendor Library mode */}
+      {mode === 'library' && (
+        <div className="flex-1 overflow-y-auto px-6 pb-8 pt-4">
+          <VendorLibrary />
+        </div>
+      )}
+
       {/* Step bar */}
-      <div className="px-6 pt-4 pb-2 overflow-x-auto">
+      {mode === 'wizard' && <div className="px-6 pt-4 pb-2 overflow-x-auto">
         <div className="flex items-center gap-0 min-w-max">
           {STEPS.map((s, i) => {
             const done = stepIdx > i;
@@ -284,8 +548,9 @@ export default function VendorTBE() {
             );
           })}
         </div>
-      </div>
+      </div>}
 
+      {mode === 'wizard' && <>
       {/* Error */}
       {error && (
         <div className="mx-6 mt-2 flex items-center gap-2 px-4 py-3 rounded-xl text-sm"
@@ -830,6 +1095,7 @@ export default function VendorTBE() {
         )}
 
       </div>
+      </>}
     </div>
   );
 }

@@ -15,9 +15,9 @@ from sqlalchemy.orm import Session
 from typing import Optional
 
 from ..deps import get_db, get_current_user
-from ..auth.models import User, AdminUser, TBEApprovalLog
+from ..auth.models import User, AdminUser, TBEApprovalLog, TBEVendor
 from ..auth.utils import verify_password
-from ..data.tbe_vendors import VENDOR_DB, TYPE_ALIASES
+from ..data.tbe_vendors import TYPE_ALIASES
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/tbe", tags=["TBE"])
@@ -245,17 +245,17 @@ def _detect_instrument_type(specs: list[dict]) -> str:
     return "non-contact radar level transmitter"  # safest default
 
 
-def _match_vendor_db_key(instrument_type: str) -> Optional[str]:
+def _match_vendor_db_key(instrument_type: str, db_keys: list) -> Optional[str]:
     it = instrument_type.lower()
-    if it in VENDOR_DB:
+    if it in db_keys:
         return it
     from rapidfuzz import fuzz
     best, best_score = None, 0
-    for key in VENDOR_DB:
+    for key in db_keys:
         s = fuzz.partial_ratio(it, key)
         if s > best_score:
             best_score, best = s, key
-    return best if best_score >= 60 else list(VENDOR_DB.keys())[0]
+    return best if best_score >= 60 else (db_keys[0] if db_keys else None)
 
 
 NOT_ACCEPTABLE_PHRASES = (
@@ -433,15 +433,85 @@ async def analyze_datasheet(
 
 # ── /match ─────────────────────────────────────────────────────────────────────
 
+# ── Vendor Library CRUD ───────────────────────────────────────────────────────
+
+class VendorBody(BaseModel):
+    instrument_type: str
+    vendor_name: str
+    abbr: str
+    model: str
+    specs: dict = {}
+    is_active: bool = True
+
+
+@router.get("/vendors")
+def list_vendors(instrument_type: Optional[str] = None, db: Session = Depends(get_db), _: User = Depends(get_current_user)):
+    q = db.query(TBEVendor)
+    if instrument_type:
+        q = q.filter(TBEVendor.instrument_type == instrument_type)
+    rows = q.order_by(TBEVendor.instrument_type, TBEVendor.vendor_name).all()
+    return [{"id": r.id, "instrument_type": r.instrument_type, "vendor_name": r.vendor_name,
+             "abbr": r.abbr, "model": r.model, "specs": r.specs, "is_active": r.is_active} for r in rows]
+
+
+@router.get("/vendors/types")
+def list_vendor_types(db: Session = Depends(get_db), _: User = Depends(get_current_user)):
+    types = [r[0] for r in db.query(TBEVendor.instrument_type).distinct().order_by(TBEVendor.instrument_type).all()]
+    return {"types": types}
+
+
+@router.post("/vendors")
+def create_vendor(body: VendorBody, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    admin = db.query(AdminUser).filter(AdminUser.email_id == current_user.email).first()
+    if not admin or admin.role not in ("Admin", "Lead Engineer"):
+        raise HTTPException(status_code=403, detail="Admin or Lead Engineer required")
+    v = TBEVendor(instrument_type=body.instrument_type.lower().strip(),
+                  vendor_name=body.vendor_name, abbr=body.abbr,
+                  model=body.model, specs=body.specs, is_active=body.is_active)
+    db.add(v); db.commit(); db.refresh(v)
+    return {"id": v.id, "message": "Vendor created"}
+
+
+@router.put("/vendors/{vendor_id}")
+def update_vendor(vendor_id: int, body: VendorBody, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    admin = db.query(AdminUser).filter(AdminUser.email_id == current_user.email).first()
+    if not admin or admin.role not in ("Admin", "Lead Engineer"):
+        raise HTTPException(status_code=403, detail="Admin or Lead Engineer required")
+    v = db.query(TBEVendor).filter(TBEVendor.id == vendor_id).first()
+    if not v:
+        raise HTTPException(status_code=404, detail="Vendor not found")
+    v.instrument_type = body.instrument_type.lower().strip()
+    v.vendor_name = body.vendor_name; v.abbr = body.abbr
+    v.model = body.model; v.specs = body.specs; v.is_active = body.is_active
+    db.commit()
+    return {"message": "Vendor updated"}
+
+
+@router.delete("/vendors/{vendor_id}")
+def delete_vendor(vendor_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    admin = db.query(AdminUser).filter(AdminUser.email_id == current_user.email).first()
+    if not admin or admin.role not in ("Admin", "Lead Engineer"):
+        raise HTTPException(status_code=403, detail="Admin or Lead Engineer required")
+    v = db.query(TBEVendor).filter(TBEVendor.id == vendor_id).first()
+    if not v:
+        raise HTTPException(status_code=404, detail="Vendor not found")
+    db.delete(v); db.commit()
+    return {"message": "Vendor deleted"}
+
+
+# ── /match ────────────────────────────────────────────────────────────────────
+
 class MatchRequest(BaseModel):
     instrument_type: str
     specs: list
 
 
 @router.post("/match")
-def match_vendors(body: MatchRequest, _: User = Depends(get_current_user)):
-    db_key = _match_vendor_db_key(body.instrument_type)
-    vendor_models = VENDOR_DB.get(db_key, [])
+def match_vendors(body: MatchRequest, _: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    all_types = [r[0] for r in db.query(TBEVendor.instrument_type).distinct().all()]
+    db_key = _match_vendor_db_key(body.instrument_type, all_types)
+    rows = db.query(TBEVendor).filter(TBEVendor.instrument_type == db_key, TBEVendor.is_active == True).all()
+    vendor_models = [{"vendor": r.vendor_name, "abbr": r.abbr, "model": r.model, "specs": r.specs or {}} for r in rows]
 
     results = []
     for vm in vendor_models:

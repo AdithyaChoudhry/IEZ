@@ -1,7 +1,7 @@
 """
 SQLAlchemy models for authentication.
 """
-from sqlalchemy import Boolean, Column, Integer, String, DateTime, Text, ForeignKey
+from sqlalchemy import Boolean, Column, Integer, String, DateTime, Text, ForeignKey, JSON
 from sqlalchemy.ext.declarative import declarative_base
 from datetime import datetime
 
@@ -132,6 +132,19 @@ class ApprovalRequest(Base):
     review_notes = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, nullable=True)
+
+
+class TBEVendor(Base):
+    __tablename__ = "tbe_vendors"
+    id = Column(Integer, primary_key=True, index=True)
+    instrument_type = Column(String, nullable=False, index=True)
+    vendor_name = Column(String, nullable=False)
+    abbr = Column(String, nullable=False)
+    model = Column(String, nullable=False)
+    specs = Column(JSON, nullable=False, default=dict)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
 class TBEApprovalLog(Base):

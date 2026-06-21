@@ -22,7 +22,7 @@ LEAD_ROLES = ("Lead Engineer", "Admin", "Reviewer")
 
 
 def _notify(db, recipient_employee_id: str, title: str, body: str,
-             notif_type: str, related_request_id: int | None = None):
+             notif_type: str, related_request_id: Optional[int] = None):
     """Insert a notification row — call before db.commit()."""
     if not recipient_employee_id:
         return

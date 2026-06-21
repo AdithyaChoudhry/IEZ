@@ -28,11 +28,136 @@ TBE_TMP.mkdir(parents=True, exist_ok=True)
 SKIP_SHEETS = {"cover sheet", "index", "checklist", "spare", "revision"}
 ANNEXURE_KEYWORDS = {"annexure", "annex"}
 
+# Junk values that appear in empty template cells
+JUNK_VALUES = {"xxxxxx", "0.0", "0", "n/a", "", "-", "tbd", "tbc",
+               "min", "nor", "max", "min.", "nor.", "max."}
+
 # ── helpers ───────────────────────────────────────────────────────────────────
 
 def _fuzzy(a: str, b: str) -> int:
     from rapidfuzz import fuzz
     return fuzz.partial_ratio(a.lower(), b.lower())
+
+
+def _load_workbook_sheets(content: bytes, filename: str) -> dict:
+    """
+    Load all sheets from .xls, .xlsx, or .xlsm.
+    Returns {sheet_name: [[row_cells], ...]} where each cell is a string.
+    """
+    fname = (filename or "").lower()
+
+    if fname.endswith(".xls"):
+        import xlrd
+        wb = xlrd.open_workbook(file_contents=content)
+        result = {}
+        for sname in wb.sheet_names():
+            ws = wb.sheet_by_name(sname)
+            rows = []
+            for r in range(ws.nrows):
+                row = [str(ws.cell(r, c).value).strip() for c in range(ws.ncols)]
+                rows.append(row)
+            result[sname] = rows
+        return result
+    else:
+        import openpyxl
+        wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True)
+        result = {}
+        for sname in wb.sheetnames:
+            ws = wb[sname]
+            rows = []
+            for row in ws.iter_rows(values_only=True):
+                rows.append([str(c).strip() if c is not None else "" for c in row])
+            result[sname] = rows
+        return result
+
+
+def _is_wabag_layout(rows: list) -> bool:
+    """
+    Detect WABAG datasheet layout: col0=section header, col1=param, col2+=value.
+    Heuristic: look for section keywords in col0 alongside param names in col1.
+    """
+    SECTION_KEYWORDS = {
+        "general", "process", "sensor", "transmitter", "certification",
+        "purchase", "options", "mechanical", "electrical", "safety",
+        "tank", "notes", "client", "consultant", "project", "plant",
+    }
+    wabag_hits = 0
+    for row in rows[:40]:
+        if not row:
+            continue
+        c0 = row[0].lower() if row[0] else ""
+        c1 = row[1].lower() if len(row) > 1 and row[1] else ""
+        if c0 and c1 and any(kw in c0 for kw in SECTION_KEYWORDS):
+            wabag_hits += 1
+    return wabag_hits >= 2
+
+
+def _extract_params(rows: list, sheet_name: str) -> list:
+    """
+    Extract [{param, value, section, source, resolved}] from sheet rows.
+    Auto-detects WABAG layout vs simple 2-column layout.
+    """
+    wabag = _is_wabag_layout(rows)
+    current_section = ""
+    results = []
+    seen_params = set()
+
+    for row in rows:
+        if not row or all(not c for c in row):
+            continue
+
+        if wabag:
+            c0 = row[0] if row[0] else ""
+            c1 = row[1] if len(row) > 1 and row[1] else ""
+            # update section tracker from col0 (short strings that aren't header cruft)
+            if c0 and len(c0) < 40 and c0.lower() not in ("0.0", "0", ""):
+                # skip company/address lines at top
+                if not any(k in c0.lower() for k in ("vatech", "wabag", "chennai", "murray", "alwarpet", "no. 11")):
+                    current_section = c0.strip()
+            param = c1.strip()
+            # value: cols 2, 3, 4 — concatenate non-junk values
+            val_parts = []
+            for ci in range(2, min(len(row), 8)):
+                v = row[ci].strip()
+                if v and v.lower() not in JUNK_VALUES:
+                    val_parts.append(v)
+            value = " / ".join(val_parts)
+        else:
+            # simple: col0=param, col1=value
+            param = row[0].strip() if row[0] else ""
+            value = row[1].strip() if len(row) > 1 and row[1] else ""
+            # try col2 if col1 is junk
+            if value.lower() in JUNK_VALUES and len(row) > 2:
+                value = row[2].strip()
+            current_section = ""
+
+        # skip empty, junk, or duplicate params
+        if not param or param.lower() in JUNK_VALUES:
+            continue
+        # skip header-like rows
+        if param.lower() in ("parameter", "specification", "description", "sl.no", "s.no", "#", "item"):
+            continue
+        # skip all-numeric params (line numbers etc.)
+        if param.replace(".", "").replace(" ", "").isdigit():
+            continue
+        # skip clearly non-spec text
+        if len(param) > 80:
+            continue
+        # deduplicate
+        key = (current_section.lower(), param.lower())
+        if key in seen_params:
+            continue
+        seen_params.add(key)
+
+        results.append({
+            "param": param,
+            "value": value if value.lower() not in JUNK_VALUES else "",
+            "section": current_section,
+            "source": sheet_name,
+            "resolved": False,
+        })
+
+    return results
 
 
 def _detect_instrument_type(specs: list[dict]) -> str:
@@ -120,36 +245,38 @@ async def analyze_datasheet(
     file: UploadFile = File(...),
     _: User = Depends(get_current_user),
 ):
-    if not file.filename or not file.filename.lower().endswith((".xlsx", ".xlsm")):
-        raise HTTPException(400, "Only .xlsx / .xlsm files are supported")
+    fname = (file.filename or "").lower()
+    if not fname.endswith((".xlsx", ".xlsm", ".xls")):
+        raise HTTPException(400, "Only .xlsx, .xlsm, or .xls files are supported")
 
     try:
-        import openpyxl
         content = await file.read()
-        wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True)
+        all_sheets = _load_workbook_sheets(content, file.filename or "")
     except Exception as e:
         raise HTTPException(400, f"Cannot open workbook: {e}")
 
-    sheet_names = [s for s in wb.sheetnames
+    all_names = list(all_sheets.keys())
+    sheet_names = [s for s in all_names
                    if not any(k in s.lower() for k in SKIP_SHEETS)]
-    annexure_sheets = [s for s in wb.sheetnames
+    annexure_sheets = [s for s in all_names
                        if any(k in s.lower() for k in ANNEXURE_KEYWORDS)]
 
     # ── parse annexures ──
-    annexures: dict = {}  # sheet_name → {header_map, rows: [{tag, cols}]}
+    annexures: dict = {}
     for aname in annexure_sheets:
-        ws = wb[aname]
-        rows = list(ws.iter_rows(values_only=True))
+        rows = all_sheets[aname]
         if not rows:
             continue
-        # find header row (first non-empty row)
+        # find header row (first row with ≥2 non-empty cells)
         header_row_idx, headers = 0, []
         for i, row in enumerate(rows):
-            non_empty = [str(c).strip() for c in row if c is not None]
+            non_empty = [c for c in row if c]
             if len(non_empty) >= 2:
-                headers = [str(c).strip() if c else "" for c in row]
+                headers = row
                 header_row_idx = i
                 break
+        if not headers:
+            continue
 
         # find tag column
         tag_col_idx = 0
@@ -160,10 +287,10 @@ async def analyze_datasheet(
 
         rows_parsed = []
         for row in rows[header_row_idx + 1:]:
-            if not any(c is not None for c in row):
+            if not any(c for c in row):
                 continue
-            tag_val = str(row[tag_col_idx]).strip() if row[tag_col_idx] else ""
-            row_dict = {headers[i]: str(v).strip() if v is not None else "" for i, v in enumerate(row)}
+            tag_val = row[tag_col_idx] if tag_col_idx < len(row) else ""
+            row_dict = {headers[i]: row[i] if i < len(row) else "" for i in range(len(headers))}
             rows_parsed.append({"tag": tag_val, "cols": row_dict})
 
         annexures[aname] = {"headers": headers, "rows": rows_parsed}
@@ -175,38 +302,33 @@ async def analyze_datasheet(
     for sname in sheet_names:
         if any(k in sname.lower() for k in ANNEXURE_KEYWORDS):
             continue
-        ws = wb[sname]
         tag_numbers.append(sname)
+        rows = all_sheets[sname]
 
-        for row in ws.iter_rows(values_only=True):
-            if not row or all(c is None for c in row):
-                continue
-            param = str(row[0]).strip() if row[0] is not None else ""
-            value = str(row[1]).strip() if len(row) > 1 and row[1] is not None else ""
-            if not param or param.lower() in ("parameter", "specification", "description", "sl.no", "s.no", "#"):
-                continue
+        raw_params = _extract_params(rows, sname)
 
+        for entry in raw_params:
+            param = entry["param"]
+            value = entry["value"]
             resolved = False
             source = sname
 
-            # check for annexure reference
-            if "annexure" in value.lower() or "refer annex" in value.lower():
-                # find the tag in all annexures
+            # resolve annexure references
+            if value and ("annexure" in value.lower() or "refer annex" in value.lower()):
                 for aname, ann_data in annexures.items():
+                    # find row whose tag matches this sheet name
                     matched_row = None
-                    # try to find row by tag = sheet name
                     for r in ann_data["rows"]:
-                        if _fuzzy(sname, r["tag"]) >= 80:
+                        if _fuzzy(sname, r["tag"]) >= 75:
                             matched_row = r
                             break
                     if matched_row:
-                        # fuzzy-match param to annexure column
                         best_col, best_score = None, 0
                         for col_h in matched_row["cols"]:
                             s = _fuzzy(param, col_h)
                             if s > best_score:
                                 best_score, best_col = s, col_h
-                        if best_col and best_score >= 60 and matched_row["cols"].get(best_col):
+                        if best_col and best_score >= 55 and matched_row["cols"].get(best_col):
                             value = matched_row["cols"][best_col]
                             source = aname
                             resolved = True
@@ -215,11 +337,20 @@ async def analyze_datasheet(
             specs_raw.append({
                 "param": param,
                 "value": value,
+                "section": entry.get("section", ""),
                 "source": source,
                 "resolved": resolved,
             })
 
     instrument_type = _detect_instrument_type(specs_raw)
+
+    # fallback: try filename for instrument type
+    if instrument_type == "non-contact radar level transmitter":
+        fn_lower = (file.filename or "").lower()
+        for alias, canonical in TYPE_ALIASES.items():
+            if alias in fn_lower:
+                instrument_type = canonical
+                break
 
     return {
         "instrument_type": instrument_type,

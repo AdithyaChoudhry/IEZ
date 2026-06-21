@@ -100,7 +100,7 @@ export default function VendorTBE() {
   };
 
   const handleFile = (f: File) => {
-    if (!f.name.match(/\.(xlsx|xlsm)$/i)) { setError('Only .xlsx / .xlsm files are supported'); return; }
+    if (!f.name.match(/\.(xlsx|xlsm|xls)$/i)) { setError('Only .xlsx, .xlsm, or .xls files are supported'); return; }
     setFile(f); setError('');
   };
 
@@ -122,7 +122,8 @@ export default function VendorTBE() {
       setEditedSpecs(result.specs.filter(s => s.param && s.value));
       setStep('requirements');
     } catch (e: any) {
-      setError(e?.response?.data?.detail || 'Analysis failed');
+      const msg = e?.response?.data?.detail || e?.message || 'Analysis failed — check the file and try again';
+      setError(typeof msg === 'string' ? msg : JSON.stringify(msg));
       setStep('upload');
     }
   };
@@ -310,7 +311,7 @@ export default function VendorTBE() {
               onDrop={onDrop}
               onClick={() => fileRef.current?.click()}
             >
-              <input ref={fileRef} type="file" accept=".xlsx,.xlsm" className="hidden"
+              <input ref={fileRef} type="file" accept=".xlsx,.xlsm,.xls" className="hidden"
                 onChange={e => e.target.files?.[0] && handleFile(e.target.files[0])} />
               <FileSpreadsheet className="w-12 h-12 mx-auto mb-4" style={{ color: 'var(--em-lt)', opacity: 0.7 }} />
               <p className="text-sm font-semibold mb-1" style={{ color: 'var(--t0)' }}>
@@ -319,7 +320,7 @@ export default function VendorTBE() {
               <p className="text-xs mt-1" style={{ color: 'var(--t2)' }}>
                 {file
                   ? `${(file.size / 1024).toFixed(1)} KB · Ready to analyze`
-                  : 'Supports .xlsx and .xlsm · Works with all instrument types'}
+                  : 'Supports .xlsx, .xlsm, .xls · SOP & generated datasheets'}
               </p>
             </div>
             {file && (

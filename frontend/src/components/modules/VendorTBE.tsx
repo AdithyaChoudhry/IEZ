@@ -54,6 +54,16 @@ function classifySpec(param: string): 'project' | 'technical' {
   }
   return 'technical';
 }
+
+const NA_VALUES = new Set(['na', 'n/a', 'n.a', 'n.a.', 'not applicable', 'not available', 'none', '-', '--', '—', '', 'nil', 'null', 'tbd', 'tbc']);
+function isNA(val: string): boolean {
+  return NA_VALUES.has(val.toLowerCase().trim());
+}
+
+const ANNEXURE_PATTERNS = /^refer\s+annexure/i;
+function isAnnexureRef(val: string): boolean {
+  return ANNEXURE_PATTERNS.test(val.trim());
+}
 interface SpecResult {
   param: string; wabag_req: string; vendor_offer: string;
   status: string; auto_reply: string;
@@ -339,7 +349,9 @@ export default function VendorTBE() {
   const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
   // project information (display only, not sent to vendor matching)
   const [projectInfo, setProjectInfo] = useState<SpecRow[]>([]);
-  // technical requirements (sent to vendor matching engine)
+  // annexure-resolved specs (Part C, display only, not sent to vendor matching)
+  const [annexureSpecs, setAnnexureSpecs] = useState<SpecRow[]>([]);
+  // technical requirements (Part B, sent to vendor matching engine only)
   const [editedSpecs, setEditedSpecs] = useState<SpecRow[]>([]);
   const [editingIdx, setEditingIdx] = useState<number | null>(null);
   const [piEditingIdx, setPiEditingIdx] = useState<number | null>(null);
@@ -365,7 +377,7 @@ export default function VendorTBE() {
   const reset = () => {
     if (pollRef.current) clearInterval(pollRef.current);
     setStep('upload'); setFile(null); setError(''); setAnalysis(null);
-    setProjectInfo([]); setEditedSpecs([]); setVendors([]); setSelectedVendors(new Set());
+    setProjectInfo([]); setAnnexureSpecs([]); setEditedSpecs([]); setVendors([]); setSelectedVendors(new Set());
     setTbeReplies({}); setDevSeverities({}); setSessionId('');
     setApprovalResult(null); setApprovalReqId(null); setApprovalStatus('idle'); setTbeNotes('');
   };
@@ -389,14 +401,28 @@ export default function VendorTBE() {
       const r = await api.post('/tbe/analyze', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
       const result: AnalysisResult = r.data;
       setAnalysis(result);
-      // classify into project information vs technical requirements
-      const meaningful = result.specs.filter(s => s.param && s.value);
-      const pi: SpecRow[] = [];
-      const tr: SpecRow[] = [];
+      // Classify into Part A / Part B / Part C
+      const meaningful = result.specs.filter(s => s.param);
+      const pi: SpecRow[] = [];   // Part A – project info
+      const ann: SpecRow[] = [];  // Part C – annexure resolved
+      const tr: SpecRow[] = [];   // Part B – technical requirements
       for (const s of meaningful) {
-        if (classifySpec(s.param) === 'project') pi.push(s); else tr.push(s);
+        if (!s.value || isNA(s.value)) {
+          // NA values → Part A (reference only)
+          pi.push(s);
+        } else if (s.resolved || isAnnexureRef(s.value)) {
+          // Annexure-resolved specs → Part C
+          ann.push(s);
+        } else if (classifySpec(s.param) === 'project') {
+          // Project information keywords → Part A
+          pi.push(s);
+        } else {
+          // Everything else with a real value → Part B
+          tr.push(s);
+        }
       }
       setProjectInfo(pi);
+      setAnnexureSpecs(ann);
       setEditedSpecs(tr);
       setStep('requirements');
     } catch (e: any) {
@@ -696,8 +722,7 @@ export default function VendorTBE() {
                   {analysis.instrument_type}
                 </span>
                 <span className="text-xs" style={{ color: 'var(--t2)' }}>
-                  {projectInfo.length} project fields · {editedSpecs.length} technical requirements
-                  {analysis.annexure_sheets.length > 0 && ` · ${analysis.annexure_sheets.length} annexure(s) resolved`}
+                  {projectInfo.length} project fields · {editedSpecs.length} technical requirements · {annexureSpecs.length} annexure specs
                 </span>
               </div>
               <button onClick={runMatching}
@@ -870,10 +895,63 @@ export default function VendorTBE() {
                   {editedSpecs.filter(s => s.param && s.value).length} requirements · Vendor matching weight: 100%
                 </span>
                 <span className="text-[10px]" style={{ color: '#f87171' }}>
-                  Project information (Part A) is excluded from vendor analysis
+                  Part A & Part C are excluded from vendor analysis
                 </span>
               </div>
             </div>
+
+            {/* Section C – Annexure-resolved specs */}
+            {annexureSpecs.length > 0 && (
+              <div className="rounded-2xl overflow-hidden" style={{ border: '1px solid rgba(20,184,166,0.25)', background: 'rgba(20,184,166,0.02)' }}>
+                <div className="flex items-center justify-between px-4 py-3"
+                  style={{ background: 'rgba(20,184,166,0.08)', borderBottom: '1px solid rgba(20,184,166,0.15)' }}>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-bold px-2.5 py-1 rounded-full"
+                      style={{ background: 'rgba(20,184,166,0.15)', color: '#2dd4bf' }}>Part C</span>
+                    <span className="text-sm font-bold" style={{ color: '#2dd4bf' }}>Annexure Specifications</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[9px] font-bold px-2 py-1 rounded"
+                      style={{ background: 'rgba(20,184,166,0.1)', color: '#2dd4bf', border: '1px solid rgba(20,184,166,0.2)' }}>
+                      VALUES FROM ANNEXURE SHEET
+                    </span>
+                    <span className="text-[9px] font-bold px-2 py-1 rounded"
+                      style={{ background: 'rgba(248,113,113,0.1)', color: '#f87171', border: '1px solid rgba(248,113,113,0.2)' }}>
+                      NOT USED FOR VENDOR MATCHING
+                    </span>
+                  </div>
+                </div>
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr style={{ background: 'rgba(20,184,166,0.05)' }}>
+                      {['#', 'Parameter', 'Value (from Annexure)', 'Annexure Source'].map(h => (
+                        <th key={h} className="text-left px-4 py-2 font-semibold" style={{ color: '#2dd4bf', fontSize: 10 }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {annexureSpecs.map((row, i) => (
+                      <tr key={i} style={{ borderTop: '1px solid rgba(20,184,166,0.08)', background: i % 2 ? 'rgba(20,184,166,0.03)' : 'transparent' }}>
+                        <td className="px-4 py-2 opacity-40 w-8" style={{ color: '#2dd4bf' }}>{i + 1}</td>
+                        <td className="px-4 py-2 font-medium" style={{ color: '#99f6e4' }}>{row.param}</td>
+                        <td className="px-4 py-2 font-semibold" style={{ color: 'var(--t0)' }}>{row.value}</td>
+                        <td className="px-4 py-2">
+                          <span className="text-[9px] font-bold px-1.5 py-0.5 rounded"
+                            style={{ background: 'rgba(20,184,166,0.12)', color: '#2dd4bf' }}>
+                            ✓ {row.source || 'Annexure'}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <div className="px-4 py-2.5" style={{ borderTop: '1px solid rgba(20,184,166,0.1)', background: 'rgba(20,184,166,0.04)' }}>
+                  <span className="text-[10px]" style={{ color: 'var(--t2)' }}>
+                    {annexureSpecs.length} specifications resolved from Annexure · Displayed for reference only
+                  </span>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -883,7 +961,7 @@ export default function VendorTBE() {
           <div className="space-y-4">
             <div className="flex items-center justify-between">
               <p className="text-sm font-semibold" style={{ color: 'var(--t0)' }}>
-                Top {vendors.length} vendors matched — select which to include in TBE
+                Standard shortlist ({vendors.length} vendors) · Match % against {editedSpecs.filter(s => s.param && s.value).length} Part B technical requirements
               </p>
               <button onClick={buildTBE} disabled={selectedVendors.size === 0}
                 className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold"

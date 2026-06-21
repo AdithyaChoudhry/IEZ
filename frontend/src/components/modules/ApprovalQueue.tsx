@@ -150,8 +150,11 @@ function RequestCard({ req, onAction }: { req: ApprovalReq; onAction: () => void
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
               <span className="text-xs font-bold px-2 py-0.5 rounded-full"
-                style={{ background: req.request_type === 'spec' ? 'rgba(59,130,246,0.1)' : 'rgba(245,158,11,0.1)', color: req.request_type === 'spec' ? 'var(--em-lt)' : 'var(--gold)' }}>
-                {req.request_type === 'spec' ? 'Spec Extraction' : 'Cover Sheet'}
+                style={{
+                  background: req.request_type === 'spec' ? 'rgba(59,130,246,0.1)' : req.request_type === 'tbe' ? 'rgba(139,92,246,0.12)' : 'rgba(245,158,11,0.1)',
+                  color: req.request_type === 'spec' ? 'var(--em-lt)' : req.request_type === 'tbe' ? '#a78bfa' : 'var(--gold)',
+                }}>
+                {req.request_type === 'spec' ? 'Spec Extraction' : req.request_type === 'tbe' ? 'TBE Approval' : 'Cover Sheet'}
               </span>
               <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full"
                 style={{ background: statusBg, color: statusColor, border: `1px solid ${statusColor}30` }}>
@@ -241,6 +244,23 @@ function RequestCard({ req, onAction }: { req: ApprovalReq; onAction: () => void
                     </tbody>
                   </table>
                 </div>
+              </div>
+            )}
+
+            {/* TBE summary */}
+            {req.request_type === 'tbe' && Object.keys(payload).length > 0 && (
+              <div className="grid grid-cols-2 gap-2">
+                {[
+                  ['Instrument Type', payload.instrument_type],
+                  ['Recommended Vendor', payload.recommended_vendor],
+                  ['Recommended Model', payload.recommended_model],
+                  ['Session ID', payload.session_id],
+                ].filter(([, v]) => v).map(([k, v]) => (
+                  <div key={k} className="rounded-xl px-3 py-2" style={{ background: 'rgba(139,92,246,0.06)', border: '1px solid rgba(139,92,246,0.15)' }}>
+                    <p className="text-[10px] mb-0.5" style={{ color: '#a78bfa' }}>{String(k)}</p>
+                    <p className="text-xs font-medium truncate" style={{ color: 'var(--t0)' }}>{String(v || '—')}</p>
+                  </div>
+                ))}
               </div>
             )}
 

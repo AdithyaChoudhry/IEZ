@@ -5,6 +5,7 @@
    7. Vendor Match   8. Vendor Select   9. Generate
 ───────────────────────────────────────────────────────────────────────────── */
 import { useState, useEffect, useMemo, useRef } from 'react';
+import { useAuth } from '@/context/AuthContext';
 import {
   FileSpreadsheet, Upload, Search, CheckCircle2, ChevronRight,
   X, Download, Loader2, AlertTriangle, Sparkles, SlidersHorizontal,
@@ -175,8 +176,10 @@ function RaiseRequestModal({
   onSuccess: (reqId: number) => void;
   onClose: () => void;
 }) {
-  const [name, setName] = useState('');
-  const [empId, setEmpId] = useState('');
+  const { user } = useAuth();
+  const empId = localStorage.getItem('user_employee_id') || '';
+  const empName = localStorage.getItem('user_employee_name') || user?.username || '';
+
   const [notes, setNotes] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
@@ -186,7 +189,7 @@ function RaiseRequestModal({
     try {
       const res = await api.post('/approvals', {
         request_type: 'spec',
-        submitted_by_name: name,
+        submitted_by_name: empName,
         submitted_by_id: empId,
         submitter_notes: notes || null,
         tag_numbers: tags,
@@ -226,18 +229,16 @@ function RaiseRequestModal({
               <AlertTriangle className="w-3.5 h-3.5" /> {err}
             </div>
           )}
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs font-semibold uppercase tracking-wider mb-1.5" style={{ color: 'var(--t2)' }}>Your Name *</label>
-              <input type="text" required value={name} onChange={e => setName(e.target.value)}
-                placeholder="Full name" className="w-full px-3 py-2.5 rounded-xl text-sm"
-                style={{ background: 'var(--s0)', border: '1px solid var(--b2)', color: 'var(--t0)', outline: 'none' }} />
+          {/* Submitter identity — read-only, from session */}
+          <div className="flex items-center gap-3 px-3 py-2.5 rounded-xl"
+            style={{ background: 'var(--s2)', border: '1px solid var(--b1)' }}>
+            <div className="w-7 h-7 rounded-full flex items-center justify-center text-white text-xs font-bold flex-shrink-0"
+              style={{ background: 'linear-gradient(135deg,var(--em),#1d4ed8)' }}>
+              {empName.charAt(0).toUpperCase()}
             </div>
             <div>
-              <label className="block text-xs font-semibold uppercase tracking-wider mb-1.5" style={{ color: 'var(--t2)' }}>Employee ID *</label>
-              <input type="text" required value={empId} onChange={e => setEmpId(e.target.value)}
-                placeholder="WABAG-EMP-001" className="w-full px-3 py-2.5 rounded-xl text-sm"
-                style={{ background: 'var(--s0)', border: '1px solid var(--b2)', color: 'var(--t0)', outline: 'none' }} />
+              <p className="text-xs font-semibold" style={{ color: 'var(--t0)' }}>{empName}</p>
+              <p className="text-[10px]" style={{ color: 'var(--t2)' }}>{empId || 'No employee ID'}</p>
             </div>
           </div>
           <div>
@@ -250,9 +251,9 @@ function RaiseRequestModal({
           <div className="rounded-xl px-3 py-2.5 text-xs" style={{ background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.2)', color: 'var(--gold)' }}>
             The Lead Engineer will review your extracted specs and approve or reject the request. The OK button will enable once approved.
           </div>
-          <button type="submit" disabled={busy || !name || !empId}
+          <button type="submit" disabled={busy}
             className="w-full py-3 rounded-xl text-sm font-bold flex items-center justify-center gap-2"
-            style={{ background: 'linear-gradient(135deg,var(--gold),#d97706)', color: '#000', opacity: busy || !name || !empId ? 0.5 : 1, cursor: 'pointer' }}>
+            style={{ background: 'linear-gradient(135deg,var(--gold),#d97706)', color: '#000', opacity: busy ? 0.5 : 1, cursor: 'pointer' }}>
             {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
             {busy ? 'Submitting…' : 'Send to Approval Queue'}
           </button>

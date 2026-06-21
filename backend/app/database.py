@@ -62,12 +62,12 @@ def _seed_notification_routes():
 
 
 def _seed_default_admin():
-    """Create the default admin user on first startup if none exist."""
+    """Ensure the system admin account always exists."""
     from .auth.models import AdminUser, User
     from .auth.utils import get_password_hash
     db = SessionLocal()
     try:
-        if db.query(AdminUser).count() > 0:
+        if db.query(AdminUser).filter(AdminUser.employee_id == "ADMIN001").first():
             return  # already seeded
         pw_hash = get_password_hash("Admin@iez2024")
         admin = AdminUser(

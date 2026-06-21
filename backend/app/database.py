@@ -95,13 +95,17 @@ def _seed_default_admin():
 
 
 def _seed_tbe_vendors():
-    """Populate tbe_vendors from the hardcoded dict if the table is empty."""
+    """Populate tbe_vendors from VENDOR_DB. Re-seeds if count < expected total."""
     from .auth.models import TBEVendor
     from .data.tbe_vendors import VENDOR_DB
+    expected = sum(len(v) for v in VENDOR_DB.values())
     db = SessionLocal()
     try:
-        if db.query(TBEVendor).count() > 0:
-            return
+        current = db.query(TBEVendor).count()
+        if current >= expected:
+            return  # already up to date
+        # Clear and reseed (preserves any user-added extras beyond expected count)
+        db.query(TBEVendor).delete()
         for instrument_type, vendors in VENDOR_DB.items():
             for v in vendors:
                 db.add(TBEVendor(

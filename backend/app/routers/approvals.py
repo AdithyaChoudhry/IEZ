@@ -12,11 +12,27 @@ from sqlalchemy.orm import Session
 from typing import Optional, List
 
 from ..deps import get_db, get_current_user
-from ..auth.models import User, AdminUser, ApprovalRequest
+from ..auth.models import User, AdminUser, ApprovalRequest, Notification
 from ..auth.utils import verify_password
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/approvals", tags=["Approval Queue"])
+
+LEAD_ROLES = ("Lead Engineer", "Admin", "Reviewer")
+
+
+def _notify(db, recipient_employee_id: str, title: str, body: str,
+             notif_type: str, related_request_id: int | None = None):
+    """Insert a notification row — call before db.commit()."""
+    if not recipient_employee_id:
+        return
+    db.add(Notification(
+        recipient_employee_id=recipient_employee_id,
+        title=title,
+        body=body,
+        notif_type=notif_type,
+        related_request_id=related_request_id,
+    ))
 
 
 # ── Pydantic schemas ───────────────────────────────────────────────────────────
@@ -77,6 +93,23 @@ def submit_approval(
         status="pending",
     )
     db.add(req)
+    db.flush()  # get req.id before notifications
+
+    # Notify all Lead Engineers / Admins / Reviewers
+    leads = db.query(AdminUser).filter(
+        AdminUser.role.in_(LEAD_ROLES),
+        AdminUser.status == "active",
+    ).all()
+    label = "spec extraction" if body.request_type == "spec" else "cover sheet"
+    for lead in leads:
+        _notify(
+            db, lead.employee_id,
+            title=f"New {label} approval request",
+            body=f"{body.submitted_by_name} has raised a {label} approval request (#{req.id}). Please review.",
+            notif_type="approval_submitted",
+            related_request_id=req.id,
+        )
+
     db.commit()
     db.refresh(req)
     return req
@@ -158,7 +191,7 @@ def approve_request(
     ).first()
     if not lead or not verify_password(body.password, lead.password_hash):
         raise HTTPException(401, "Invalid Employee ID or Password")
-    if lead.role not in ("Lead Engineer", "Admin", "Reviewer"):
+    if lead.role not in LEAD_ROLES:
         raise HTTPException(403, f"Role '{lead.role}' is not authorized to approve requests")
 
     now = datetime.now(timezone.utc)
@@ -169,6 +202,16 @@ def approve_request(
     req.review_notes = body.review_notes
     req.updated_at = now
     lead.last_login = now
+
+    label = "spec extraction" if req.request_type == "spec" else "cover sheet"
+    _notify(
+        db, req.submitted_by_id,
+        title=f"Your {label} request was approved",
+        body=f"{lead.employee_name} ({lead.role}) has approved your {label} request (#{req.id}). You may now proceed.",
+        notif_type="approved",
+        related_request_id=req.id,
+    )
+
     db.commit()
     db.refresh(req)
     return req
@@ -195,7 +238,7 @@ def reject_request(
     ).first()
     if not lead or not verify_password(body.password, lead.password_hash):
         raise HTTPException(401, "Invalid Employee ID or Password")
-    if lead.role not in ("Lead Engineer", "Admin", "Reviewer"):
+    if lead.role not in LEAD_ROLES:
         raise HTTPException(403, f"Role '{lead.role}' is not authorized to reject requests")
 
     now = datetime.now(timezone.utc)
@@ -205,6 +248,17 @@ def reject_request(
     req.reviewed_role = lead.role
     req.review_notes = body.review_notes
     req.updated_at = now
+
+    label = "spec extraction" if req.request_type == "spec" else "cover sheet"
+    note_suffix = f" Reason: {body.review_notes}" if body.review_notes else ""
+    _notify(
+        db, req.submitted_by_id,
+        title=f"Your {label} request was rejected",
+        body=f"{lead.employee_name} ({lead.role}) has rejected your {label} request (#{req.id}).{note_suffix}",
+        notif_type="rejected",
+        related_request_id=req.id,
+    )
+
     db.commit()
     db.refresh(req)
     return req

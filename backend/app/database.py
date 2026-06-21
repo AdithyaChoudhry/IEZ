@@ -25,6 +25,7 @@ def init_db():
     """
     # Import every model so it's registered in Base.metadata before create_all
     from .auth.models import (  # noqa: F401
-        Base, User, AdminUser, DatasheetApproval, VendorSelectionLog, ApprovalRequest
+        Base, User, AdminUser, DatasheetApproval, VendorSelectionLog,
+        ApprovalRequest, Employee, Notification
     )
     Base.metadata.create_all(bind=engine)

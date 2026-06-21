@@ -23,6 +23,8 @@ from .routers.lt_radar import router as lt_radar_router
 from .routers.deploy import router as deploy_router
 from .routers.admin_users import router as admin_router
 from .routers.approvals import router as approvals_router
+from .routers.employees import router as employees_router
+from .routers.notifications import router as notifications_router
 
 
 @asynccontextmanager
@@ -85,6 +87,8 @@ app.include_router(lt_radar_router, prefix="/api")
 app.include_router(deploy_router, prefix="/api")
 app.include_router(admin_router, prefix="/api")
 app.include_router(approvals_router, prefix="/api")
+app.include_router(employees_router, prefix="/api")
+app.include_router(notifications_router, prefix="/api")
 
 
 @app.get("/")

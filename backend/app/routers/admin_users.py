@@ -34,18 +34,38 @@ def create_user(body: AdminUserCreate, db: Session = Depends(get_db), _: User = 
         raise HTTPException(400, "Employee ID already exists")
     if db.query(AdminUser).filter(AdminUser.email_id == body.email_id).first():
         raise HTTPException(400, "Email already exists")
-    user = AdminUser(
+
+    pw_hash = get_password_hash(body.password)
+
+    admin = AdminUser(
         employee_id=body.employee_id,
         employee_name=body.employee_name,
         designation=body.designation,
         department=body.department,
         email_id=body.email_id,
-        password_hash=get_password_hash(body.password),
+        password_hash=pw_hash,
         role=body.role,
         status="active",
     )
-    db.add(user); db.commit(); db.refresh(user)
-    return user
+    db.add(admin)
+
+    # Sync: create or update the JWT login User so the employee can log in immediately
+    jwt_user = db.query(User).filter(User.email == body.email_id).first()
+    if jwt_user:
+        # Already signed up manually — adopt their account, update password to match
+        jwt_user.username = body.employee_name
+        jwt_user.hashed_password = pw_hash
+        jwt_user.is_active = True
+    else:
+        db.add(User(
+            email=body.email_id,
+            username=body.employee_name,
+            hashed_password=pw_hash,
+            is_active=True,
+        ))
+
+    db.commit(); db.refresh(admin)
+    return admin
 
 
 @router.get("/users/{employee_id}", response_model=AdminUserResponse)
@@ -72,6 +92,10 @@ def delete_user(employee_id: str, db: Session = Depends(get_db), _: User = Depen
     u = db.query(AdminUser).filter(AdminUser.employee_id == employee_id).first()
     if not u:
         raise HTTPException(404, "User not found")
+    # Remove linked JWT login account
+    jwt_user = db.query(User).filter(User.email == u.email_id).first()
+    if jwt_user:
+        db.delete(jwt_user)
     db.delete(u); db.commit()
 
 
@@ -80,7 +104,12 @@ def disable_user(employee_id: str, db: Session = Depends(get_db), _: User = Depe
     u = db.query(AdminUser).filter(AdminUser.employee_id == employee_id).first()
     if not u:
         raise HTTPException(404, "User not found")
-    u.status = "disabled"; db.commit(); db.refresh(u)
+    u.status = "disabled"
+    # Revoke JWT login access
+    jwt_user = db.query(User).filter(User.email == u.email_id).first()
+    if jwt_user:
+        jwt_user.is_active = False
+    db.commit(); db.refresh(u)
     return u
 
 
@@ -89,7 +118,12 @@ def enable_user(employee_id: str, db: Session = Depends(get_db), _: User = Depen
     u = db.query(AdminUser).filter(AdminUser.employee_id == employee_id).first()
     if not u:
         raise HTTPException(404, "User not found")
-    u.status = "active"; db.commit(); db.refresh(u)
+    u.status = "active"
+    # Restore JWT login access
+    jwt_user = db.query(User).filter(User.email == u.email_id).first()
+    if jwt_user:
+        jwt_user.is_active = True
+    db.commit(); db.refresh(u)
     return u
 
 
@@ -100,7 +134,12 @@ def reset_password(employee_id: str, body: ResetPasswordRequest, db: Session = D
     u = db.query(AdminUser).filter(AdminUser.employee_id == employee_id).first()
     if not u:
         raise HTTPException(404, "User not found")
-    u.password_hash = get_password_hash(body.new_password)
+    pw_hash = get_password_hash(body.new_password)
+    u.password_hash = pw_hash
+    # Keep JWT login password in sync
+    jwt_user = db.query(User).filter(User.email == u.email_id).first()
+    if jwt_user:
+        jwt_user.hashed_password = pw_hash
     db.commit(); db.refresh(u)
     return u
 

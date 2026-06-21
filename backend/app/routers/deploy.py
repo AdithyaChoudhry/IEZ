@@ -27,17 +27,23 @@ def _verify(secret: str, body: bytes, sig_header: str) -> bool:
 
 def _restart_service():
     """Run in background AFTER the HTTP response is sent."""
-    import time
+    import time, signal, os
     time.sleep(3)  # let the response flush
     try:
-        # start_new_session so this child survives when the parent process dies
-        subprocess.Popen(
-            ["sudo", "systemctl", "restart", "iez.service"],
-            start_new_session=True,
-        )
-        logger.info("Service restart triggered")
+        # Try systemctl first
+        r = subprocess.run(["sudo", "systemctl", "restart", "iez.service"],
+                           capture_output=True, timeout=10)
+        if r.returncode == 0:
+            logger.info("Service restarted via systemctl")
+            return
+    except Exception:
+        pass
+    try:
+        # Fallback: kill own process — systemd will restart if Restart=always/on-failure
+        logger.info("Falling back to self-SIGTERM for restart")
+        os.kill(os.getpid(), signal.SIGTERM)
     except Exception as e:
-        logger.error("Service restart failed: %s", e)
+        logger.error("Restart failed: %s", e)
 
 
 @router.post("")

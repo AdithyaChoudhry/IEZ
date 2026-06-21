@@ -7,9 +7,12 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 
 from .database import SessionLocal
-from .auth.models import User
+from .auth.models import User, AdminUser
 from .auth.utils import decode_token
 from .models.auth import TokenPayload
+
+ADMIN_ROLES = ("Admin",)
+LEAD_ROLES = ("Admin", "Lead Engineer", "Reviewer")
 
 
 security = HTTPBearer()
@@ -83,6 +86,36 @@ def get_current_user(
         )
     
     return user
+
+
+def _resolve_admin_user(user: User, db: Session):
+    admin = db.query(AdminUser).filter(
+        AdminUser.email_id == user.email,
+        AdminUser.status == "active",
+    ).first()
+    return admin
+
+
+def require_admin(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> User:
+    """Dependency: only Admin role may proceed."""
+    admin = _resolve_admin_user(current_user, db)
+    if not admin or admin.role not in ADMIN_ROLES:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Admin role required")
+    return current_user
+
+
+def require_lead(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> User:
+    """Dependency: Lead Engineer / Admin / Reviewer may proceed."""
+    admin = _resolve_admin_user(current_user, db)
+    if not admin or admin.role not in LEAD_ROLES:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Lead Engineer or Admin role required")
+    return current_user
 
 
 def get_current_active_superuser(

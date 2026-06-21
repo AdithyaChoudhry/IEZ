@@ -27,6 +27,14 @@ const queryClient = new QueryClient({
   },
 });
 
+// Role-based route guard
+function RoleRoute({ roles, children }: { roles: string[]; children: React.ReactNode }) {
+  const { role, loading } = useAuth();
+  if (loading) return null;
+  if (!roles.includes(role)) return <Navigate to="/" replace />;
+  return <>{children}</>;
+}
+
 // Protected Route wrapper
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, loading } = useAuth();
@@ -107,8 +115,16 @@ function AppRoutes() {
         <Route path="cable-schedule" element={<CableScheduleGenerator />} />
         <Route path="loop-wiring" element={<LoopWiringGenerator />} />
         <Route path="smart-datasheet" element={<SmartDatasheetExtractor />} />
-        <Route path="admin" element={<AdminManagement />} />
-        <Route path="approval-queue" element={<ApprovalQueue />} />
+        <Route path="admin" element={
+          <RoleRoute roles={['Admin']}>
+            <AdminManagement />
+          </RoleRoute>
+        } />
+        <Route path="approval-queue" element={
+          <RoleRoute roles={['Admin', 'Lead Engineer', 'Reviewer']}>
+            <ApprovalQueue />
+          </RoleRoute>
+        } />
       </Route>
 
       {/* Catch all - redirect to home */}

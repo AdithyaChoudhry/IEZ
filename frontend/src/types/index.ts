@@ -9,6 +9,10 @@ export interface User {
   is_active: boolean;
   is_superuser: boolean;
   created_at: string;
+  // Populated from AdminUser after login
+  role: string;
+  employee_id: string | null;
+  employee_name: string;
 }
 
 export interface LoginCredentials {

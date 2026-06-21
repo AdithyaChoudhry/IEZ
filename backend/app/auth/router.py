@@ -7,7 +7,7 @@ from datetime import timedelta
 
 from ..deps import get_db, get_current_user
 from ..models.auth import UserCreate, UserLogin, UserResponse, Token, RefreshTokenRequest
-from .models import User
+from .models import User, AdminUser
 from .utils import verify_password, get_password_hash, create_access_token, create_refresh_token, decode_token
 from ..config import settings
 
@@ -94,11 +94,17 @@ def login(user_credentials: UserLogin, db: Session = Depends(get_db)):
     # Create tokens
     access_token = create_access_token(data={"sub": user.id})
     refresh_token = create_refresh_token(data={"sub": user.id})
-    
+
+    # Look up engineering role from AdminUser table
+    admin = db.query(AdminUser).filter(AdminUser.email_id == user.email).first()
+
     return {
         "access_token": access_token,
         "refresh_token": refresh_token,
-        "token_type": "bearer"
+        "token_type": "bearer",
+        "role": admin.role if admin else "Engineer",
+        "employee_id": admin.employee_id if admin else None,
+        "employee_name": admin.employee_name if admin else user.username,
     }
 
 

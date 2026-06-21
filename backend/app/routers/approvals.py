@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from typing import Optional, List
 
-from ..deps import get_db, get_current_user
+from ..deps import get_db, get_current_user, require_lead
 from ..auth.models import User, AdminUser, ApprovalRequest, Notification, Employee, NotificationRoute
 from ..auth.utils import verify_password
 
@@ -157,7 +157,7 @@ def submit_approval(
 @router.get("/pending", response_model=List[ApprovalRequestResponse])
 def list_pending(
     db: Session = Depends(get_db),
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_lead),
 ):
     return (
         db.query(ApprovalRequest)

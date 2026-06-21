@@ -7,8 +7,21 @@ import {
 } from 'lucide-react';
 import clsx from 'clsx';
 import api from '@/services/api';
+import { useAuth } from '@/context/AuthContext';
 
 interface SidebarProps { isOpen: boolean; }
+
+interface SidebarItem {
+  path: string;
+  icon: React.ElementType;
+  label: string;
+  exact?: boolean;
+  badge?: boolean;
+  allowedRoles?: string[];
+}
+
+const ADMIN_ROLES = ['Admin'];
+const LEAD_ROLES  = ['Admin', 'Lead Engineer', 'Reviewer'];
 
 const sections = [
   {
@@ -41,14 +54,15 @@ const sections = [
   {
     label: 'Admin',
     items: [
-      { path: '/admin', icon: ShieldCheck, label: 'Admin Management' },
-      { path: '/approval-queue', icon: ClipboardCheck, label: 'Approval Queue', badge: true },
+      { path: '/admin',          icon: ShieldCheck,   label: 'Admin Management', allowedRoles: ADMIN_ROLES },
+      { path: '/approval-queue', icon: ClipboardCheck, label: 'Approval Queue',  allowedRoles: LEAD_ROLES, badge: true },
     ],
   },
 ];
 
 export default function Sidebar({ isOpen }: SidebarProps) {
   const location = useLocation();
+  const { role } = useAuth();
   const [pendingCount, setPendingCount] = useState(0);
 
   useEffect(() => {
@@ -93,15 +107,17 @@ export default function Sidebar({ isOpen }: SidebarProps) {
             </div>
 
             <nav className="space-y-0.5">
-              {section.items.map((item) => {
+              {(section.items as SidebarItem[]).filter(item =>
+                !item.allowedRoles || item.allowedRoles.includes(role)
+              ).map((item) => {
                 const Icon = item.icon;
-                const isActive = 'exact' in item && item.exact
+                const isActive = item.exact
                   ? location.pathname === item.path
                   : (location.pathname.startsWith(item.path) && item.path !== '/');
-                const showBadge = 'badge' in item && item.badge && pendingCount > 0;
+                const showBadge = item.badge && pendingCount > 0;
 
                 return (
-                  <NavLink key={item.path} to={item.path} end={'exact' in item ? item.exact : false}>
+                  <NavLink key={item.path} to={item.path} end={item.exact ?? false}>
                     <div
                       className="flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-xs font-medium transition-all duration-150 relative"
                       style={{

@@ -10,12 +10,15 @@ export const authService = {
    */
   async login(credentials: LoginCredentials): Promise<TokenResponse> {
     const response = await api.post<TokenResponse>('/auth/login', credentials);
-    const { access_token, refresh_token } = response.data;
-    
-    // Store tokens
+    const { access_token, refresh_token, role, employee_id, employee_name } = response.data as any;
+
     localStorage.setItem('access_token', access_token);
     localStorage.setItem('refresh_token', refresh_token);
-    
+    // Cache role info so AuthContext can read it without an extra API round-trip
+    localStorage.setItem('user_role', role ?? 'Engineer');
+    localStorage.setItem('user_employee_id', employee_id ?? '');
+    localStorage.setItem('user_employee_name', employee_name ?? '');
+
     return response.data;
   },
 

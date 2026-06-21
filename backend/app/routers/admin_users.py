@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
-from ..deps import get_db, get_current_user
+from ..deps import get_db, get_current_user, require_admin
 from ..auth.models import User, AdminUser, DatasheetApproval, VendorSelectionLog
 from ..auth.utils import get_password_hash, verify_password
 from ..models.admin import (
@@ -22,12 +22,12 @@ router = APIRouter(prefix="/admin", tags=["Admin Management"])
 # ── Admin User CRUD ────────────────────────────────────────────────────────────
 
 @router.get("/users", response_model=list[AdminUserResponse])
-def list_users(db: Session = Depends(get_db), _: User = Depends(get_current_user)):
+def list_users(db: Session = Depends(get_db), _: User = Depends(require_admin)):
     return db.query(AdminUser).all()
 
 
 @router.post("/users", response_model=AdminUserResponse, status_code=201)
-def create_user(body: AdminUserCreate, db: Session = Depends(get_db), _: User = Depends(get_current_user)):
+def create_user(body: AdminUserCreate, db: Session = Depends(get_db), _: User = Depends(require_admin)):
     if body.password != body.confirm_password:
         raise HTTPException(400, "Passwords do not match")
     if db.query(AdminUser).filter(AdminUser.employee_id == body.employee_id).first():
@@ -69,7 +69,7 @@ def create_user(body: AdminUserCreate, db: Session = Depends(get_db), _: User = 
 
 
 @router.get("/users/{employee_id}", response_model=AdminUserResponse)
-def get_user(employee_id: str, db: Session = Depends(get_db), _: User = Depends(get_current_user)):
+def get_user(employee_id: str, db: Session = Depends(get_db), _: User = Depends(require_admin)):
     u = db.query(AdminUser).filter(AdminUser.employee_id == employee_id).first()
     if not u:
         raise HTTPException(404, "User not found")
@@ -77,7 +77,7 @@ def get_user(employee_id: str, db: Session = Depends(get_db), _: User = Depends(
 
 
 @router.put("/users/{employee_id}", response_model=AdminUserResponse)
-def update_user(employee_id: str, body: AdminUserUpdate, db: Session = Depends(get_db), _: User = Depends(get_current_user)):
+def update_user(employee_id: str, body: AdminUserUpdate, db: Session = Depends(get_db), _: User = Depends(require_admin)):
     u = db.query(AdminUser).filter(AdminUser.employee_id == employee_id).first()
     if not u:
         raise HTTPException(404, "User not found")
@@ -88,7 +88,7 @@ def update_user(employee_id: str, body: AdminUserUpdate, db: Session = Depends(g
 
 
 @router.delete("/users/{employee_id}", status_code=204)
-def delete_user(employee_id: str, db: Session = Depends(get_db), _: User = Depends(get_current_user)):
+def delete_user(employee_id: str, db: Session = Depends(get_db), _: User = Depends(require_admin)):
     u = db.query(AdminUser).filter(AdminUser.employee_id == employee_id).first()
     if not u:
         raise HTTPException(404, "User not found")
@@ -100,7 +100,7 @@ def delete_user(employee_id: str, db: Session = Depends(get_db), _: User = Depen
 
 
 @router.post("/users/{employee_id}/disable", response_model=AdminUserResponse)
-def disable_user(employee_id: str, db: Session = Depends(get_db), _: User = Depends(get_current_user)):
+def disable_user(employee_id: str, db: Session = Depends(get_db), _: User = Depends(require_admin)):
     u = db.query(AdminUser).filter(AdminUser.employee_id == employee_id).first()
     if not u:
         raise HTTPException(404, "User not found")
@@ -114,7 +114,7 @@ def disable_user(employee_id: str, db: Session = Depends(get_db), _: User = Depe
 
 
 @router.post("/users/{employee_id}/enable", response_model=AdminUserResponse)
-def enable_user(employee_id: str, db: Session = Depends(get_db), _: User = Depends(get_current_user)):
+def enable_user(employee_id: str, db: Session = Depends(get_db), _: User = Depends(require_admin)):
     u = db.query(AdminUser).filter(AdminUser.employee_id == employee_id).first()
     if not u:
         raise HTTPException(404, "User not found")
@@ -128,7 +128,7 @@ def enable_user(employee_id: str, db: Session = Depends(get_db), _: User = Depen
 
 
 @router.post("/users/{employee_id}/reset-password", response_model=AdminUserResponse)
-def reset_password(employee_id: str, body: ResetPasswordRequest, db: Session = Depends(get_db), _: User = Depends(get_current_user)):
+def reset_password(employee_id: str, body: ResetPasswordRequest, db: Session = Depends(get_db), _: User = Depends(require_admin)):
     if body.new_password != body.confirm_password:
         raise HTTPException(400, "Passwords do not match")
     u = db.query(AdminUser).filter(AdminUser.employee_id == employee_id).first()

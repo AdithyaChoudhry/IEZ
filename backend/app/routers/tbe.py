@@ -71,91 +71,161 @@ def _load_workbook_sheets(content: bytes, filename: str) -> dict:
         return result
 
 
-def _is_wabag_layout(rows: list) -> bool:
-    """
-    Detect WABAG datasheet layout: col0=section header, col1=param, col2+=value.
-    Heuristic: look for section keywords in col0 alongside param names in col1.
-    """
-    SECTION_KEYWORDS = {
-        "general", "process", "sensor", "transmitter", "certification",
-        "purchase", "options", "mechanical", "electrical", "safety",
-        "tank", "notes", "client", "consultant", "project", "plant",
-    }
-    wabag_hits = 0
-    for row in rows[:40]:
-        if not row:
+HEADER_SKIP = {"vatech", "wabag", "chennai", "murray", "alwarpet", "no. 11",
+               "instrument datasheet", "issued for", "enquiry", "document"}
+SECTION_KEYWORDS = {
+    "general", "process", "sensor", "transmitter", "certification",
+    "purchase", "options", "mechanical", "electrical", "safety",
+    "tank", "notes", "upper fluid", "lower fluid", "operating",
+    "loop powered", "external cage",
+}
+SKIP_PARAM_VALUES = {"parameter", "specification", "description",
+                     "sl.no", "s.no", "#", "item", ":", "/", "-"}
+
+
+def _meaningful_cells(row: list) -> list:
+    """Return [(col_idx, value)] for non-empty, non-junk, non-pure-number cells."""
+    out = []
+    for ci, cell in enumerate(row):
+        v = str(cell).strip() if cell else ""
+        if not v or v.lower() in JUNK_VALUES:
             continue
-        c0 = row[0].lower() if row[0] else ""
-        c1 = row[1].lower() if len(row) > 1 and row[1] else ""
-        if c0 and c1 and any(kw in c0 for kw in SECTION_KEYWORDS):
-            wabag_hits += 1
-    return wabag_hits >= 2
+        if v in (":", "/", "-", "%"):
+            continue
+        out.append((ci, v))
+    return out
+
+
+def _looks_like_section(text: str) -> bool:
+    """True only for genuine section headers — NOT for params that happen to contain a keyword."""
+    tl = text.strip().lower()
+    # multi-line cells at col 0 are always section/header
+    if "\n" in text and len(text) < 60:
+        return True
+    # company/doc header lines
+    if any(kw in tl for kw in HEADER_SKIP):
+        return True
+    # section keywords that appear as the ENTIRE cell (not embedded in a longer phrase)
+    # e.g. "General Data" → yes; "Operating Pressure" → no
+    words = set(tl.replace("\n", " ").split())
+    if any(kw in words for kw in SECTION_KEYWORDS):
+        # only treat as section if it's short (≤ 4 words) and NOT a known compound param
+        if len(words) <= 4 and not any(skip in tl for skip in ("pressure", "temperature", "protection", "classification", "current", "supply")):
+            return True
+    return False
+
+
+def _detect_split_col(rows: list) -> int:
+    """
+    Find the column index that divides params (left) from values (right).
+    Uses the most common column position of "Refer Annexure" and other values.
+    Falls back to the median column of all non-empty content.
+    """
+    max_col = max((len(r) for r in rows if r), default=5)
+    if max_col <= 5:
+        return 1  # simple 2-col sheet — split after col 1
+
+    # Vote: cells that are clearly values (annexure refs, known value patterns)
+    value_col_votes: dict = {}
+    all_content_cols: list = []
+
+    for row in rows:
+        cells = _meaningful_cells(row)
+        for ci, v in cells:
+            all_content_cols.append(ci)
+            vl = v.lower()
+            if ("refer annex" in vl or "annexure" in vl
+                    or vl in ("na", "nil", "yes", "no", "liquid", "gas", "atex")
+                    or any(unit in vl for unit in ("mA", "VDC", "VAC", "bar", "°C", "mm", "IP ", "SIL", "HART", "NPT"))):
+                value_col_votes[ci] = value_col_votes.get(ci, 0) + 1
+
+    if value_col_votes:
+        # the most-voted column is the primary value column
+        primary_val_col = max(value_col_votes, key=value_col_votes.get)
+        # split is one before the earliest value column that has significant votes
+        earliest_val = min(c for c, cnt in value_col_votes.items() if cnt >= 2) if any(cnt >= 2 for cnt in value_col_votes.values()) else primary_val_col
+        return max(0, earliest_val - 1)
+
+    # fallback: split at 60% of max_col
+    if all_content_cols:
+        sorted_cols = sorted(all_content_cols)
+        split = sorted_cols[len(sorted_cols) * 6 // 10]
+        return split
+
+    return max_col // 2
 
 
 def _extract_params(rows: list, sheet_name: str) -> list:
     """
-    Extract [{param, value, section, source, resolved}] from sheet rows.
-    Auto-detects WABAG layout vs simple 2-column layout.
+    Universal extractor — handles any WABAG datasheet layout:
+    - SOP template: col0=section, col1=param, col2=value
+    - iEZ generated: col0=section, col5=num, col6=param, col9=param2, col13=val, col16=val2
+    - Simple 2-col: col0=param, col1=value
+    Auto-detects the param/value split column.
     """
-    wabag = _is_wabag_layout(rows)
+    split = _detect_split_col(rows)
     current_section = ""
     results = []
-    seen_params = set()
+    seen: set = set()
+
+    in_header = True  # skip project header rows (PROJECT/CLIENT/etc.) at top
 
     for row in rows:
         if not row or all(not c for c in row):
             continue
 
-        if wabag:
-            c0 = row[0] if row[0] else ""
-            c1 = row[1] if len(row) > 1 and row[1] else ""
-            # update section tracker from col0 (short strings that aren't header cruft)
-            if c0 and len(c0) < 40 and c0.lower() not in ("0.0", "0", ""):
-                # skip company/address lines at top
-                if not any(k in c0.lower() for k in ("vatech", "wabag", "chennai", "murray", "alwarpet", "no. 11")):
-                    current_section = c0.strip()
-            param = c1.strip()
-            # value: cols 2, 3, 4 — concatenate non-junk values
-            val_parts = []
-            for ci in range(2, min(len(row), 8)):
-                v = row[ci].strip()
-                if v and v.lower() not in JUNK_VALUES:
-                    val_parts.append(v)
-            value = " / ".join(val_parts)
-        else:
-            # simple: col0=param, col1=value
-            param = row[0].strip() if row[0] else ""
-            value = row[1].strip() if len(row) > 1 and row[1] else ""
-            # try col2 if col1 is junk
-            if value.lower() in JUNK_VALUES and len(row) > 2:
-                value = row[2].strip()
-            current_section = ""
+        cells = _meaningful_cells(row)
+        if not cells:
+            continue
 
-        # skip empty, junk, or duplicate params
-        if not param or param.lower() in JUNK_VALUES:
-            continue
-        # skip header-like rows
-        if param.lower() in ("parameter", "specification", "description", "sl.no", "s.no", "#", "item"):
-            continue
-        # skip all-numeric params (line numbers etc.)
-        if param.replace(".", "").replace(" ", "").isdigit():
-            continue
-        # skip clearly non-spec text
-        if len(param) > 80:
-            continue
-        # deduplicate
-        key = (current_section.lower(), param.lower())
-        if key in seen_params:
-            continue
-        seen_params.add(key)
+        # Update section from col-0 cell if it looks like a section header
+        if cells[0][0] == 0 and _looks_like_section(cells[0][1]):
+            new_section = cells[0][1].replace("\n", " ").strip()[:50]
+            # once we hit a real instrument section, we're past the header
+            if any(kw in new_section.lower() for kw in SECTION_KEYWORDS) and not any(kw in new_section.lower() for kw in HEADER_SKIP):
+                in_header = False
+            current_section = new_section
+            cells = cells[1:]
 
-        results.append({
-            "param": param,
-            "value": value if value.lower() not in JUNK_VALUES else "",
-            "section": current_section,
-            "source": sheet_name,
-            "resolved": False,
-        })
+        # Skip project/doc header rows at the top of the sheet
+        if in_header:
+            continue
+
+        # Separate into left (params) and right (values)
+        left = [(ci, v) for ci, v in cells if ci <= split and not v.replace(".", "").isdigit()]
+        right = [(ci, v) for ci, v in cells if ci > split]
+
+        if not left:
+            continue
+
+        # Pair by index: left[0]→right[0], left[1]→right[1], etc.
+        for i, (pci, param) in enumerate(left):
+            param = param.strip()
+            if not param or len(param) > 80:
+                continue
+            if param.lower() in SKIP_PARAM_VALUES:
+                continue
+            # only skip as section if it's the ONLY thing in left (a stray header)
+            if _looks_like_section(param) and len(left) == 1:
+                current_section = param
+                continue
+
+            value = right[i][1] if i < len(right) else ""
+            if value.lower() in JUNK_VALUES:
+                value = ""
+
+            key = (current_section.lower()[:20], param.lower()[:40])
+            if key in seen:
+                continue
+            seen.add(key)
+
+            results.append({
+                "param": param,
+                "value": value,
+                "section": current_section,
+                "source": sheet_name,
+                "resolved": False,
+            })
 
     return results
 

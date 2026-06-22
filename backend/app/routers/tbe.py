@@ -912,3 +912,320 @@ def download_file(session_id: str, file_type: str, _: User = Depends(get_current
         raise HTTPException(404, "File not found — please generate the TBE first")
     return FileResponse(path, filename=FILE_MAP[file_type],
                         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# MODE 2 — Technical Offer Compliance Evaluation
+# All existing endpoints above are untouched.
+# ══════════════════════════════════════════════════════════════════════════════
+
+OFFER_FILE_MAP = {
+    "tbe":           "TBE_Report.xlsx",
+    "deviation":     "Deviation_Report.xlsx",
+    "compliance":    "Compliance_Summary.xlsx",
+    "clarification": "Clarification_Sheet.xlsx",
+}
+
+
+@router.post("/offer/analyze")
+async def analyze_vendor_offer(
+    file: UploadFile = File(...),
+    _: User = Depends(get_current_user),
+):
+    """
+    Extract vendor name, model and technical specifications from a vendor
+    offer document (PDF / XLSX / XLSM).  Returns a list of
+    {param, value, confidence} rows.
+    """
+    content = await file.read()
+    fname = file.filename or ""
+    extracted: list[dict] = []
+
+    # ── XLSX / XLSM extraction ────────────────────────────────────────────────
+    if fname.lower().endswith((".xlsx", ".xlsm", ".xls")):
+        sheets = _load_workbook_sheets(content, fname)
+        for sheet_name, rows in sheets.items():
+            for row in rows:
+                cells = _meaningful_cells(row)
+                if len(cells) >= 2:
+                    param = str(cells[0]).strip()
+                    value = str(cells[1]).strip()
+                    if param and value and param.lower() not in JUNK_VALUES and value.lower() not in JUNK_VALUES:
+                        extracted.append({"param": param, "value": value, "confidence": 88})
+
+    # ── PDF extraction ────────────────────────────────────────────────────────
+    elif fname.lower().endswith(".pdf"):
+        try:
+            import pdfplumber
+            with pdfplumber.open(io.BytesIO(content)) as pdf:
+                for page in pdf.pages:
+                    tables = page.extract_tables()
+                    for table in tables:
+                        for row in (table or []):
+                            cells = [str(c).strip() for c in row if c and str(c).strip()]
+                            if len(cells) >= 2:
+                                param, value = cells[0], cells[1]
+                                if param.lower() not in JUNK_VALUES and value.lower() not in JUNK_VALUES:
+                                    extracted.append({"param": param, "value": value, "confidence": 82})
+                    # Also grab key:value lines from raw text
+                    text = page.extract_text() or ""
+                    for line in text.split("\n"):
+                        if ":" in line:
+                            parts = line.split(":", 1)
+                            p, v = parts[0].strip(), parts[1].strip()
+                            if p and v and len(p) < 60 and p.lower() not in JUNK_VALUES:
+                                extracted.append({"param": p, "value": v, "confidence": 72})
+        except Exception as e:
+            logger.warning("PDF extraction failed: %s", e)
+
+    # Deduplicate by param (keep highest confidence)
+    seen: dict[str, dict] = {}
+    for row in extracted:
+        key = row["param"].lower().strip()
+        if key not in seen or row["confidence"] > seen[key]["confidence"]:
+            seen[key] = row
+    result = list(seen.values())
+
+    # Try to detect vendor name and model from the top rows
+    vendor_name, model_number = "", ""
+    for row in result[:30]:
+        pl = row["param"].lower()
+        if not vendor_name and any(k in pl for k in ("vendor", "manufacturer", "make", "supplier")):
+            vendor_name = row["value"]
+        if not model_number and any(k in pl for k in ("model", "model no", "model number", "part no", "part number", "type")):
+            model_number = row["value"]
+
+    return {
+        "vendor_name": vendor_name,
+        "model_number": model_number,
+        "specs": result,
+    }
+
+
+class OfferVendorSpec(BaseModel):
+    param: str
+    value: str
+    confidence: float = 100.0
+
+
+class OfferVendor(BaseModel):
+    label: str          # "Vendor 1", "Vendor 2", etc.
+    vendor_name: str
+    model_number: str
+    specs: list[OfferVendorSpec]
+
+
+class OfferGenerateRequest(BaseModel):
+    instrument_type: str
+    wabag_specs: list[dict]          # [{param, value}]
+    vendors: list[OfferVendor]
+    tbe_replies: dict                # {label: {param: reply}}
+    dev_severities: dict             # {label: {param: severity}}
+    recommended_vendor: str = ""
+    recommended_model: str = ""
+    session_id: str = ""
+
+
+@router.post("/offer/generate")
+def generate_offer_tbe(body: OfferGenerateRequest, _: User = Depends(get_current_user)):
+    """
+    Generate TBE Report, Deviation Report, Compliance Summary and
+    Clarification Sheet for Mode 2 (Technical Offer Compliance Evaluation).
+    Uses the same styling as the existing generate_tbe endpoint.
+    """
+    import openpyxl
+    from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
+    from rapidfuzz import fuzz as _fuzz
+
+    sid = body.session_id or str(uuid.uuid4())
+    out_dir = TBE_TMP / sid
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    thin = Side(style="thin", color="CCCCCC")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+    STATUS_COLOR = {
+        "COMPLIES":               "E8F5E9",
+        "EXCEEDS REQUIREMENT":    "E3F2FD",
+        "DEVIATION":              "FFEBEE",
+        "CLARIFICATION REQUIRED": "FFF8E1",
+        "NOT ACCEPTABLE":         "FFCDD2",
+        "TECHNICALLY ACCEPTABLE": "E0F7FA",
+    }
+
+    def hfill(hex_c): return PatternFill("solid", fgColor=hex_c)
+    def cfill(hex_c): return PatternFill("solid", fgColor=hex_c)
+
+    def style_hdr(cell, hex_c="1E3A5F"):
+        cell.fill = hfill(hex_c)
+        cell.font = Font(bold=True, color="FFFFFF", size=9)
+        cell.alignment = Alignment(wrap_text=True, vertical="center")
+        cell.border = border
+
+    def style_data(cell, hex_c=None):
+        if hex_c:
+            cell.fill = cfill(hex_c)
+        cell.font = Font(size=9)
+        cell.alignment = Alignment(wrap_text=True, vertical="center")
+        cell.border = border
+
+    # Build compliance matrix
+    wabag_map = {r["param"]: r["value"] for r in body.wabag_specs}
+    params = [r["param"] for r in body.wabag_specs]
+
+    # For each vendor, find best matching spec value
+    def find_vendor_value(vendor: OfferVendor, param: str) -> str:
+        best_score, best_val = 0, ""
+        for sp in vendor.specs:
+            score = _fuzz.partial_ratio(param.lower(), sp.param.lower())
+            if score > best_score:
+                best_score, best_val = score, sp.value
+        return best_val if best_score >= 55 else ""
+
+    # Evaluate compliance for each vendor × param
+    compliance_matrix: list[dict] = []
+    for param in params:
+        wabag_req = wabag_map[param]
+        row: dict = {"param": param, "wabag": wabag_req}
+        for v in body.vendors:
+            vval = find_vendor_value(v, param)
+            status = _evaluate_compliance(wabag_req, vval)
+            reply = body.tbe_replies.get(v.label, {}).get(param, _auto_reply(status))
+            severity = body.dev_severities.get(v.label, {}).get(param, "")
+            row[v.label] = {"value": vval, "status": status, "reply": reply, "severity": severity}
+        compliance_matrix.append(row)
+
+    # ── TBE Report ──────────────────────────────────────────────────────────
+    wb_tbe = openpyxl.Workbook()
+    ws = wb_tbe.active
+    ws.title = "TBE Report"
+
+    headers = ["Sl.No", "Specification", "WABAG Requirement"]
+    for v in body.vendors:
+        headers += [f"{v.label} Offer", f"WABAG Reply ({v.label})"]
+    for ci, h in enumerate(headers, 1):
+        style_hdr(ws.cell(row=1, column=ci, value=h))
+
+    for ri, row in enumerate(compliance_matrix, 2):
+        ws.cell(row=ri, column=1, value=ri - 1)
+        style_data(ws.cell(row=ri, column=2, value=row["param"]))
+        style_data(ws.cell(row=ri, column=3, value=row["wabag"]))
+        col = 4
+        for v in body.vendors:
+            vd = row[v.label]
+            sc = STATUS_COLOR.get(vd["status"], "FFFFFF")
+            style_data(ws.cell(row=ri, column=col, value=vd["value"]), sc)
+            style_data(ws.cell(row=ri, column=col + 1, value=vd["reply"]))
+            col += 2
+
+    for col_cells in ws.columns:
+        ws.column_dimensions[col_cells[0].column_letter].width = 22
+    ws.row_dimensions[1].height = 30
+    wb_tbe.save(out_dir / "TBE_Report.xlsx")
+
+    # ── Deviation Report ─────────────────────────────────────────────────────
+    wb_dev = openpyxl.Workbook()
+    ws_dev = wb_dev.active
+    ws_dev.title = "Deviation Report"
+    dev_headers = ["Sl.No", "Specification", "WABAG Requirement", "Vendor", "Vendor Offer", "Deviation Status", "Severity"]
+    for ci, h in enumerate(dev_headers, 1):
+        style_hdr(ws_dev.cell(row=1, column=ci, value=h))
+    dev_ri = 2
+    for row in compliance_matrix:
+        for v in body.vendors:
+            vd = row[v.label]
+            if vd["status"] in ("DEVIATION", "NOT ACCEPTABLE", "CLARIFICATION REQUIRED"):
+                sc = STATUS_COLOR.get(vd["status"], "FFFFFF")
+                vals = [dev_ri - 1, row["param"], row["wabag"], v.label, vd["value"], vd["status"],
+                        body.dev_severities.get(v.label, {}).get(row["param"], vd.get("severity", "Major"))]
+                for ci, val in enumerate(vals, 1):
+                    style_data(ws_dev.cell(row=dev_ri, column=ci, value=val), sc if ci >= 6 else None)
+                dev_ri += 1
+    for col_cells in ws_dev.columns:
+        ws_dev.column_dimensions[col_cells[0].column_letter].width = 22
+    wb_dev.save(out_dir / "Deviation_Report.xlsx")
+
+    # ── Compliance Summary ────────────────────────────────────────────────────
+    wb_cs = openpyxl.Workbook()
+    ws_cs = wb_cs.active
+    ws_cs.title = "Compliance Summary"
+    cs_headers = ["Vendor", "Model", "Compliance %", "Complies", "Exceeds", "Deviations", "Clarifications", "Not Acceptable"]
+    for ci, h in enumerate(cs_headers, 1):
+        style_hdr(ws_cs.cell(row=1, column=ci, value=h))
+    for ri_cs, v in enumerate(body.vendors, 2):
+        statuses = [compliance_matrix[i][v.label]["status"] for i in range(len(params))]
+        total = len(statuses)
+        complies = sum(1 for s in statuses if s in ("COMPLIES", "EXCEEDS REQUIREMENT", "TECHNICALLY ACCEPTABLE"))
+        pct = round(complies / total * 100, 1) if total else 0
+        row_vals = [
+            v.label, v.model_number, f"{pct}%",
+            sum(1 for s in statuses if s == "COMPLIES"),
+            sum(1 for s in statuses if s == "EXCEEDS REQUIREMENT"),
+            sum(1 for s in statuses if s == "DEVIATION"),
+            sum(1 for s in statuses if s == "CLARIFICATION REQUIRED"),
+            sum(1 for s in statuses if s == "NOT ACCEPTABLE"),
+        ]
+        for ci, val in enumerate(row_vals, 1):
+            style_data(ws_cs.cell(row=ri_cs, column=ci, value=val))
+    for col_cells in ws_cs.columns:
+        ws_cs.column_dimensions[col_cells[0].column_letter].width = 18
+    wb_cs.save(out_dir / "Compliance_Summary.xlsx")
+
+    # ── Clarification Sheet ───────────────────────────────────────────────────
+    wb_cl = openpyxl.Workbook()
+    ws_cl = wb_cl.active
+    ws_cl.title = "Clarification Sheet"
+    cl_headers = ["Sl.No", "Specification", "WABAG Requirement", "Vendor", "Vendor Offer", "Clarification Required", "WABAG Query"]
+    for ci, h in enumerate(cl_headers, 1):
+        style_hdr(ws_cl.cell(row=1, column=ci, value=h))
+    cl_ri = 2
+    for row in compliance_matrix:
+        for v in body.vendors:
+            vd = row[v.label]
+            if vd["status"] == "CLARIFICATION REQUIRED":
+                vals = [cl_ri - 1, row["param"], row["wabag"], v.label, vd["value"], "Yes",
+                        f"Please clarify vendor's offered {row['param']} against WABAG requirement: {row['wabag']}"]
+                for ci, val in enumerate(vals, 1):
+                    style_data(ws_cl.cell(row=cl_ri, column=ci, value=val),
+                               "FFF8E1" if ci >= 6 else None)
+                cl_ri += 1
+    for col_cells in ws_cl.columns:
+        ws_cl.column_dimensions[col_cells[0].column_letter].width = 22
+    wb_cl.save(out_dir / "Clarification_Sheet.xlsx")
+
+    # Compute summary stats for response
+    all_statuses: list[str] = []
+    for row in compliance_matrix:
+        for v in body.vendors:
+            all_statuses.append(row[v.label]["status"])
+
+    return {
+        "session_id": sid,
+        "total_specs": len(params),
+        "vendors": [
+            {
+                "label": v.label,
+                "vendor_name": v.vendor_name,
+                "model_number": v.model_number,
+                "match_pct": round(
+                    sum(1 for s in [compliance_matrix[i][v.label]["status"] for i in range(len(params))]
+                        if s in ("COMPLIES", "EXCEEDS REQUIREMENT", "TECHNICALLY ACCEPTABLE"))
+                    / max(len(params), 1) * 100, 1
+                ),
+            }
+            for v in body.vendors
+        ],
+    }
+
+
+@router.get("/offer/download/{session_id}/{file_type}")
+def download_offer_file(session_id: str, file_type: str, _: User = Depends(get_current_user)):
+    if file_type not in OFFER_FILE_MAP:
+        raise HTTPException(400, "file_type must be tbe | deviation | compliance | clarification")
+    if "/" in session_id or ".." in session_id:
+        raise HTTPException(400, "Invalid session_id")
+    path = TBE_TMP / session_id / OFFER_FILE_MAP[file_type]
+    if not path.exists():
+        raise HTTPException(404, "File not found — please generate the TBE first")
+    return FileResponse(path, filename=OFFER_FILE_MAP[file_type],
+                        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")

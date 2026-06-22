@@ -2,7 +2,7 @@
  * Vendor Analysis & Technical Bid Evaluation (TBE) Module
  * Supports all instrument types — universal datasheet analysis engine.
  */
-import { useState, useRef, useCallback, useEffect } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 import {
   FileSpreadsheet, CheckCircle2, AlertTriangle,
   Loader2, BarChart2, Download, ShieldCheck, ChevronRight,
@@ -80,7 +80,17 @@ interface AnalysisResult {
 type Step =
   | 'upload' | 'analyzing' | 'requirements' | 'spec_edit'
   | 'matching' | 'vendor_select' | 'tbe_table'
-  | 'generating' | 'dashboard' | 'approval' | 'done';
+  | 'generating' | 'dashboard' | 'approval' | 'done'
+  // Mode 2 — Technical Offer Compliance Evaluation
+  | 'mode_select'
+  | 'offer_upload' | 'offer_analyzing' | 'offer_mapping'
+  | 'offer_tbe' | 'offer_generating' | 'offer_dashboard' | 'offer_approval' | 'offer_done';
+
+interface OfferVendorSpec { param: string; value: string; confidence: number; }
+interface OfferVendor {
+  label: string; vendor_name: string; model_number: string;
+  file: File | null; specs: OfferVendorSpec[]; loading: boolean; error: string;
+}
 
 const STATUS_META: Record<string, { bg: string; text: string; chip: string; severity: string }> = {
   'COMPLIES':               { bg: 'rgba(74,222,128,0.10)',  text: '#4ade80',      chip: 'COMPLIES',   severity: '' },
@@ -372,6 +382,19 @@ export default function VendorTBE() {
   const [approving, setApproving] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  // ── Mode 2 state ────────────────────────────────────────────────────────────
+  const EMPTY_OFFER_VENDORS = (): OfferVendor[] =>
+    [1,2,3,4,5].map(n => ({ label: `Vendor ${n}`, vendor_name: '', model_number: '', file: null, specs: [], loading: false, error: '' }));
+  const [offerVendors, setOfferVendors] = useState<OfferVendor[]>(EMPTY_OFFER_VENDORS());
+  const [offerTbeReplies, setOfferTbeReplies]     = useState<Record<string, Record<string, string>>>({});
+  const [offerDevSeverities, setOfferDevSeverities] = useState<Record<string, Record<string, string>>>({});
+  const [offerSessionId, setOfferSessionId]       = useState('');
+  const [offerResult, setOfferResult]             = useState<any>(null);
+  const [offerApprovalReqId, setOfferApprovalReqId] = useState<number | null>(null);
+  const [offerApprovalStatus, setOfferApprovalStatus] = useState<'idle'|'pending'|'approved'|'rejected'>('idle');
+  const [offerApprovalResult, setOfferApprovalResult] = useState<any>(null);
+  const offerPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
   const fileRef = useRef<HTMLInputElement>(null);
 
   const reset = () => {
@@ -484,7 +507,10 @@ export default function VendorTBE() {
     if (editingIdx === idx) setEditingIdx(null);
   };
 
-  // ── match vendors ─────────────────────────────────────────────────────────────
+  // ── proceed to mode selection (called from requirements step) ─────────────────
+  const proceedToModeSelect = () => { setStep('mode_select'); };
+
+  // ── Mode 1: match vendors from DB ────────────────────────────────────────────
   const runMatching = async () => {
     setStep('matching'); setError('');
     try {
@@ -499,6 +525,110 @@ export default function VendorTBE() {
     } catch (e: any) {
       setError(e?.response?.data?.detail || 'Vendor matching failed');
       setStep('requirements');
+    }
+  };
+
+  // ── Mode 2: analyze a single vendor offer file ──────────────────────────────
+  const analyzeOfferFile = async (idx: number) => {
+    const v = offerVendors[idx];
+    if (!v.file) return;
+    setOfferVendors(prev => prev.map((ov, i) => i === idx ? { ...ov, loading: true, error: '' } : ov));
+    try {
+      const fd = new FormData(); fd.append('file', v.file);
+      const r = await api.post('/tbe/offer/analyze', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      setOfferVendors(prev => prev.map((ov, i) => i === idx ? {
+        ...ov, loading: false,
+        vendor_name: r.data.vendor_name || ov.vendor_name,
+        model_number: r.data.model_number || ov.model_number,
+        specs: r.data.specs || [],
+      } : ov));
+    } catch (e: any) {
+      setOfferVendors(prev => prev.map((ov, i) => i === idx ? { ...ov, loading: false, error: 'Analysis failed. Check file format.' } : ov));
+    }
+  };
+
+  // ── Mode 2: generate offer TBE ───────────────────────────────────────────────
+  const generateOfferReports = async () => {
+    const activeOffers = offerVendors.filter(v => v.specs.length > 0);
+    if (activeOffers.length === 0) { setError('Please upload and analyze at least one vendor offer.'); return; }
+    setStep('offer_generating'); setError('');
+    const sid = offerSessionId || crypto.randomUUID();
+    setOfferSessionId(sid);
+    try {
+      const r = await api.post('/tbe/offer/generate', {
+        instrument_type: analysis?.instrument_type || '',
+        wabag_specs: editedSpecs.filter(s => s.param && s.value).map(s => ({ param: s.param, value: s.value })),
+        vendors: activeOffers.map(v => ({
+          label: v.label, vendor_name: v.vendor_name, model_number: v.model_number,
+          specs: v.specs,
+        })),
+        tbe_replies: offerTbeReplies,
+        dev_severities: offerDevSeverities,
+        recommended_vendor: '',
+        recommended_model: '',
+        session_id: sid,
+      });
+      setOfferResult(r.data);
+      setStep('offer_dashboard');
+    } catch (e: any) {
+      setError(e?.response?.data?.detail || 'Report generation failed');
+      setStep('offer_tbe');
+    }
+  };
+
+  // ── Mode 2: download offer file ──────────────────────────────────────────────
+  const downloadOfferFile = (type: 'tbe'|'deviation'|'compliance'|'clarification') => {
+    const token = localStorage.getItem('access_token');
+    const names = { tbe: 'TBE_Report.xlsx', deviation: 'Deviation_Report.xlsx', compliance: 'Compliance_Summary.xlsx', clarification: 'Clarification_Sheet.xlsx' };
+    fetch(`/api/tbe/offer/download/${offerSessionId}/${type}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    }).then(r => r.blob()).then(blob => {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href = url; a.download = names[type]; a.click();
+      URL.revokeObjectURL(url);
+    }).catch(() => setError('Download failed'));
+  };
+
+  // ── Mode 2: submit approval ──────────────────────────────────────────────────
+  const submitOfferApproval = async () => {
+    const empName = localStorage.getItem('user_employee_name') || '';
+    const empId   = localStorage.getItem('user_employee_id') || '';
+    const activeOffers = offerVendors.filter(v => v.specs.length > 0);
+    setOfferApprovalStatus('pending');
+    try {
+      const r = await api.post('/approvals', {
+        request_type: 'tbe',
+        submitted_by_name: empName,
+        submitted_by_id: empId,
+        instrument_type: analysis?.instrument_type || '',
+        payload: {
+          instrument_type: analysis?.instrument_type || '',
+          mode: 'technical_offer',
+          recommended_vendor: activeOffers[0]?.vendor_name || '',
+          recommended_model: activeOffers[0]?.model_number || '',
+          session_id: offerSessionId,
+        },
+      });
+      const reqId = r.data.id;
+      setOfferApprovalReqId(reqId);
+      offerPollRef.current = setInterval(async () => {
+        try {
+          const poll = await api.get(`/approvals/${reqId}`);
+          if (poll.data.status === 'approved') {
+            clearInterval(offerPollRef.current!);
+            setOfferApprovalResult({ approved_by: poll.data.reviewed_by_name, timestamp: poll.data.updated_at });
+            setOfferApprovalStatus('approved');
+            setStep('offer_done');
+          } else if (poll.data.status === 'rejected') {
+            clearInterval(offerPollRef.current!);
+            setOfferApprovalStatus('rejected');
+            setError('Approval was rejected by Lead Engineer.');
+          }
+        } catch { /* ignore */ }
+      }, 12000);
+    } catch (e: any) {
+      setError(e?.response?.data?.detail || 'Failed to submit approval');
+      setOfferApprovalStatus('idle');
     }
   };
 
@@ -615,9 +745,22 @@ export default function VendorTBE() {
   const allParams = activeVendors[0]?.spec_results.map(r => r.param) || [];
 
   // ── step bar ──────────────────────────────────────────────────────────────────
-  const STEPS = [
+  const isMode2 = ['mode_select','offer_upload','offer_analyzing','offer_mapping','offer_tbe','offer_generating','offer_dashboard','offer_approval','offer_done'].includes(step);
+
+  const STEPS = isMode2 ? [
+    { key: 'upload',          label: 'Upload' },
+    { key: 'requirements',    label: 'Req. Builder' },
+    { key: 'mode_select',     label: 'Mode' },
+    { key: 'offer_upload',    label: 'Offer Upload' },
+    { key: 'offer_mapping',   label: 'Spec Mapping' },
+    { key: 'offer_tbe',       label: 'TBE Table' },
+    { key: 'offer_dashboard', label: 'Dashboard' },
+    { key: 'offer_approval',  label: 'Approval' },
+    { key: 'offer_done',      label: 'Download' },
+  ] : [
     { key: 'upload',        label: 'Upload' },
     { key: 'requirements',  label: 'Req. Builder' },
+    { key: 'mode_select',   label: 'Mode' },
     { key: 'vendor_select', label: 'Vendors' },
     { key: 'tbe_table',     label: 'TBE Table' },
     { key: 'dashboard',     label: 'Dashboard' },
@@ -769,11 +912,11 @@ export default function VendorTBE() {
                 style={{ background: 'var(--s2)', color: 'var(--t1)', border: '1px solid var(--b1)' }}>
                 ← Back
               </button>
-              <button onClick={runMatching}
+              <button onClick={proceedToModeSelect}
                 disabled={editedSpecs.filter(s => s.param && s.value).length === 0}
                 className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold"
                 style={{ background: 'linear-gradient(135deg,var(--em),#1d4ed8)', color: '#fff', opacity: editedSpecs.filter(s => s.param && s.value).length ? 1 : 0.4 }}>
-                <ShieldCheck className="w-3.5 h-3.5" /> Lock & Run Vendor Analysis <ChevronRight className="w-4 h-4" />
+                <ShieldCheck className="w-3.5 h-3.5" /> Freeze Requirements <ChevronRight className="w-4 h-4" />
               </button>
             </div>
 
@@ -1360,6 +1503,498 @@ export default function VendorTBE() {
                 { type: 'compliance' as const, label: 'Download Compliance Summary', desc: 'Scorecard + Recommended Vendor sheet', color: '#4ade80' },
               ].map(btn => (
                 <button key={btn.type} onClick={() => downloadFile(btn.type)}
+                  className="w-full flex items-center gap-3 px-5 py-4 rounded-xl text-left transition-all"
+                  style={{ background: 'var(--s1)', border: '1px solid var(--b1)' }}
+                  onMouseEnter={e => (e.currentTarget.style.borderColor = btn.color)}
+                  onMouseLeave={e => (e.currentTarget.style.borderColor = 'var(--b1)')}>
+                  <Download className="w-5 h-5 flex-shrink-0" style={{ color: btn.color }} />
+                  <div>
+                    <p className="text-sm font-semibold" style={{ color: 'var(--t0)' }}>{btn.label}</p>
+                    <p className="text-xs" style={{ color: 'var(--t2)' }}>{btn.desc}</p>
+                  </div>
+                </button>
+              ))}
+            </div>
+
+            <button onClick={reset}
+              className="w-full flex items-center justify-center gap-2 py-3 rounded-xl text-sm font-semibold"
+              style={{ background: 'var(--s2)', color: 'var(--t1)', border: '1px solid var(--b1)' }}>
+              <RefreshCw className="w-4 h-4" /> Start New TBE
+            </button>
+          </div>
+        )}
+
+        {/* ══════════════════════════════════════════════════════════════════════
+            MODE SELECTION SCREEN
+        ══════════════════════════════════════════════════════════════════════ */}
+        {step === 'mode_select' && (
+          <div className="max-w-3xl mx-auto space-y-4">
+            <div className="text-center mb-6">
+              <p className="text-lg font-black" style={{ color: 'var(--t0)' }}>Select Evaluation Mode</p>
+              <p className="text-xs mt-1" style={{ color: 'var(--t2)' }}>
+                {editedSpecs.filter(s => s.param && s.value).length} technical requirements frozen · {analysis?.instrument_type}
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* Mode 1 */}
+              <div className="rounded-2xl p-6 flex flex-col gap-4" style={{ background: 'var(--s1)', border: '2px solid rgba(59,130,246,0.3)' }}>
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ background: 'var(--em-dim)' }}>
+                    <Database className="w-5 h-5" style={{ color: 'var(--em-lt)' }} />
+                  </div>
+                  <div>
+                    <p className="text-sm font-black" style={{ color: 'var(--t0)' }}>Mode 1</p>
+                    <p className="text-xs font-semibold" style={{ color: 'var(--em-lt)' }}>Vendor Analysis & Model Recommendation</p>
+                  </div>
+                </div>
+                <p className="text-xs leading-relaxed" style={{ color: 'var(--t2)' }}>
+                  Use the Vendor Database and Vendor Analysis Engine to identify suitable models from approved vendors and generate Technical Bid Evaluation.
+                </p>
+                <button onClick={runMatching}
+                  className="w-full py-3 rounded-xl text-sm font-bold flex items-center justify-center gap-2 mt-auto"
+                  style={{ background: 'linear-gradient(135deg,var(--em),#1d4ed8)', color: '#fff' }}>
+                  Proceed with Vendor Analysis <ChevronRight className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Mode 2 */}
+              <div className="rounded-2xl p-6 flex flex-col gap-4" style={{ background: 'var(--s1)', border: '2px solid rgba(139,92,246,0.3)' }}>
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ background: 'rgba(139,92,246,0.12)' }}>
+                    <FileSpreadsheet className="w-5 h-5" style={{ color: '#a78bfa' }} />
+                  </div>
+                  <div>
+                    <p className="text-sm font-black" style={{ color: 'var(--t0)' }}>Mode 2</p>
+                    <p className="text-xs font-semibold" style={{ color: '#a78bfa' }}>Technical Offer Compliance Evaluation</p>
+                  </div>
+                </div>
+                <p className="text-xs leading-relaxed" style={{ color: 'var(--t2)' }}>
+                  Evaluate actual vendor technical offers submitted during procurement and generate TBE, Deviation Report, Compliance Summary, and Clarification Sheet.
+                </p>
+                <button onClick={() => setStep('offer_upload')}
+                  className="w-full py-3 rounded-xl text-sm font-bold flex items-center justify-center gap-2 mt-auto"
+                  style={{ background: 'linear-gradient(135deg,#7c3aed,#a78bfa)', color: '#fff' }}>
+                  Proceed with Technical Offer Evaluation <ChevronRight className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            <button onClick={() => setStep('requirements')}
+              className="flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-medium"
+              style={{ background: 'var(--s2)', color: 'var(--t1)', border: '1px solid var(--b1)' }}>
+              ← Back to Requirements
+            </button>
+          </div>
+        )}
+
+        {/* ══════════════════════════════════════════════════════════════════════
+            MODE 2 — STEP 1: UPLOAD VENDOR OFFERS
+        ══════════════════════════════════════════════════════════════════════ */}
+        {step === 'offer_upload' && (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between flex-wrap gap-3">
+              <div>
+                <p className="text-sm font-bold" style={{ color: 'var(--t0)' }}>Upload Vendor Technical Offers</p>
+                <p className="text-xs mt-0.5" style={{ color: 'var(--t2)' }}>Supported: PDF, XLSX, XLSM · Upload up to 5 vendor offers</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button onClick={() => setStep('mode_select')}
+                  className="flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-medium"
+                  style={{ background: 'var(--s2)', color: 'var(--t1)', border: '1px solid var(--b1)' }}>
+                  ← Back
+                </button>
+                <button
+                  onClick={() => {
+                    const analyzed = offerVendors.filter(v => v.specs.length > 0);
+                    if (analyzed.length === 0) { setError('Analyze at least one vendor offer before proceeding.'); return; }
+                    setError('');
+                    // Initialize tbeReplies from auto-generated values
+                    const replies: Record<string, Record<string, string>> = {};
+                    const severities: Record<string, Record<string, string>> = {};
+                    analyzed.forEach(v => { replies[v.label] = {}; severities[v.label] = {}; });
+                    setOfferTbeReplies(replies); setOfferDevSeverities(severities);
+                    setStep('offer_mapping');
+                  }}
+                  className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold"
+                  style={{ background: 'linear-gradient(135deg,#7c3aed,#a78bfa)', color: '#fff', opacity: offerVendors.some(v => v.specs.length > 0) ? 1 : 0.5 }}>
+                  Review Spec Mapping <ChevronRight className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+              {offerVendors.map((v, idx) => (
+                <div key={idx} className="rounded-2xl p-4 space-y-3"
+                  style={{ background: 'var(--s1)', border: `1px solid ${v.specs.length > 0 ? 'rgba(74,222,128,0.3)' : 'var(--b1)'}` }}>
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold px-2 py-0.5 rounded"
+                      style={{ background: 'rgba(139,92,246,0.1)', color: '#a78bfa' }}>{v.label}</span>
+                    {v.specs.length > 0 && (
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded"
+                        style={{ background: 'rgba(74,222,128,0.1)', color: '#4ade80' }}>
+                        ✓ {v.specs.length} specs extracted
+                      </span>
+                    )}
+                  </div>
+
+                  <input
+                    type="text" placeholder="Vendor Name (auto-detected)"
+                    value={v.vendor_name}
+                    onChange={e => setOfferVendors(prev => prev.map((ov, i) => i === idx ? { ...ov, vendor_name: e.target.value } : ov))}
+                    className="w-full px-3 py-1.5 rounded-lg text-xs"
+                    style={{ background: 'var(--s0)', border: '1px solid var(--b2)', color: 'var(--t0)', outline: 'none' }}
+                  />
+                  <input
+                    type="text" placeholder="Model Number (auto-detected)"
+                    value={v.model_number}
+                    onChange={e => setOfferVendors(prev => prev.map((ov, i) => i === idx ? { ...ov, model_number: e.target.value } : ov))}
+                    className="w-full px-3 py-1.5 rounded-lg text-xs"
+                    style={{ background: 'var(--s0)', border: '1px solid var(--b2)', color: 'var(--t0)', outline: 'none' }}
+                  />
+
+                  <label className="flex flex-col items-center justify-center gap-2 w-full py-4 rounded-xl cursor-pointer"
+                    style={{ background: 'var(--s2)', border: '1.5px dashed var(--b2)' }}>
+                    <input type="file" accept=".pdf,.xlsx,.xlsm,.xls" className="hidden"
+                      onChange={e => {
+                        const f = e.target.files?.[0];
+                        if (f) {
+                          setOfferVendors(prev => prev.map((ov, i) => i === idx ? { ...ov, file: f, specs: [], vendor_name: ov.vendor_name, model_number: ov.model_number } : ov));
+                        }
+                      }} />
+                    <FileSpreadsheet className="w-4 h-4" style={{ color: 'var(--t2)' }} />
+                    <span className="text-[10px]" style={{ color: 'var(--t2)' }}>
+                      {v.file ? v.file.name : 'Click to upload offer file'}
+                    </span>
+                  </label>
+
+                  {v.file && v.specs.length === 0 && (
+                    <button onClick={() => analyzeOfferFile(idx)} disabled={v.loading}
+                      className="w-full py-2 rounded-xl text-xs font-bold flex items-center justify-center gap-2"
+                      style={{ background: 'linear-gradient(135deg,#7c3aed,#a78bfa)', color: '#fff', opacity: v.loading ? 0.6 : 1 }}>
+                      {v.loading ? <><Loader2 className="w-3 h-3 animate-spin" /> Analyzing…</> : 'Analyze Offer'}
+                    </button>
+                  )}
+                  {v.error && <p className="text-[10px]" style={{ color: '#f87171' }}>{v.error}</p>}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* ══════════════════════════════════════════════════════════════════════
+            MODE 2 — STEP 2: SPEC MAPPING / VALIDATION
+        ══════════════════════════════════════════════════════════════════════ */}
+        {step === 'offer_mapping' && (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between flex-wrap gap-3">
+              <div>
+                <p className="text-sm font-bold" style={{ color: 'var(--t0)' }}>Vendor Specification Mapping</p>
+                <p className="text-xs" style={{ color: 'var(--t2)' }}>Review and correct extracted specs before compliance evaluation</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button onClick={() => setStep('offer_upload')}
+                  className="flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-medium"
+                  style={{ background: 'var(--s2)', color: 'var(--t1)', border: '1px solid var(--b1)' }}>
+                  ← Back
+                </button>
+                <button onClick={() => { setOfferTbeReplies({}); setOfferDevSeverities({}); setStep('offer_tbe'); }}
+                  className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold"
+                  style={{ background: 'linear-gradient(135deg,#7c3aed,#a78bfa)', color: '#fff' }}>
+                  Confirm & Build TBE <ChevronRight className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            {offerVendors.filter(v => v.specs.length > 0).map((v, vidx) => (
+              <div key={vidx} className="rounded-2xl overflow-hidden" style={{ border: '1px solid rgba(139,92,246,0.2)' }}>
+                <div className="px-4 py-3 flex items-center justify-between"
+                  style={{ background: 'rgba(139,92,246,0.08)', borderBottom: '1px solid rgba(139,92,246,0.15)' }}>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-bold" style={{ color: '#a78bfa' }}>{v.label}</span>
+                    <span className="text-xs" style={{ color: 'var(--t2)' }}>{v.vendor_name} · {v.model_number}</span>
+                  </div>
+                  <span className="text-[10px]" style={{ color: 'var(--t2)' }}>{v.specs.length} specs · Confidence shown as %</span>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr style={{ background: 'var(--s2)' }}>
+                        <th className="text-left px-3 py-2 font-bold" style={{ color: 'var(--t1)', width: '35%' }}>Parameter</th>
+                        <th className="text-left px-3 py-2 font-bold" style={{ color: 'var(--t1)', width: '50%' }}>Extracted Value</th>
+                        <th className="text-left px-3 py-2 font-bold" style={{ color: 'var(--t1)', width: '15%' }}>Confidence</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {v.specs.map((sp, si) => (
+                        <tr key={si} style={{ borderTop: '1px solid var(--b0)', background: si % 2 ? 'var(--s1)' : 'transparent' }}>
+                          <td className="px-3 py-1.5">
+                            <input value={sp.param}
+                              onChange={e => setOfferVendors(prev => prev.map((ov) => {
+                                if (ov.label !== v.label) return ov;
+                                const specs = ov.specs.map((s, i) => i === si ? { ...s, param: e.target.value } : s);
+                                return { ...ov, specs };
+                              }))}
+                              className="w-full px-2 py-0.5 rounded text-xs"
+                              style={{ background: 'transparent', border: '1px solid transparent', color: 'var(--t0)', outline: 'none' }}
+                              onFocus={e => e.target.style.borderColor = '#a78bfa'}
+                              onBlur={e => e.target.style.borderColor = 'transparent'} />
+                          </td>
+                          <td className="px-3 py-1.5">
+                            <input value={sp.value}
+                              onChange={e => setOfferVendors(prev => prev.map((ov) => {
+                                if (ov.label !== v.label) return ov;
+                                const specs = ov.specs.map((s, i) => i === si ? { ...s, value: e.target.value } : s);
+                                return { ...ov, specs };
+                              }))}
+                              className="w-full px-2 py-0.5 rounded text-xs"
+                              style={{ background: 'transparent', border: '1px solid transparent', color: 'var(--t0)', outline: 'none' }}
+                              onFocus={e => e.target.style.borderColor = '#a78bfa'}
+                              onBlur={e => e.target.style.borderColor = 'transparent'} />
+                          </td>
+                          <td className="px-3 py-1.5">
+                            <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded"
+                              style={{ background: sp.confidence >= 85 ? 'rgba(74,222,128,0.1)' : sp.confidence >= 70 ? 'rgba(245,158,11,0.1)' : 'rgba(248,113,113,0.1)',
+                                       color: sp.confidence >= 85 ? '#4ade80' : sp.confidence >= 70 ? '#fbbf24' : '#f87171' }}>
+                              {sp.confidence}%
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="px-4 py-2 flex gap-2" style={{ borderTop: '1px solid var(--b0)' }}>
+                  <button onClick={() => setOfferVendors(prev => prev.map(ov => ov.label !== v.label ? ov : {
+                    ...ov, specs: [...ov.specs, { param: '', value: '', confidence: 100 }]
+                  }))}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold"
+                    style={{ background: 'rgba(139,92,246,0.1)', color: '#a78bfa' }}>
+                    <Plus className="w-3 h-3" /> Add Row
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* ══════════════════════════════════════════════════════════════════════
+            MODE 2 — STEP 3: TBE TABLE (EDITABLE WABAG REPLIES)
+        ══════════════════════════════════════════════════════════════════════ */}
+        {step === 'offer_tbe' && (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between flex-wrap gap-3">
+              <div className="flex items-center gap-3 flex-wrap text-xs" style={{ color: 'var(--t2)' }}>
+                <span className="px-2 py-0.5 rounded font-semibold" style={{ background: 'rgba(255,249,196,0.1)', color: '#fbbf24', border: '1px solid rgba(255,249,196,0.15)' }}>Yellow = WABAG Reply (editable)</span>
+                <span className="px-2 py-0.5 rounded font-semibold" style={{ background: 'rgba(139,92,246,0.1)', color: '#a78bfa', border: '1px solid rgba(139,92,246,0.15)' }}>Mode 2 — Technical Offer Evaluation</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <button onClick={() => setStep('offer_mapping')}
+                  className="flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-medium"
+                  style={{ background: 'var(--s2)', color: 'var(--t1)', border: '1px solid var(--b1)' }}>
+                  ← Back
+                </button>
+                <button onClick={generateOfferReports}
+                  className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold"
+                  style={{ background: 'linear-gradient(135deg,#7c3aed,#a78bfa)', color: '#fff' }}>
+                  Generate Reports <ChevronRight className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            {(() => {
+              const activeOffers = offerVendors.filter(v => v.specs.length > 0);
+              const params = editedSpecs.filter(s => s.param && s.value);
+              const findVal = (vendor: OfferVendor, param: string) => {
+                let best = { score: 0, val: '' };
+                for (const sp of vendor.specs) {
+                  const score = sp.param.toLowerCase().includes(param.toLowerCase()) || param.toLowerCase().includes(sp.param.toLowerCase()) ? 90 : 0;
+                  if (score > best.score) best = { score, val: sp.value };
+                }
+                return best.val;
+              };
+              return (
+                <div className="overflow-x-auto rounded-2xl" style={{ border: '1px solid var(--b1)' }}>
+                  <table className="w-full text-xs min-w-max">
+                    <thead>
+                      <tr style={{ background: '#1e3a5f' }}>
+                        <th className="text-left px-3 py-2.5 text-white font-bold w-8 sticky left-0" style={{ background: '#1e3a5f' }}>#</th>
+                        <th className="text-left px-3 py-2.5 text-white font-bold min-w-[150px] sticky left-8" style={{ background: '#1e3a5f' }}>Specification</th>
+                        <th className="text-left px-3 py-2.5 text-white font-bold min-w-[140px]">WABAG Requirement</th>
+                        {activeOffers.map(v => (
+                          <React.Fragment key={v.label}>
+                            <th className="text-left px-3 py-2.5 font-bold min-w-[130px]" style={{ color: '#a78bfa' }}>{v.label} Offer</th>
+                            <th className="text-left px-3 py-2.5 font-bold min-w-[150px]" style={{ color: '#fbbf24', background: 'rgba(245,158,11,0.08)' }}>WABAG Reply ({v.label})</th>
+                          </React.Fragment>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {params.map((sp, ri) => (
+                        <tr key={ri} style={{ borderTop: '1px solid var(--b0)', background: ri % 2 ? 'var(--s1)' : 'transparent' }}>
+                          <td className="px-3 py-2 sticky left-0" style={{ background: ri % 2 ? 'var(--s1)' : 'var(--s0)', color: 'var(--t2)' }}>{ri + 1}</td>
+                          <td className="px-3 py-2 font-medium sticky left-8" style={{ background: ri % 2 ? 'var(--s1)' : 'var(--s0)', color: 'var(--t0)' }}>{sp.param}</td>
+                          <td className="px-3 py-2" style={{ color: 'var(--t1)' }}>{sp.value}</td>
+                          {activeOffers.map(v => {
+                            const offered = findVal(v, sp.param);
+                            const autoStatus: string = (() => {
+                              if (!offered) return 'CLARIFICATION REQUIRED';
+                              const w = sp.value.toLowerCase(), vv = offered.toLowerCase();
+                              if (w === vv) return 'COMPLIES';
+                              if (vv.includes(w) || w.includes(vv)) return 'COMPLIES';
+                              return 'DEVIATION';
+                            })();
+                            const m = STATUS_META[autoStatus] || STATUS_META['DEVIATION'];
+                            const reply = offerTbeReplies[v.label]?.[sp.param] ?? (() => {
+                              if (autoStatus === 'COMPLIES') return 'Complies with WABAG Requirement';
+                              if (autoStatus === 'EXCEEDS REQUIREMENT') return 'Complies and exceeds WABAG Requirement';
+                              if (autoStatus === 'CLARIFICATION REQUIRED') return 'Clarification required from vendor';
+                              return 'Deviation — Vendor offer does not meet WABAG Requirement';
+                            })();
+                            return (
+                              <React.Fragment key={v.label}>
+                                <td className="px-3 py-2" style={{ color: m.text, background: m.bg }}>
+                                  {offered || <span style={{ color: 'var(--t2)', fontStyle: 'italic' }}>Not found</span>}
+                                </td>
+                                <td className="px-3 py-2" style={{ background: 'rgba(245,158,11,0.06)' }}>
+                                  <input value={reply}
+                                    onChange={e => setOfferTbeReplies(prev => ({
+                                      ...prev,
+                                      [v.label]: { ...(prev[v.label] || {}), [sp.param]: e.target.value }
+                                    }))}
+                                    className="w-full px-2 py-1 rounded text-xs"
+                                    style={{ background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.2)', color: '#fbbf24', outline: 'none', minWidth: 140 }} />
+                                </td>
+                              </React.Fragment>
+                            );
+                          })}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              );
+            })()}
+          </div>
+        )}
+
+        {/* ══════════════════════════════════════════════════════════════════════
+            MODE 2 — GENERATING
+        ══════════════════════════════════════════════════════════════════════ */}
+        {step === 'offer_generating' && (
+          <div className="flex flex-col items-center justify-center py-20 gap-4">
+            <Loader2 className="w-10 h-10 animate-spin" style={{ color: '#a78bfa' }} />
+            <p className="text-sm font-semibold" style={{ color: 'var(--t0)' }}>Generating TBE, Deviation, Compliance & Clarification reports…</p>
+            <p className="text-xs" style={{ color: 'var(--t2)' }}>This may take a few seconds</p>
+          </div>
+        )}
+
+        {/* ══════════════════════════════════════════════════════════════════════
+            MODE 2 — DASHBOARD
+        ══════════════════════════════════════════════════════════════════════ */}
+        {step === 'offer_dashboard' && offerResult && (
+          <div className="space-y-5">
+            <div className="rounded-2xl p-5" style={{ background: 'rgba(139,92,246,0.05)', border: '1px solid rgba(139,92,246,0.2)' }}>
+              <p className="text-xs font-bold mb-3" style={{ color: '#a78bfa' }}>COMPLIANCE SUMMARY — {analysis?.instrument_type}</p>
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                {(offerResult.vendors || []).map((v: any) => (
+                  <div key={v.label} className="rounded-xl p-4" style={{ background: 'var(--s1)', border: '1px solid var(--b1)' }}>
+                    <p className="text-xs font-bold mb-0.5" style={{ color: '#a78bfa' }}>{v.label}</p>
+                    <p className="text-xs mb-1" style={{ color: 'var(--t2)' }}>{v.vendor_name || '—'}</p>
+                    <p className="text-2xl font-black" style={{ color: v.match_pct >= 80 ? '#4ade80' : v.match_pct >= 60 ? '#fbbf24' : '#f87171' }}>
+                      {v.match_pct}%
+                    </p>
+                    <div className="mt-2 h-1.5 rounded-full" style={{ background: 'var(--s3)' }}>
+                      <div className="h-full rounded-full" style={{ width: `${v.match_pct}%`, background: v.match_pct >= 80 ? '#4ade80' : v.match_pct >= 60 ? '#fbbf24' : '#f87171' }} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex gap-2">
+              <button onClick={() => setStep('offer_tbe')}
+                className="flex items-center gap-2 px-4 py-3 rounded-xl text-sm font-medium"
+                style={{ background: 'var(--s2)', color: 'var(--t1)', border: '1px solid var(--b1)' }}>
+                ← Back
+              </button>
+              <button onClick={() => setStep('offer_approval')}
+                className="flex-1 py-3.5 rounded-xl text-sm font-bold flex items-center justify-center gap-2"
+                style={{ background: 'linear-gradient(135deg,#7c3aed,#a78bfa)', color: '#fff' }}>
+                <ShieldCheck className="w-4 h-4" /> Submit for Approval
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* ══════════════════════════════════════════════════════════════════════
+            MODE 2 — APPROVAL
+        ══════════════════════════════════════════════════════════════════════ */}
+        {step === 'offer_approval' && (
+          <div className="max-w-md mx-auto space-y-4">
+            <div className="rounded-2xl p-5" style={{ background: 'rgba(139,92,246,0.05)', border: '1px solid rgba(139,92,246,0.2)' }}>
+              <p className="text-sm font-bold mb-1" style={{ color: '#a78bfa' }}>Technical Offer Compliance Evaluation — Approval</p>
+              <p className="text-xs" style={{ color: 'var(--t2)' }}>
+                {editedSpecs.filter(s => s.param && s.value).length} requirements · {offerVendors.filter(v => v.specs.length > 0).length} vendor offers evaluated
+              </p>
+            </div>
+
+            {offerApprovalStatus === 'idle' && (
+              <button onClick={submitOfferApproval}
+                className="w-full py-3.5 rounded-xl text-sm font-bold flex items-center justify-center gap-2"
+                style={{ background: 'linear-gradient(135deg,#7c3aed,#a78bfa)', color: '#fff' }}>
+                <ShieldCheck className="w-4 h-4" /> Submit for Lead Engineer Approval
+              </button>
+            )}
+
+            {offerApprovalStatus === 'pending' && (
+              <div className="rounded-2xl p-5 text-center space-y-3" style={{ background: 'rgba(245,158,11,0.05)', border: '1px solid rgba(245,158,11,0.2)' }}>
+                <Loader2 className="w-8 h-8 mx-auto animate-spin" style={{ color: '#fbbf24' }} />
+                <p className="text-sm font-bold" style={{ color: '#fbbf24' }}>Awaiting Approval</p>
+                <p className="text-xs" style={{ color: 'var(--t2)' }}>Request #{offerApprovalReqId} submitted · Lead Engineer will approve from Approval Queue</p>
+              </div>
+            )}
+
+            {offerApprovalStatus === 'rejected' && (
+              <div className="rounded-2xl p-4 space-y-3" style={{ background: 'rgba(248,113,113,0.05)', border: '1px solid rgba(248,113,113,0.2)' }}>
+                <p className="text-sm font-bold" style={{ color: '#f87171' }}>Approval Rejected</p>
+                <button onClick={() => { setOfferApprovalStatus('idle'); }}
+                  className="px-4 py-2 rounded-xl text-xs font-bold"
+                  style={{ background: 'var(--s2)', color: 'var(--t1)', border: '1px solid var(--b2)' }}>
+                  Revise & Resubmit
+                </button>
+              </div>
+            )}
+
+            <button onClick={() => setStep('offer_dashboard')}
+              className="flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-medium"
+              style={{ background: 'var(--s2)', color: 'var(--t1)', border: '1px solid var(--b1)' }}>
+              ← Back
+            </button>
+          </div>
+        )}
+
+        {/* ══════════════════════════════════════════════════════════════════════
+            MODE 2 — DONE / DOWNLOAD
+        ══════════════════════════════════════════════════════════════════════ */}
+        {step === 'offer_done' && (
+          <div className="max-w-lg mx-auto space-y-5">
+            <div className="rounded-2xl p-6 text-center" style={{ background: 'rgba(139,92,246,0.08)', border: '1px solid rgba(139,92,246,0.2)' }}>
+              <CheckCircle2 className="w-12 h-12 mx-auto mb-3" style={{ color: '#a78bfa' }} />
+              <p className="text-base font-black mb-1" style={{ color: 'var(--t0)' }}>TBE Approved — Technical Offer Evaluation</p>
+              {offerApprovalResult && (
+                <p className="text-xs" style={{ color: 'var(--t2)' }}>Approved by {offerApprovalResult.approved_by}</p>
+              )}
+            </div>
+
+            <div className="space-y-3">
+              {[
+                { type: 'tbe' as const,           label: 'Download TBE Report',            desc: 'Full TBE with all vendor offers and WABAG replies',             color: '#a78bfa' },
+                { type: 'deviation' as const,      label: 'Download Deviation Report',       desc: 'All deviations and not-acceptable items with severity',          color: '#f87171' },
+                { type: 'compliance' as const,     label: 'Download Compliance Summary',     desc: 'Compliance % scorecard per vendor',                             color: '#4ade80' },
+                { type: 'clarification' as const,  label: 'Download Clarification Sheet',    desc: 'All items needing vendor clarification with WABAG queries',     color: '#fbbf24' },
+              ].map(btn => (
+                <button key={btn.type} onClick={() => downloadOfferFile(btn.type)}
                   className="w-full flex items-center gap-3 px-5 py-4 rounded-xl text-left transition-all"
                   style={{ background: 'var(--s1)', border: '1px solid var(--b1)' }}
                   onMouseEnter={e => (e.currentTarget.style.borderColor = btn.color)}

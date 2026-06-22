@@ -82,7 +82,7 @@ export default function LoginPage() {
         </div>
 
         <div className="relative">
-          <p className="text-[11px]" style={{ color: 'var(--t2)' }}>Built by Akash B · iEZ v2.0</p>
+          <p className="text-[11px]" style={{ color: 'var(--t2)' }}>Built by Akash Balaji · iEZ v3.1</p>
         </div>
       </div>
 

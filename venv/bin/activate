@@ -1,0 +1,3 @@
+# Stub venv activate — makes pip route to pip3
+pip() { pip3 "$@"; }
+export -f pip 2>/dev/null || true

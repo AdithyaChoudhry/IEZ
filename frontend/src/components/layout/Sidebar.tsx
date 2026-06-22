@@ -40,11 +40,8 @@ const sections = [
       { path: '/datasheet',       icon: FileText,        label: 'Data Sheet' },
       { path: '/cable-schedule',  icon: Cable,           label: 'Cable Schedule' },
       { path: '/loop-wiring',     icon: GitBranch,       label: 'Loop Wiring' },
+      { path: '/cover-sheet',     icon: Layers,          label: 'Cover Sheet' },
     ],
-  },
-  {
-    label: 'Document Control',
-    items: [{ path: '/cover-sheet', icon: Layers, label: 'Cover Sheet' }],
   },
   {
     label: 'Smart AI',
@@ -180,8 +177,8 @@ export default function Sidebar({ isOpen }: SidebarProps) {
         <div className="flex items-center gap-2 px-2.5 py-2 rounded-lg" style={{ background: 'var(--s1)' }}>
           <Droplets className="w-3.5 h-3.5 flex-shrink-0" style={{ color: 'var(--em-lt)' }} />
           <div>
-            <p className="text-[10px] font-semibold" style={{ color: 'var(--t1)' }}>iEZ v2.0</p>
-            <p className="text-[9px]" style={{ color: 'var(--t2)' }}>Akash</p>
+            <p className="text-[10px] font-semibold" style={{ color: 'var(--t1)' }}>iEZ v3.1 <span style={{ color: 'var(--gold)', fontSize: 9 }}>Under Development</span></p>
+            <p className="text-[9px]" style={{ color: 'var(--t2)' }}>Built by Akash Balaji</p>
           </div>
         </div>
       </div>

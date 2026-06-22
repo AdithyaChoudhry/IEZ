@@ -406,12 +406,6 @@ export default function Header({ onToggleSidebar }: HeaderProps) {
                 >
                   i<span className="text-gradient">EZ</span>
                 </span>
-                <span
-                  className="text-[9px] font-semibold px-1.5 py-0.5 rounded tracking-wider"
-                  style={{ background: 'rgba(245,158,11,0.1)', color: 'var(--gold)', border: '1px solid rgba(245,158,11,0.2)' }}
-                >
-                  AI
-                </span>
               </div>
               <p className="text-[10px] leading-tight tracking-wide" style={{ color: 'var(--t2)' }}>
                 WABAG · Instrumentation

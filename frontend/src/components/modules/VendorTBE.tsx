@@ -382,6 +382,9 @@ export default function VendorTBE() {
     setApprovalResult(null); setApprovalReqId(null); setApprovalStatus('idle'); setTbeNotes('');
   };
 
+  // Reset all state on mount so stale data from previous session never shows
+  useEffect(() => { reset(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   const handleFile = (f: File) => {
     if (!f.name.match(/\.(xlsx|xlsm|xls)$/i)) { setError('Only .xlsx, .xlsm, or .xls files are supported'); return; }
     setFile(f); setError('');
@@ -725,6 +728,11 @@ export default function VendorTBE() {
                   {projectInfo.length} project fields · {editedSpecs.length} technical requirements · {annexureSpecs.length} annexure specs
                 </span>
               </div>
+              <button onClick={reset}
+                className="flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-medium"
+                style={{ background: 'var(--s2)', color: 'var(--t1)', border: '1px solid var(--b1)' }}>
+                ← Back
+              </button>
               <button onClick={runMatching}
                 disabled={editedSpecs.filter(s => s.param && s.value).length === 0}
                 className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold"
@@ -963,11 +971,18 @@ export default function VendorTBE() {
               <p className="text-sm font-semibold" style={{ color: 'var(--t0)' }}>
                 Standard shortlist ({vendors.length} vendors) · Match % against {editedSpecs.filter(s => s.param && s.value).length} Part B technical requirements
               </p>
-              <button onClick={buildTBE} disabled={selectedVendors.size === 0}
-                className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold"
-                style={{ background: 'linear-gradient(135deg,var(--em),#1d4ed8)', color: '#fff', opacity: selectedVendors.size ? 1 : 0.4 }}>
-                Build TBE Table <ChevronRight className="w-4 h-4" />
-              </button>
+              <div className="flex items-center gap-2">
+                <button onClick={() => setStep('requirements')}
+                  className="flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-medium"
+                  style={{ background: 'var(--s2)', color: 'var(--t1)', border: '1px solid var(--b1)' }}>
+                  ← Back
+                </button>
+                <button onClick={buildTBE} disabled={selectedVendors.size === 0}
+                  className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold"
+                  style={{ background: 'linear-gradient(135deg,var(--em),#1d4ed8)', color: '#fff', opacity: selectedVendors.size ? 1 : 0.4 }}>
+                  Build TBE Table <ChevronRight className="w-4 h-4" />
+                </button>
+              </div>
             </div>
 
             <div className="grid grid-cols-1 gap-3">
@@ -1024,11 +1039,18 @@ export default function VendorTBE() {
                 <span className="px-2 py-0.5 rounded font-semibold" style={{ background: 'rgba(255,249,196,0.1)', color: '#fbbf24', border: '1px solid rgba(255,249,196,0.15)' }}>Yellow = WABAG Reply (editable)</span>
                 <span className="px-2 py-0.5 rounded font-semibold" style={{ background: 'rgba(248,113,113,0.1)', color: '#f87171', border: '1px solid rgba(248,113,113,0.15)' }}>Red = deviation severity</span>
               </div>
-              <button onClick={generateReports}
-                className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold"
-                style={{ background: 'linear-gradient(135deg,var(--em),#1d4ed8)', color: '#fff' }}>
-                Generate Reports <ChevronRight className="w-4 h-4" />
-              </button>
+              <div className="flex items-center gap-2">
+                <button onClick={() => setStep('vendor_select')}
+                  className="flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-medium"
+                  style={{ background: 'var(--s2)', color: 'var(--t1)', border: '1px solid var(--b1)' }}>
+                  ← Back
+                </button>
+                <button onClick={generateReports}
+                  className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold"
+                  style={{ background: 'linear-gradient(135deg,var(--em),#1d4ed8)', color: '#fff' }}>
+                  Generate Reports <ChevronRight className="w-4 h-4" />
+                </button>
+              </div>
             </div>
 
             <div className="overflow-x-auto rounded-2xl" style={{ border: '1px solid var(--b1)' }}>
@@ -1190,11 +1212,18 @@ export default function VendorTBE() {
               </div>
             )}
 
-            <button onClick={() => setStep('approval')}
-              className="w-full py-3.5 rounded-xl text-sm font-bold flex items-center justify-center gap-2"
-              style={{ background: 'linear-gradient(135deg,var(--em),#1d4ed8)', color: '#fff' }}>
-              <ShieldCheck className="w-4 h-4" /> Submit for Approval
-            </button>
+            <div className="flex gap-2">
+              <button onClick={() => setStep('tbe_table')}
+                className="flex items-center gap-2 px-4 py-3 rounded-xl text-sm font-medium"
+                style={{ background: 'var(--s2)', color: 'var(--t1)', border: '1px solid var(--b1)' }}>
+                ← Back
+              </button>
+              <button onClick={() => setStep('approval')}
+                className="flex-1 py-3.5 rounded-xl text-sm font-bold flex items-center justify-center gap-2"
+                style={{ background: 'linear-gradient(135deg,var(--em),#1d4ed8)', color: '#fff' }}>
+                <ShieldCheck className="w-4 h-4" /> Submit for Approval
+              </button>
+            </div>
           </div>
         )}
 

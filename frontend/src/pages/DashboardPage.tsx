@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import {
   CheckCircle2, FileSpreadsheet, Cable, FileText, Network,
   GitBranch, Layers, ArrowRight, ArrowUpRight,
-  ScanSearch, Sparkles, Gauge, Zap, BarChart3, Radio,
+  ScanSearch, Sparkles, Gauge, Zap, BarChart3,
 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 
@@ -16,7 +16,6 @@ const modules = [
   { id: 'cover',       path: '/cover-sheet',       icon: Layers,        name: 'Cover Sheet',       desc: 'Build cover sheets with custom branding and WABAG revision control.',              accent: '#34d399', tag: 'Documents'  },
   { id: 'cable',       path: '/cable-schedule',    icon: Cable,         name: 'Cable Schedule',    desc: 'Create cable schedules grouped by junction box from field instrument data.',       accent: '#f87171', tag: 'Generator'  },
   { id: 'loop',        path: '/loop-wiring',       icon: GitBranch,     name: 'Loop Wiring',       desc: 'Generate loop wiring diagrams automatically from input files.',                   accent: '#fbbf24', tag: 'Generator'  },
-  { id: 'lt-radar',   path: '/lt-radar',           icon: Radio,         name: 'LT Non-Contact Radar', desc: 'Generate clean engineering datasheets for LT Non-Contact Radar instruments with IODB auto-fill and AI spec extraction.', accent: '#60a5fa', tag: 'Instruments' },
 ];
 
 /* ── Animated counter ─────────────────────────────────────────────────────── */
@@ -226,7 +225,7 @@ export default function DashboardPage() {
       </div>
 
       <p className="text-center text-[11px] pb-4" style={{ color: 'var(--t2)' }}>
-        iEZ Platform · WABAG Water Treatment Solutions · AI-Powered Engineering Automation
+        iEZ Platform · Developed for VA TECH WABAG · Built by Akash Balaji · v3.1
       </p>
     </div>
   );

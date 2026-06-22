@@ -497,6 +497,25 @@ export default function DataSheetGenerator() {
   const [genStatus, setGenStatus] = useState<GenStatus | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  // Reset all state on mount so stale data from a previous session never shows
+  useEffect(() => {
+    setStep(1); setBusy(false); setError('');
+    setIodbFile(null); setInstrumentTypes([]); setSelectedType(''); setTypeSearch('');
+    setTags([]); setSelectedTags([]); setTagSearch('');
+    setSopFile(null); setDatasheets([]); setSelectedDatasheet(''); setFields([]);
+    setSpecMode(null); setTenderFiles([]); setAiResults([]); setAiRunning(false);
+    setShowSpecPopup(false); setKbValues({}); setIodbGreen({}); setIodbConfirmed(false);
+    setSpecValues({}); setSpecSources({}); setValidErrs([]); setOverrides({});
+    setShowApproval(false); setApproval(null); setLocked(false);
+    setShowRaiseModal(false); setPendingReqId(null); setReqStatus('idle');
+    setVendorScores(null); setSelectedVS(null); setPurchaseNotes('');
+    setGenStatus(null);
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+      if (reqPollRef.current) clearInterval(reqPollRef.current);
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   const filteredTypes = useMemo(() => instrumentTypes.filter(t => t.toLowerCase().includes(typeSearch.toLowerCase())), [instrumentTypes, typeSearch]);
   const filteredTags = useMemo(() => tags.filter(t => t.toLowerCase().includes(tagSearch.toLowerCase())), [tags, tagSearch]);
   const iodbFields = useMemo(() => fields.filter(f => f.input_type === 'iodb'), [fields]);

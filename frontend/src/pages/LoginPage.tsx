@@ -64,7 +64,7 @@ export default function LoginPage() {
             style={{ background: 'var(--em-dim)', border: '1px solid rgba(59,130,246,0.18)', color: 'var(--em-lt)' }}
           >
             <span className="w-1.5 h-1.5 rounded-full bg-blue-400" />
-            Developed for VA TECH WABAG Water Treatment
+            Developed for VA TECH WABAG
           </div>
 
           {/* decorative water rings */}

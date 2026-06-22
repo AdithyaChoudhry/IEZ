@@ -351,6 +351,44 @@ export default function CoverSheetGenerator() {
   const [csReqStatus, setCSReqStatus] = useState<'idle' | 'pending' | 'approved' | 'rejected'>('idle');
   const csPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  // Restore persisted canvas state on mount
+  useEffect(() => {
+    try {
+      const saved = sessionStorage.getItem('coversheet_state');
+      if (saved) {
+        const s = JSON.parse(saved);
+        if (s.projectInfo) setProjectInfo(s.projectInfo);
+        if (s.revisions) setRevisions(s.revisions);
+        if (s.cellOverrides) setCellOverrides(s.cellOverrides);
+        if (s.mergeRanges) setMergeRanges(s.mergeRanges);
+        if (s.unmergeCoords) setUnmergeCoords(s.unmergeCoords);
+        if (s.colOverrides) setColOverrides(s.colOverrides);
+        if (s.rowOverrides) setRowOverrides(s.rowOverrides);
+        if (s.paperSize) setPaperSize(s.paperSize);
+        if (s.orientation) setOrientation(s.orientation);
+        if (s.isBlank !== undefined) setIsBlank(s.isBlank);
+        if (s.authInfo) setAuthInfo(s.authInfo);
+        if (s.csPendingReqId) setCSPendingReqId(s.csPendingReqId);
+        if (s.csReqStatus) setCSReqStatus(s.csReqStatus);
+      }
+    } catch { /* ignore */ }
+    return () => { if (csPollRef.current) clearInterval(csPollRef.current); };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Persist canvas state to sessionStorage on every change
+  useEffect(() => {
+    if (!cellOverrides || Object.keys(cellOverrides).length === 0) return;
+    try {
+      sessionStorage.setItem('coversheet_state', JSON.stringify({
+        projectInfo, revisions, cellOverrides, mergeRanges, unmergeCoords,
+        colOverrides, rowOverrides, paperSize, orientation, isBlank,
+        authInfo, csPendingReqId, csReqStatus,
+      }));
+    } catch { /* ignore */ }
+  }, [projectInfo, revisions, cellOverrides, mergeRanges, unmergeCoords,
+      colOverrides, rowOverrides, paperSize, orientation, isBlank,
+      authInfo, csPendingReqId, csReqStatus]);
+
   // Load project master
   useEffect(() => {
     const raw = localStorage.getItem(MASTER_KEY);
@@ -856,6 +894,12 @@ export default function CoverSheetGenerator() {
             </Button>
           )}
           {result && <p className="text-xs" style={{ color: '#4ade80' }}>{result.message}</p>}
+          {result && (
+            <button onClick={() => { sessionStorage.removeItem('coversheet_state'); setResult(null); setCellOverrides({}); setMergeRanges([]); setUnmergeCoords([]); setColOverrides({}); setRowOverrides({}); setProjectInfo(emptyProjectInfo()); setRevisions([emptyRevision()]); setPreviewLayout(null); setAuthInfo(null); setCSReqStatus('idle'); setCSPendingReqId(null); }}
+              className="text-xs underline" style={{ color: 'var(--t2)', background: 'none', border: 'none', cursor: 'pointer' }}>
+              Start New Cover Sheet
+            </button>
+          )}
         </div>
       </div>
 

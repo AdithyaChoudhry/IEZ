@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import {
-  ScanSearch, Upload, FileSpreadsheet, Download, Zap,
+  ScanSearch, Upload, FileSpreadsheet, Download,
   CheckCircle2, AlertCircle, FileText, Brain, Cpu,
   BarChart3, Tag, Activity, Clock, Sparkles, X,
   Eye, ListChecks, Layers, ChevronDown, ChevronUp,
@@ -825,48 +825,6 @@ export default function SmartDatasheetExtractor() {
     stopTimer();
   };
 
-  const handleGenerate = async () => {
-    if (!files.length || !templateFile) return;
-    reset();
-    startTimer();
-    setStep('uploading');
-    setCurrentFileIdx(0);
-
-    const formData = new FormData();
-    formData.append('file', files[0]);
-    formData.append('template_file', templateFile);
-
-    try {
-      const kickoff = await api.post<{ job_id: string }>('/sdie/generate', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      });
-      setStep('ocr');
-      await new Promise(r => setTimeout(r, STEP_DELAY_MS));
-      setStep('ai');
-      await new Promise(r => setTimeout(r, STEP_DELAY_MS));
-      setStep('mapping');
-
-      const result: GenerateResponse = await pollJob('/sdie/generate/status', kickoff.data.job_id);
-      setGenerateResult(result);
-      // Wrap flat specs into a single-section FileResult for the review panel
-      setPendingResults([{
-        fileName: files[0].name,
-        sections: [{
-          heading: result.instrument_type || 'Extracted Specifications',
-          instrument_type: result.instrument_type || '',
-          specs: result.specs,
-        }],
-        pageCount: result.page_count,
-        instrumentType: result.instrument_type,
-      }]);
-      setStep('review');
-    } catch (err: any) {
-      setError(err.response?.data?.detail || err.message || 'Generation failed');
-      setStep('error');
-    } finally {
-      stopTimer();
-    }
-  };
 
   const handleReviewConfirm = (sections: ConfirmedSection[]) => {
     setConfirmedSections(sections);
@@ -966,49 +924,6 @@ export default function SmartDatasheetExtractor() {
             </button>
           </div>
 
-          <div className="card-premium p-5 space-y-4">
-            <div className="flex items-center gap-2">
-              <FileSpreadsheet className="w-4 h-4 text-violet-500" />
-              <span className="text-sm font-bold text-gray-800">WABAG Template</span>
-              <span className="text-[10px] text-gray-400 font-medium">optional — enables targeted extraction</span>
-            </div>
-            <div
-              className={`relative border-2 border-dashed rounded-2xl p-5 text-center cursor-pointer group transition-all duration-300
-                ${templateFile ? 'border-emerald-300 bg-emerald-50/40' :
-                  isProcessing ? 'border-gray-200 bg-gray-50 opacity-60 cursor-not-allowed' :
-                  'border-gray-200 bg-white hover:border-violet-300 hover:bg-violet-50/30'}`}
-              onClick={() => {
-                if (isProcessing) return;
-                const inp = document.createElement('input'); inp.type = 'file'; inp.accept = '.xlsx,.xlsm,.xls';
-                inp.onchange = e => { const f = (e.target as HTMLInputElement).files?.[0]; if (f) setTemplateFile(f); };
-                inp.click();
-              }}
-            >
-              <div className={`w-10 h-10 rounded-xl mx-auto mb-2 flex items-center justify-center transition-all ${templateFile ? 'bg-emerald-100' : 'bg-violet-50 group-hover:bg-violet-100'}`}>
-                {templateFile ? <CheckCircle2 className="w-5 h-5 text-emerald-500" /> : <FileSpreadsheet className="w-5 h-5 text-violet-400" />}
-              </div>
-              <p className="text-sm font-semibold text-gray-700 truncate max-w-[200px] mx-auto">{templateFile ? templateFile.name : 'Upload Template'}</p>
-              {!templateFile && <p className="text-xs text-gray-400 mt-0.5">Drop or <span className="text-violet-500 font-medium">browse</span> · .xlsx / .xlsm / .xls</p>}
-              {templateFile && !isProcessing && (
-                <button onClick={e => { e.stopPropagation(); setTemplateFile(null); }}
-                  className="absolute top-2 right-2 w-6 h-6 rounded-full bg-gray-100 hover:bg-red-100 text-gray-400 hover:text-red-500 flex items-center justify-center transition-colors">
-                  <X className="w-3 h-3" />
-                </button>
-              )}
-            </div>
-            <button
-              onClick={handleGenerate}
-              disabled={!files.length || !templateFile || isProcessing}
-              className="w-full py-3 px-4 rounded-xl font-bold text-sm transition-all duration-200 flex items-center justify-center gap-2
-                bg-gradient-to-r from-violet-600 to-purple-700 text-white shadow-lg shadow-violet-200
-                hover:from-violet-700 hover:to-purple-800 hover:shadow-xl hover:-translate-y-0.5
-                disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none disabled:shadow-none"
-            >
-              {isProcessing
-                ? <><div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />Processing…</>
-                : <><Zap className="w-4 h-4" />Extract + Populate Template</>}
-            </button>
-          </div>
         </div>
       )}
 

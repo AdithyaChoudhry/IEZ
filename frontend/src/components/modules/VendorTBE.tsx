@@ -376,14 +376,50 @@ export default function VendorTBE() {
 
   const reset = () => {
     if (pollRef.current) clearInterval(pollRef.current);
+    sessionStorage.removeItem('vendorTBE_state');
     setStep('upload'); setFile(null); setError(''); setAnalysis(null);
     setProjectInfo([]); setAnnexureSpecs([]); setEditedSpecs([]); setVendors([]); setSelectedVendors(new Set());
     setTbeReplies({}); setDevSeverities({}); setSessionId('');
     setApprovalResult(null); setApprovalReqId(null); setApprovalStatus('idle'); setTbeNotes('');
   };
 
-  // Reset all state on mount so stale data from previous session never shows
-  useEffect(() => { reset(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  // Restore persisted state on mount
+  useEffect(() => {
+    try {
+      const saved = sessionStorage.getItem('vendorTBE_state');
+      if (saved) {
+        const s = JSON.parse(saved);
+        if (s.step) setStep(s.step);
+        if (s.analysis) setAnalysis(s.analysis);
+        if (s.projectInfo) setProjectInfo(s.projectInfo);
+        if (s.annexureSpecs) setAnnexureSpecs(s.annexureSpecs);
+        if (s.editedSpecs) setEditedSpecs(s.editedSpecs);
+        if (s.vendors) setVendors(s.vendors);
+        if (s.selectedVendors) setSelectedVendors(new Set(s.selectedVendors));
+        if (s.tbeReplies) setTbeReplies(s.tbeReplies);
+        if (s.devSeverities) setDevSeverities(s.devSeverities);
+        if (s.sessionId) setSessionId(s.sessionId);
+        if (s.approvalReqId) setApprovalReqId(s.approvalReqId);
+        if (s.approvalStatus) setApprovalStatus(s.approvalStatus);
+        if (s.tbeNotes) setTbeNotes(s.tbeNotes);
+      }
+    } catch { /* ignore */ }
+    return () => { if (pollRef.current) clearInterval(pollRef.current); };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Persist state to sessionStorage on every change
+  useEffect(() => {
+    if (step === 'upload') return; // nothing to save yet
+    try {
+      sessionStorage.setItem('vendorTBE_state', JSON.stringify({
+        step, analysis, projectInfo, annexureSpecs, editedSpecs,
+        vendors, selectedVendors: [...selectedVendors],
+        tbeReplies, devSeverities, sessionId,
+        approvalReqId, approvalStatus, tbeNotes,
+      }));
+    } catch { /* ignore */ }
+  }, [step, analysis, projectInfo, annexureSpecs, editedSpecs, vendors, selectedVendors,
+      tbeReplies, devSeverities, sessionId, approvalReqId, approvalStatus, tbeNotes]);
 
   const handleFile = (f: File) => {
     if (!f.name.match(/\.(xlsx|xlsm|xls)$/i)) { setError('Only .xlsx, .xlsm, or .xls files are supported'); return; }

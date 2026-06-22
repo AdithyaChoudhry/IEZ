@@ -497,24 +497,53 @@ export default function DataSheetGenerator() {
   const [genStatus, setGenStatus] = useState<GenStatus | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Reset all state on mount so stale data from a previous session never shows
+  // Restore persisted state on mount
   useEffect(() => {
-    setStep(1); setBusy(false); setError('');
-    setIodbFile(null); setInstrumentTypes([]); setSelectedType(''); setTypeSearch('');
-    setTags([]); setSelectedTags([]); setTagSearch('');
-    setSopFile(null); setDatasheets([]); setSelectedDatasheet(''); setFields([]);
-    setSpecMode(null); setTenderFiles([]); setAiResults([]); setAiRunning(false);
-    setShowSpecPopup(false); setKbValues({}); setIodbGreen({}); setIodbConfirmed(false);
-    setSpecValues({}); setSpecSources({}); setValidErrs([]); setOverrides({});
-    setShowApproval(false); setApproval(null); setLocked(false);
-    setShowRaiseModal(false); setPendingReqId(null); setReqStatus('idle');
-    setVendorScores(null); setSelectedVS(null); setPurchaseNotes('');
-    setGenStatus(null);
+    try {
+      const saved = sessionStorage.getItem('datasheet_state');
+      if (saved) {
+        const s = JSON.parse(saved);
+        if (s.step) setStep(s.step);
+        if (s.instrumentTypes) setInstrumentTypes(s.instrumentTypes);
+        if (s.selectedType) setSelectedType(s.selectedType);
+        if (s.tags) setTags(s.tags);
+        if (s.selectedTags) setSelectedTags(s.selectedTags);
+        if (s.selectedDatasheet) setSelectedDatasheet(s.selectedDatasheet);
+        if (s.fields) setFields(s.fields);
+        if (s.specValues) setSpecValues(s.specValues);
+        if (s.specSources) setSpecSources(s.specSources);
+        if (s.kbValues) setKbValues(s.kbValues);
+        if (s.iodbGreen) setIodbGreen(s.iodbGreen);
+        if (s.iodbConfirmed) setIodbConfirmed(s.iodbConfirmed);
+        if (s.overrides) setOverrides(s.overrides);
+        if (s.vendorScores) setVendorScores(s.vendorScores);
+        if (s.selectedVS) setSelectedVS(s.selectedVS);
+        if (s.approval) setApproval(s.approval);
+        if (s.pendingReqId) setPendingReqId(s.pendingReqId);
+        if (s.reqStatus) setReqStatus(s.reqStatus);
+        if (s.genStatus) setGenStatus(s.genStatus);
+      }
+    } catch { /* ignore */ }
     return () => {
       if (pollRef.current) clearInterval(pollRef.current);
       if (reqPollRef.current) clearInterval(reqPollRef.current);
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Persist state to sessionStorage on every change
+  useEffect(() => {
+    if (step === 1 && instrumentTypes.length === 0) return; // nothing worth saving yet
+    try {
+      sessionStorage.setItem('datasheet_state', JSON.stringify({
+        step, instrumentTypes, selectedType, tags, selectedTags,
+        selectedDatasheet, fields, specValues, specSources,
+        kbValues, iodbGreen, iodbConfirmed, overrides,
+        vendorScores, selectedVS, approval, pendingReqId, reqStatus, genStatus,
+      }));
+    } catch { /* ignore */ }
+  }, [step, instrumentTypes, selectedType, tags, selectedTags, selectedDatasheet,
+      fields, specValues, specSources, kbValues, iodbGreen, iodbConfirmed, overrides,
+      vendorScores, selectedVS, approval, pendingReqId, reqStatus, genStatus]);
 
   const filteredTypes = useMemo(() => instrumentTypes.filter(t => t.toLowerCase().includes(typeSearch.toLowerCase())), [instrumentTypes, typeSearch]);
   const filteredTags = useMemo(() => tags.filter(t => t.toLowerCase().includes(tagSearch.toLowerCase())), [tags, tagSearch]);
@@ -1377,6 +1406,7 @@ export default function DataSheetGenerator() {
             <Button variant="secondary" onClick={() => { setStep(8); setGenStatus(null); if (pollRef.current) clearInterval(pollRef.current); setBusy(false); }}>← Back</Button>
             {genStatus?.status === 'done' && (
               <Button variant="ghost" className="flex-1" onClick={() => {
+                sessionStorage.removeItem('datasheet_state');
                 setStep(1); setIodbFile(null); setSopFile(null); setInstrumentTypes([]); setSelectedType('');
                 setTags([]); setSelectedTags([]); setDatasheets([]); setSelectedDatasheet(''); setFields([]);
                 setSpecMode(null); setAiResults([]); setKbValues({}); setIodbGreen({}); setIodbConfirmed(false);

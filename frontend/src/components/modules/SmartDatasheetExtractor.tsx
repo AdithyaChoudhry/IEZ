@@ -777,7 +777,7 @@ export default function SmartDatasheetExtractor() {
 
   const startExtract = () => {
     if (!files.length) return;
-    if (!templateFile) { setShowTemplatePrompt(true); } else { runExtract(); }
+    runExtract();
   };
 
   const runExtract = async (tmpl?: File | null) => {

@@ -1,10 +1,16 @@
 /**
  * Dynamic Rules Manager Component
- * CRUD operations for user-defined validation rules
+ * CRUD operations for user-defined validation rules + predefined rules display
  */
 import { useState, useEffect } from 'react';
-import { Plus, Trash2, Edit2, Save, X, Loader2 } from 'lucide-react';
+import { Plus, Trash2, Edit2, Save, X, Loader2, Shield } from 'lucide-react';
 import api from '@/services/api';
+
+interface PredefinedRule {
+  rule: number | string;
+  name: string;
+  description: string;
+}
 
 interface DynamicRule {
   id: string;
@@ -39,6 +45,8 @@ const LOGICAL_OPERATORS = ['AND', 'OR'];
 
 export default function DynamicRulesManager() {
   const [rules, setRules] = useState<DynamicRule[]>([]);
+  const [predefinedRules, setPredefinedRules] = useState<PredefinedRule[]>([]);
+  const [showPredefined, setShowPredefined] = useState(true);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<string | null>(null);
   const [showAddForm, setShowAddForm] = useState(false);
@@ -54,6 +62,7 @@ export default function DynamicRulesManager() {
 
   useEffect(() => {
     loadRules();
+    loadPredefinedRules();
   }, []);
 
   const loadRules = async () => {
@@ -64,6 +73,15 @@ export default function DynamicRulesManager() {
       console.error('Failed to load rules:', error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadPredefinedRules = async () => {
+    try {
+      const response = await api.get<PredefinedRule[]>('/validator/predefined-rules');
+      setPredefinedRules(response.data);
+    } catch (error) {
+      console.error('Failed to load predefined rules:', error);
     }
   };
 
@@ -154,8 +172,42 @@ export default function DynamicRulesManager() {
 
   return (
     <div className="space-y-6">
+
+      {/* ── Predefined Rules (always active, read-only) ── */}
+      <div className="border border-green-200 rounded-lg bg-green-50">
+        <button
+          onClick={() => setShowPredefined(!showPredefined)}
+          className="w-full flex items-center justify-between p-4 text-left"
+        >
+          <div className="flex items-center gap-2">
+            <Shield className="w-5 h-5 text-green-600" />
+            <span className="font-semibold text-green-800">
+              Predefined Rules ({predefinedRules.length}) — Always Active
+            </span>
+          </div>
+          <span className="text-green-600 text-sm">{showPredefined ? '▲ Hide' : '▼ Show'}</span>
+        </button>
+
+        {showPredefined && (
+          <div className="border-t border-green-200 p-4 grid grid-cols-1 md:grid-cols-2 gap-2">
+            {predefinedRules.map((r) => (
+              <div key={String(r.rule)} className="bg-white border border-green-100 rounded-lg p-3 flex gap-3">
+                <span className="flex-shrink-0 w-7 h-7 rounded-full bg-green-600 text-white text-xs font-bold flex items-center justify-center">
+                  {r.rule}
+                </span>
+                <div>
+                  <div className="text-sm font-semibold text-gray-800">{r.name}</div>
+                  <div className="text-xs text-gray-500 mt-0.5">{r.description}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* ── Dynamic Rules ── */}
       <div className="flex items-center justify-between">
-        <h3 className="text-lg font-semibold text-gray-800">Dynamic Validation Rules</h3>
+        <h3 className="text-lg font-semibold text-gray-800">Custom Dynamic Rules</h3>
         <button
           onClick={() => setShowAddForm(!showAddForm)}
           className="flex items-center gap-2 bg-primary-600 text-white py-2 px-4 rounded-lg hover:bg-primary-700"

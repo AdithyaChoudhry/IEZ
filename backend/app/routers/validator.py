@@ -212,6 +212,16 @@ async def download_tba(current_user: User = Depends(get_current_user)):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Predefined Rules metadata (read-only)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get("/predefined-rules")
+async def list_predefined_rules(current_user: User = Depends(get_current_user)):
+    """Return the 12 built-in validation rules (metadata only — always active)."""
+    from utils.dynamic_rules import PREDEFINED_RULES_META
+    return PREDEFINED_RULES_META
+
+
 # Dynamic Rules CRUD
 # ─────────────────────────────────────────────────────────────────────────────
 

@@ -6,6 +6,14 @@ import api from '@/services/api';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
+const parseApiError = (e: any): string => {
+  const detail = e?.response?.data?.detail;
+  if (typeof detail === 'string') return detail;
+  if (Array.isArray(detail)) return detail.map((d: any) => d.msg || String(d)).join(', ');
+  if (detail) return 'Request failed';
+  return e?.message || 'An error occurred';
+};
+
 // ── Types ──────────────────────────────────────────────────────────────────────
 interface IDCSession {
   id: number;
@@ -123,7 +131,7 @@ const CommentCard: React.FC<{
       await api.post(`/idc/sessions/${sessionId}/comments/${comment.id}/reply`, fd);
       setReplyText(''); setShowReply(false); setAuthGate(null);
       onStatusChange();
-    } catch (e: any) { setError(e.response?.data?.detail || 'Failed'); } finally { setLoading(false); }
+    } catch (e: any) { setError(parseApiError(e)); } finally { setLoading(false); }
   };
 
   const handleStatusChange = async (empId: string, pw: string) => {
@@ -133,7 +141,7 @@ const CommentCard: React.FC<{
       fd.append('employee_id', empId); fd.append('password', pw); fd.append('status', newStatus);
       await api.patch(`/idc/sessions/${sessionId}/comments/${comment.id}`, fd);
       setAuthGate(null); onStatusChange();
-    } catch (e: any) { setError(e.response?.data?.detail || 'Failed'); } finally { setLoading(false); }
+    } catch (e: any) { setError(parseApiError(e)); } finally { setLoading(false); }
   };
 
   return (
@@ -220,7 +228,7 @@ const AddCommentForm: React.FC<{ sessionId: number; annUuid?: string; page: numb
         if (annUuid) fd.append('ann_uuid', annUuid);
         await api.post(`/idc/sessions/${sessionId}/comments`, fd);
         onAdded();
-      } catch (e: any) { setError(e.response?.data?.detail || 'Failed'); } finally { setLoading(false); }
+      } catch (e: any) { setError(parseApiError(e)); } finally { setLoading(false); }
     };
 
     return (
@@ -271,7 +279,7 @@ const ApprovalPanel: React.FC<{ session: IDCSession; onUpdate: () => void }> = (
       fd.append('discipline', disc); fd.append('employee_id', empId); fd.append('password', pw);
       await api.post(`/idc/sessions/${session.id}/approve`, fd);
       setShowApproveFor(null); onUpdate();
-    } catch (e: any) { setError(e.response?.data?.detail || 'Failed'); } finally { setLoading(false); }
+    } catch (e: any) { setError(parseApiError(e)); } finally { setLoading(false); }
   };
 
   const doFreeze = async (empId: string, pw: string) => {
@@ -281,7 +289,7 @@ const ApprovalPanel: React.FC<{ session: IDCSession; onUpdate: () => void }> = (
       fd.append('employee_id', empId); fd.append('password', pw);
       await api.post(`/idc/sessions/${session.id}/freeze`, fd);
       setShowFreeze(false); onUpdate();
-    } catch (e: any) { setError(e.response?.data?.detail || 'Failed'); } finally { setLoading(false); }
+    } catch (e: any) { setError(parseApiError(e)); } finally { setLoading(false); }
   };
 
   return (
@@ -366,7 +374,7 @@ const PDFViewer: React.FC<{
   const [drawing, setDrawing] = useState(false);
   const [draft, setDraft] = useState<AnnotationDraft | null>(null);
   const [loading, setLoading] = useState(true);
-  const [textPrompt, setTextPrompt] = useState<{ x: number; y: number } | null>(null);
+  const [textPrompt, setTextPrompt] = useState<{ x: number; y: number; clientX: number; clientY: number } | null>(null);
   const [textInput, setTextInput] = useState('');
 
   // Load PDF
@@ -431,7 +439,7 @@ const PDFViewer: React.FC<{
       // author label
       ctx.font = '10px sans-serif';
       ctx.fillStyle = ann.color;
-      ctx.fillText(ann.author_name.split(' ')[0], ann.x + 2, ann.y - 4);
+      ctx.fillText(ann.author_emp, ann.x + 2, ann.y - 4);
     });
   }, [annotations, currentPage, highlightedAnn]);
 
@@ -497,7 +505,7 @@ const PDFViewer: React.FC<{
   const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (activeTool === 'text') {
       const { x, y } = getPos(e);
-      setTextPrompt({ x, y }); setTextInput(''); return;
+      setTextPrompt({ x, y, clientX: e.clientX, clientY: e.clientY }); setTextInput(''); return;
     }
     if (activeTool !== 'cursor') return;
     const { x, y } = getPos(e);
@@ -535,49 +543,50 @@ const PDFViewer: React.FC<{
             onMouseDown={mouseDown} onMouseMove={mouseMove} onMouseUp={mouseUp}
             onClick={handleCanvasClick}
           />
-          {/* Text annotation — floating modal so canvas can't block it */}
-          {textPrompt && (
-            <div style={{
-              position: 'absolute', top: textPrompt.y, left: textPrompt.x,
-              zIndex: 100, background: '#0d1b2a', border: `2px solid ${activeColor}`,
-              borderRadius: 8, padding: 10, minWidth: 200, boxShadow: '0 4px 20px rgba(0,0,0,0.6)',
-            }}>
-              <div style={{ fontSize: 11, color: '#64748b', marginBottom: 6 }}>Add text annotation</div>
-              <input
-                ref={el => el && setTimeout(() => el.focus(), 0)}
-                value={textInput}
-                onChange={e => setTextInput(e.target.value)}
-                placeholder="Type here..."
-                onKeyDown={async e => {
-                  e.stopPropagation();
-                  if (e.key === 'Enter' && textInput.trim()) {
-                    await saveAnnotation('text', textPrompt.x, textPrompt.y, textPrompt.x + 150, textPrompt.y + 20, textInput.trim());
-                    setTextPrompt(null); setTextInput('');
-                  } else if (e.key === 'Escape') { setTextPrompt(null); setTextInput(''); }
-                }}
-                style={{
-                  width: '100%', background: '#1e293b', border: `1px solid ${activeColor}`,
-                  borderRadius: 5, padding: '6px 8px', color: '#e2e8f0', fontSize: 13,
-                  outline: 'none', boxSizing: 'border-box',
-                }}
-              />
-              <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
-                <button onClick={async () => {
-                  if (textInput.trim()) {
-                    await saveAnnotation('text', textPrompt.x, textPrompt.y, textPrompt.x + 150, textPrompt.y + 20, textInput.trim());
-                    setTextPrompt(null); setTextInput('');
-                  }
-                }} style={{ flex: 1, padding: '5px', background: '#1e40af', border: 'none', borderRadius: 5, color: '#fff', cursor: 'pointer', fontSize: 12 }}>
-                  Save
-                </button>
-                <button onClick={() => { setTextPrompt(null); setTextInput(''); }}
-                  style={{ padding: '5px 10px', background: '#1e293b', border: '1px solid #334155', borderRadius: 5, color: '#94a3b8', cursor: 'pointer', fontSize: 12 }}>
-                  ✕
-                </button>
-              </div>
-            </div>
-          )}
         </div>
+        {/* Text annotation popup — fixed to viewport so overflow/scroll can't clip it */}
+        {textPrompt && (
+          <div style={{
+            position: 'fixed',
+            top: Math.min(textPrompt.clientY, window.innerHeight - 160),
+            left: Math.min(textPrompt.clientX, window.innerWidth - 240),
+            zIndex: 9999, background: '#0d1b2a', border: `2px solid ${activeColor}`,
+            borderRadius: 8, padding: 10, minWidth: 220, boxShadow: '0 4px 24px rgba(0,0,0,0.8)',
+          }}>
+            <div style={{ fontSize: 11, color: '#64748b', marginBottom: 6 }}>Add text annotation</div>
+            <input
+              autoFocus
+              value={textInput}
+              onChange={e => setTextInput(e.target.value)}
+              placeholder="Type text here..."
+              onKeyDown={async e => {
+                if (e.key === 'Enter' && textInput.trim()) {
+                  await saveAnnotation('text', textPrompt.x, textPrompt.y, textPrompt.x + 150, textPrompt.y + 20, textInput.trim());
+                  setTextPrompt(null); setTextInput('');
+                } else if (e.key === 'Escape') { setTextPrompt(null); setTextInput(''); }
+              }}
+              style={{
+                width: '100%', background: '#1e293b', border: `1px solid ${activeColor}`,
+                borderRadius: 5, padding: '6px 8px', color: '#e2e8f0', fontSize: 13,
+                outline: 'none', boxSizing: 'border-box',
+              }}
+            />
+            <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+              <button onClick={async () => {
+                if (textInput.trim()) {
+                  await saveAnnotation('text', textPrompt.x, textPrompt.y, textPrompt.x + 150, textPrompt.y + 20, textInput.trim());
+                  setTextPrompt(null); setTextInput('');
+                }
+              }} style={{ flex: 1, padding: '5px', background: '#1e40af', border: 'none', borderRadius: 5, color: '#fff', cursor: 'pointer', fontSize: 12 }}>
+                Save
+              </button>
+              <button onClick={() => { setTextPrompt(null); setTextInput(''); }}
+                style={{ padding: '5px 10px', background: '#1e293b', border: '1px solid #334155', borderRadius: 5, color: '#94a3b8', cursor: 'pointer', fontSize: 12 }}>
+                ✕
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -604,6 +613,16 @@ const IDCReviewRoom: React.FC<Props> = ({ session: initialSession, onBack }) => 
   const [highlightedComment, setHighlightedComment] = useState<number | undefined>();
   const [onlineUsers, setOnlineUsers] = useState<OnlineUser[]>([]);
   const wsRef = useRef<WebSocket | null>(null);
+
+  const loadAnnotations = useCallback(async () => {
+    try { const r = await api.get(`/idc/sessions/${session.id}/annotations`); setAnnotations(r.data); }
+    catch (e) { console.error(e); }
+  }, [session.id]);
+
+  const loadComments = useCallback(async () => {
+    try { const r = await api.get(`/idc/sessions/${session.id}/comments`); setComments(r.data); }
+    catch (e) { console.error(e); }
+  }, [session.id]);
 
   const loadData = useCallback(async () => {
     try {
@@ -636,13 +655,13 @@ const IDCReviewRoom: React.FC<Props> = ({ session: initialSession, onBack }) => 
     ws.onmessage = (e) => {
       const msg = JSON.parse(e.data);
       if (msg.type === 'roster') setOnlineUsers(msg.users);
-      else if (msg.type === 'annotation' || msg.type === 'comment' || msg.type === 'approve' || msg.type === 'freeze') {
-        loadData();
-      }
+      else if (msg.type === 'annotation') loadAnnotations();
+      else if (msg.type === 'comment') loadComments();
+      else if (msg.type === 'approve' || msg.type === 'freeze') loadData();
     };
 
     return () => { ws.close(); };
-  }, [session.id, loadData]);
+  }, [session.id, loadData, loadAnnotations, loadComments]);
 
   const broadcastAnnotation = (data: any) => {
     wsRef.current?.send(JSON.stringify({ type: 'annotation', action: 'add', data }));
@@ -658,6 +677,7 @@ const IDCReviewRoom: React.FC<Props> = ({ session: initialSession, onBack }) => 
     { id: 'cloud', icon: '⬟', label: 'Cloud' },
     { id: 'circle', icon: '◯', label: 'Circle' },
     { id: 'line', icon: '/', label: 'Line' },
+    { id: 'text', icon: 'T', label: 'Text' },
   ];
 
   const COLORS = ['#1E90FF', '#FF8C00', '#8B4513', '#9932CC', '#228B22', '#ef4444', '#000000'];
@@ -749,7 +769,7 @@ const IDCReviewRoom: React.FC<Props> = ({ session: initialSession, onBack }) => 
               highlightedAnn={highlightedAnn}
               empId={annotEmpId} empPassword={annotPassword}
               onPageChange={setCurrentPage}
-              onAnnotationCreated={() => { loadData(); broadcastAnnotation({}); }}
+              onAnnotationCreated={() => { loadAnnotations(); broadcastAnnotation({}); }}
               onAnnotationClick={ann => {
                 setHighlightedAnn(ann.ann_uuid);
                 const c = comments.find(c => c.ann_uuid === ann.ann_uuid);
@@ -795,7 +815,7 @@ const IDCReviewRoom: React.FC<Props> = ({ session: initialSession, onBack }) => 
                 ) : null}
                 {showAddComment && (
                   <AddCommentForm sessionId={session.id} page={currentPage} annUuid={highlightedAnn}
-                    onAdded={() => { loadData(); setShowAddComment(false); wsRef.current?.send(JSON.stringify({ type: 'comment', action: 'add' })); }}
+                    onAdded={() => { loadComments(); setShowAddComment(false); wsRef.current?.send(JSON.stringify({ type: 'comment', action: 'add' })); }}
                     onClose={() => setShowAddComment(false)} />
                 )}
                 {filteredComments.length === 0 ? (
@@ -805,7 +825,7 @@ const IDCReviewRoom: React.FC<Props> = ({ session: initialSession, onBack }) => 
                     sessionFrozen={session.status === 'frozen'}
                     highlighted={c.id === highlightedComment}
                     onClick={() => { setHighlightedComment(c.id); if (c.ann_uuid) setHighlightedAnn(c.ann_uuid); }}
-                    onStatusChange={loadData} />
+                    onStatusChange={loadComments} />
                 ))}
               </>
             )}

@@ -16,6 +16,7 @@ import SmartDatasheetExtractor from './components/modules/SmartDatasheetExtracto
 import AdminManagement from './components/modules/AdminManagement';
 import ApprovalQueue from './components/modules/ApprovalQueue';
 import VendorTBE from './components/modules/VendorTBE';
+import IDCModule from './components/modules/IDCModule';
 import ErrorBoundary from './components/ui/ErrorBoundary';
 
 // Create React Query client
@@ -117,6 +118,7 @@ function AppRoutes() {
         <Route path="loop-wiring" element={<LoopWiringGenerator />} />
         <Route path="smart-datasheet" element={<SmartDatasheetExtractor />} />
         <Route path="tbe" element={<VendorTBE />} />
+        <Route path="idc" element={<IDCModule />} />
         <Route path="admin" element={
           <RoleRoute roles={['Admin']}>
             <AdminManagement />

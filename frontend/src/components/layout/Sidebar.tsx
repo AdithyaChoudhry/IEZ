@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import {
   Home, CheckCircle2, FileSpreadsheet, Network,
   FileText, Cable, GitBranch, Layers, ScanSearch,
-  Sparkles, Droplets, ShieldCheck, ClipboardCheck, BarChart2,
+  Sparkles, Droplets, ShieldCheck, ClipboardCheck, BarChart2, GitMerge,
 } from 'lucide-react';
 import clsx from 'clsx';
 import api from '@/services/api';
@@ -52,6 +52,12 @@ const sections = [
     label: 'Procurement',
     items: [
       { path: '/tbe', icon: BarChart2, label: 'Vendor Analysis & TBE' },
+    ],
+  },
+  {
+    label: 'Review',
+    items: [
+      { path: '/idc', icon: GitMerge, label: 'Inter Discipline Check' },
     ],
   },
   {

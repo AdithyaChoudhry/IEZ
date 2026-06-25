@@ -130,6 +130,10 @@ def init_db():
         ApprovalRequest, Employee, Notification, NotificationRoute,
         TBEApprovalLog, TBEVendor
     )
+    from .models.idc import (  # noqa: F401
+        IDCSession, IDCDocument, IDCDiscipline, IDCAnnotation,
+        IDCComment, IDCCommentReply, IDCApproval,
+    )
     Base.metadata.create_all(bind=engine)
     _seed_notification_routes()
     _seed_default_admin()

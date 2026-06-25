@@ -64,7 +64,7 @@ async def webhook(
 
     result = subprocess.run(
         ["bash", "-c",
-         f"cd {REPO_ROOT} && git pull origin main && cd frontend && npm run build"],
+         f"cd {REPO_ROOT} && git stash && git pull origin main && cd frontend && npm install && npm run build"],
         capture_output=True, text=True, timeout=300,
     )
 

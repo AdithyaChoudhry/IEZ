@@ -185,6 +185,57 @@ def serve_document(doc_id: int, db: DBSession = Depends(get_db), _: User = Depen
 
 
 # ── Annotations REST ───────────────────────────────────────────────────────────
+@router.post("/sessions/{session_id}/annotations")
+def create_annotation(
+    session_id: int,
+    document_id: int = Form(...),
+    ann_uuid: str = Form(...),
+    tool_type: str = Form(...),
+    page_number: int = Form(1),
+    x: float = Form(...),
+    y: float = Form(...),
+    width: float = Form(0),
+    height: float = Form(0),
+    color: str = Form("#1E90FF"),
+    data_json: Optional[str] = Form(None),
+    text_content: Optional[str] = Form(None),
+    employee_id: str = Form(...),
+    password: str = Form(...),
+    db: DBSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    s = _session_or_404(session_id, db)
+    if s.status == "frozen":
+        raise HTTPException(403, "Session is frozen")
+    emp = _verify_emp(employee_id, password, db)
+    data = json.loads(data_json) if data_json else None
+    if text_content:
+        data = {"text": text_content}
+    ann = IDCAnnotation(
+        session_id=session_id, document_id=document_id, ann_uuid=ann_uuid,
+        tool_type=tool_type, page_number=page_number,
+        x=x, y=y, width=width, height=height, color=color,
+        data_json=data, author_emp=emp.employee_id, author_name=emp.employee_name,
+        discipline=emp.department or "Instrumentation Engineering",
+    )
+    db.add(ann); db.commit(); db.refresh(ann)
+    return {"id": ann.id, "ann_uuid": ann.ann_uuid}
+
+
+@router.delete("/annotations/{ann_uuid}")
+def delete_annotation(
+    ann_uuid: str,
+    db: DBSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    ann = db.query(IDCAnnotation).filter(IDCAnnotation.ann_uuid == ann_uuid).first()
+    if not ann:
+        raise HTTPException(404, "Annotation not found")
+    ann.is_deleted = True
+    db.commit()
+    return {"deleted": True}
+
+
 @router.get("/sessions/{session_id}/annotations")
 def list_annotations(session_id: int, db: DBSession = Depends(get_db), _: User = Depends(get_current_user)):
     anns = db.query(IDCAnnotation).filter(

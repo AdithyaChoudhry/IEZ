@@ -352,10 +352,12 @@ const PDFViewer: React.FC<{
   currentPage: number;
   annotations: Annotation[];
   highlightedAnn?: string;
+  empId: string;
+  empPassword: string;
   onPageChange: (p: number) => void;
   onAnnotationCreated: () => void;
   onAnnotationClick: (ann: Annotation) => void;
-}> = ({ docId, sessionFrozen, activeTool, activeColor, currentPage, annotations, highlightedAnn, onPageChange, onAnnotationCreated, onAnnotationClick }) => {
+}> = ({ docId, sessionId, sessionFrozen, activeTool, activeColor, currentPage, annotations, highlightedAnn, empId, empPassword, onPageChange, onAnnotationCreated, onAnnotationClick }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
   const [pdf, setPdf] = useState<any>(null);
@@ -364,6 +366,8 @@ const PDFViewer: React.FC<{
   const [drawing, setDrawing] = useState(false);
   const [draft, setDraft] = useState<AnnotationDraft | null>(null);
   const [loading, setLoading] = useState(true);
+  const [textPrompt, setTextPrompt] = useState<{ x: number; y: number } | null>(null);
+  const [textInput, setTextInput] = useState('');
 
   // Load PDF
   useEffect(() => {
@@ -462,19 +466,39 @@ const PDFViewer: React.FC<{
     else if (activeTool === 'line') { ctx.beginPath(); ctx.moveTo(draft.startX, draft.startY); ctx.lineTo(x, y); ctx.stroke(); }
   };
 
+  const saveAnnotation = async (tool: string, sx: number, sy: number, ex: number, ey: number, textContent?: string) => {
+    if (!empId || !empPassword) return;
+    try {
+      const fd = new FormData();
+      fd.append('document_id', String(docId));
+      fd.append('ann_uuid', crypto.randomUUID());
+      fd.append('tool_type', tool);
+      fd.append('page_number', String(currentPage));
+      fd.append('x', String(sx)); fd.append('y', String(sy));
+      fd.append('width', String(ex - sx)); fd.append('height', String(ey - sy));
+      fd.append('color', activeColor);
+      fd.append('employee_id', empId); fd.append('password', empPassword);
+      if (tool === 'line') fd.append('data_json', JSON.stringify({ x1: sx, y1: sy, x2: ex, y2: ey }));
+      if (textContent) fd.append('text_content', textContent);
+      await api.post(`/idc/sessions/${sessionId}/annotations`, fd);
+      onAnnotationCreated();
+    } catch (e) { console.error('Annotation save failed', e); }
+  };
+
   const mouseUp = async () => {
     if (!drawing || !draft) return;
     setDrawing(false);
     const dx = draft.endX - draft.startX, dy = draft.endY - draft.startY;
     if (Math.abs(dx) < 5 && Math.abs(dy) < 5) { setDraft(null); return; }
-    // Broadcast annotation via WebSocket
-    try {
-      onAnnotationCreated();
-    } catch (e) { console.error(e); }
+    await saveAnnotation(draft.tool, draft.startX, draft.startY, draft.endX, draft.endY);
     setDraft(null);
   };
 
   const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (activeTool === 'text') {
+      const { x, y } = getPos(e);
+      setTextPrompt({ x, y }); setTextInput(''); return;
+    }
     if (activeTool !== 'cursor') return;
     const { x, y } = getPos(e);
     const hit = annotations.find(a => a.page_number === currentPage &&
@@ -503,10 +527,26 @@ const PDFViewer: React.FC<{
         <div style={{ position: 'relative' }}>
           <canvas ref={canvasRef} style={{ display: 'block' }} />
           <canvas ref={overlayRef}
-            style={{ position: 'absolute', top: 0, left: 0, cursor: activeTool === 'cursor' ? 'default' : 'crosshair' }}
+            style={{ position: 'absolute', top: 0, left: 0, cursor: activeTool === 'text' ? 'text' : activeTool === 'cursor' ? 'default' : 'crosshair' }}
             onMouseDown={mouseDown} onMouseMove={mouseMove} onMouseUp={mouseUp}
             onClick={handleCanvasClick}
           />
+          {/* Text annotation input */}
+          {textPrompt && (
+            <div style={{ position: 'absolute', top: textPrompt.y, left: textPrompt.x, zIndex: 10 }}>
+              <input autoFocus value={textInput} onChange={e => setTextInput(e.target.value)}
+                placeholder="Type text…"
+                onKeyDown={async e => {
+                  if (e.key === 'Enter' && textInput.trim()) {
+                    await saveAnnotation('text', textPrompt.x, textPrompt.y, textPrompt.x + 150, textPrompt.y + 20, textInput.trim());
+                    setTextPrompt(null); setTextInput('');
+                  } else if (e.key === 'Escape') { setTextPrompt(null); }
+                }}
+                style={{ background: 'rgba(30,58,95,0.95)', border: `1px solid ${activeColor}`, borderRadius: 4, padding: '4px 8px', color: activeColor, fontSize: 13, minWidth: 140, outline: 'none' }}
+              />
+              <div style={{ fontSize: 10, color: '#64748b', marginTop: 2 }}>Enter to save · Esc to cancel</div>
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -523,6 +563,10 @@ const IDCReviewRoom: React.FC<Props> = ({ session: initialSession, onBack }) => 
   const [currentDocId, setCurrentDocId] = useState<number>(initialSession.documents[0]?.id || 0);
   const [currentPage, setCurrentPage] = useState(1);
   const [activeTool, setActiveTool] = useState('cursor');
+  const [annotEmpId, setAnnotEmpId] = useState('');
+  const [annotPassword, setAnnotPassword] = useState('');
+  const [showAnnotAuth, setShowAnnotAuth] = useState(false);
+  const [pendingTool, setPendingTool] = useState('');
   const [activeColor, setActiveColor] = useState('#1E90FF');
   const [activeTab, setActiveTab] = useState<'comments' | 'approvals' | 'online'>('comments');
   const [showAddComment, setShowAddComment] = useState(false);
@@ -646,7 +690,10 @@ const IDCReviewRoom: React.FC<Props> = ({ session: initialSession, onBack }) => 
             <div style={{ fontSize: 11, color: '#64748b', fontWeight: 700, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>Tools</div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
               {TOOLS.map(t => (
-                <button key={t.id} onClick={() => setActiveTool(t.id)} title={t.label}
+                <button key={t.id} onClick={() => {
+                  if (t.id !== 'cursor' && !annotEmpId) { setPendingTool(t.id); setShowAnnotAuth(true); return; }
+                  setActiveTool(t.id);
+                }} title={t.label}
                   style={{ padding: '6px', background: activeTool === t.id ? '#1e40af' : '#1e293b', border: `1px solid ${activeTool === t.id ? '#2563eb' : '#334155'}`, borderRadius: 6, color: activeTool === t.id ? '#fff' : '#94a3b8', cursor: 'pointer', fontSize: 14 }}>
                   {t.icon}
                 </button>
@@ -670,6 +717,7 @@ const IDCReviewRoom: React.FC<Props> = ({ session: initialSession, onBack }) => 
               activeTool={activeTool} activeColor={activeColor}
               currentPage={currentPage} annotations={annotations}
               highlightedAnn={highlightedAnn}
+              empId={annotEmpId} empPassword={annotPassword}
               onPageChange={setCurrentPage}
               onAnnotationCreated={() => { loadData(); broadcastAnnotation({}); }}
               onAnnotationClick={ann => {
@@ -755,6 +803,13 @@ const IDCReviewRoom: React.FC<Props> = ({ session: initialSession, onBack }) => 
           </div>
         </div>
       </div>
+
+      {showAnnotAuth && (
+        <AuthGate title="Identify yourself to annotate"
+          onClose={() => { setShowAnnotAuth(false); setPendingTool(''); }}
+          onAuth={(id, pw) => { setAnnotEmpId(id); setAnnotPassword(pw); setActiveTool(pendingTool); setShowAnnotAuth(false); }}
+        />
+      )}
     </div>
   );
 };

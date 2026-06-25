@@ -26,6 +26,26 @@ def list_users(db: Session = Depends(get_db), _: User = Depends(require_admin)):
     return db.query(AdminUser).all()
 
 
+@router.get("/accounts")
+def list_all_accounts(db: Session = Depends(get_db), _: User = Depends(require_admin)):
+    """List all registered login accounts (User table), with their linked AdminUser role if any."""
+    users = db.query(User).order_by(User.id.desc()).all()
+    result = []
+    for u in users:
+        admin = db.query(AdminUser).filter(AdminUser.email_id == u.email).first()
+        result.append({
+            "id": u.id,
+            "username": u.username,
+            "email": u.email,
+            "is_active": u.is_active,
+            "employee_id": admin.employee_id if admin else None,
+            "employee_name": admin.employee_name if admin else None,
+            "role": admin.role if admin else "No role assigned",
+            "in_admin_list": admin is not None,
+        })
+    return result
+
+
 @router.post("/users", response_model=AdminUserResponse, status_code=201)
 def create_user(body: AdminUserCreate, db: Session = Depends(get_db), _: User = Depends(require_admin)):
     if body.password != body.confirm_password:

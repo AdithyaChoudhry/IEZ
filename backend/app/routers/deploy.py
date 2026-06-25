@@ -44,6 +44,7 @@ def _restart_service():
     except Exception as e:
         logger.warning("systemctl exception: %s", e)
 
+
     # os._exit(1) → process exits with non-zero code → systemd Restart=on-failure kicks in
     logger.info("Triggering restart via os._exit(1)")
     os._exit(1)
@@ -75,7 +76,7 @@ async def webhook(
     logger.info("Deploy succeeded: %s", result.stdout[-200:])
 
     # Restart backend in background so this response can return first
-    background_tasks.add_task(_restart_service)
+    background_tasks.add_task(_restart_service)  # restarts iez.service via os._exit(1)
 
     return {"status": "ok", "output": result.stdout[-500:]}
 

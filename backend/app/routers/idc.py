@@ -150,6 +150,27 @@ def get_session(session_id: int, db: DBSession = Depends(get_db), _: User = Depe
     return _session_dict(_session_or_404(session_id, db))
 
 
+@router.delete("/sessions/{session_id}", status_code=204)
+def delete_session(
+    session_id: int,
+    employee_id: str,
+    password: str,
+    db: DBSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    s = _session_or_404(session_id, db)
+    emp = _verify_emp(employee_id, password, db)
+    if emp.role not in ("Admin",) and s.created_by_emp != emp.employee_id:
+        raise HTTPException(403, "Only the session creator or Admin can delete")
+    # delete uploaded files from disk
+    for doc in s.documents:
+        path = UPLOAD_DIR / doc.filename
+        if path.exists():
+            path.unlink()
+    db.delete(s)
+    db.commit()
+
+
 # ── Document serve ─────────────────────────────────────────────────────────────
 @router.get("/documents/{doc_id}/file")
 def serve_document(doc_id: int, db: DBSession = Depends(get_db), _: User = Depends(get_current_user)):

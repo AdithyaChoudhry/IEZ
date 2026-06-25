@@ -610,11 +610,19 @@ const IDCReviewRoom: React.FC<Props> = ({ session: initialSession, onBack }) => 
         <span style={{ padding: '3px 10px', borderRadius: 12, fontSize: 11, fontWeight: 700, background: session.status === 'frozen' ? '#1a3a5c' : '#1a4a2a', color: session.status === 'frozen' ? '#60b4ff' : '#4ade80', border: `1px solid ${session.status === 'frozen' ? '#2563eb' : '#16a34a'}` }}>
           {session.status === 'frozen' ? '❄ Frozen' : '● Active'}
         </span>
-        {/* export */}
-        <a href={`${import.meta.env.VITE_API_URL || ''}/api/idc/sessions/${session.id}/export/comments`}
-          style={{ padding: '5px 12px', background: '#0f2a1a', border: '1px solid #16a34a', borderRadius: 6, color: '#4ade80', cursor: 'pointer', fontSize: 11, textDecoration: 'none', fontWeight: 600 }}>
+        {/* export — must use fetch with auth token */}
+        <button onClick={async () => {
+          const token = localStorage.getItem('access_token');
+          const res = await fetch(`/api/idc/sessions/${session.id}/export/comments`, { headers: { Authorization: `Bearer ${token}` } });
+          if (!res.ok) return;
+          const blob = await res.blob();
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url; a.download = `IDC_${session.idc_number}_CommentRegister.xlsx`; a.click();
+          URL.revokeObjectURL(url);
+        }} style={{ padding: '5px 12px', background: '#0f2a1a', border: '1px solid #16a34a', borderRadius: 6, color: '#4ade80', cursor: 'pointer', fontSize: 11, fontWeight: 600 }}>
           ↓ Export
-        </a>
+        </button>
       </div>
 
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>

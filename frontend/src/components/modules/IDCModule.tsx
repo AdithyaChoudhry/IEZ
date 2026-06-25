@@ -114,7 +114,8 @@ const CreateSessionModal: React.FC<{ onClose: () => void; onCreated: (s: IDCSess
       const res = await api.post('/idc/sessions', fd);
       onCreated(res.data);
     } catch (e: any) {
-      setError(e.response?.data?.detail || 'Failed to create session');
+      const detail = e.response?.data?.detail;
+      setError(typeof detail === 'string' ? detail : Array.isArray(detail) ? detail.map((d: any) => d.msg).join(', ') : 'Failed to create session');
     } finally { setLoading(false); }
   };
 
@@ -220,16 +221,62 @@ const CreateSessionModal: React.FC<{ onClose: () => void; onCreated: (s: IDCSess
   );
 };
 
+// ── Delete confirm modal ────────────────────────────────────────────────────────
+const DeleteModal: React.FC<{ session: IDCSessionSummary; onClose: () => void; onDeleted: () => void }> = ({ session, onClose, onDeleted }) => {
+  const [empId, setEmpId] = useState('');
+  const [pw, setPw] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  const doDelete = async () => {
+    setLoading(true); setError('');
+    try {
+      await api.delete(`/idc/sessions/${session.id}`, { params: { employee_id: empId, password: pw } });
+      onDeleted();
+    } catch (e: any) {
+      const detail = e.response?.data?.detail;
+      setError(typeof detail === 'string' ? detail : 'Failed to delete');
+    } finally { setLoading(false); }
+  };
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.8)', zIndex: 2000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <div style={{ background: '#0d1b2a', border: '1px solid #dc2626', borderRadius: 12, padding: 28, width: 400 }}>
+        <h3 style={{ color: '#fca5a5', margin: '0 0 8px' }}>Delete IDC Session?</h3>
+        <p style={{ color: '#94a3b8', fontSize: 13, margin: '0 0 16px' }}>
+          <strong style={{ color: '#e2e8f0' }}>{session.idc_number}</strong> — {session.document_title}<br />
+          This will permanently delete all comments, annotations and uploaded files.
+        </p>
+        {error && <div style={{ color: '#fca5a5', fontSize: 12, marginBottom: 12, background: '#450a0a', padding: 8, borderRadius: 6 }}>{error}</div>}
+        <input placeholder="Employee ID" value={empId} onChange={e => setEmpId(e.target.value)}
+          style={{ width: '100%', background: '#1e293b', border: '1px solid #334155', borderRadius: 6, padding: '8px 10px', color: '#e2e8f0', fontSize: 13, marginBottom: 8, boxSizing: 'border-box' }} />
+        <input type="password" placeholder="Password" value={pw} onChange={e => setPw(e.target.value)}
+          style={{ width: '100%', background: '#1e293b', border: '1px solid #334155', borderRadius: 6, padding: '8px 10px', color: '#e2e8f0', fontSize: 13, marginBottom: 16, boxSizing: 'border-box' }} />
+        <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+          <button onClick={onClose} style={{ padding: '8px 18px', background: '#1e293b', border: '1px solid #334155', borderRadius: 6, color: '#94a3b8', cursor: 'pointer', fontSize: 13 }}>Cancel</button>
+          <button onClick={doDelete} disabled={loading || !empId || !pw}
+            style={{ padding: '8px 18px', background: '#dc2626', border: 'none', borderRadius: 6, color: '#fff', cursor: loading ? 'wait' : 'pointer', fontSize: 13, fontWeight: 600 }}>
+            {loading ? 'Deleting...' : 'Delete'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 // ── Session Card ───────────────────────────────────────────────────────────────
-const SessionCard: React.FC<{ session: IDCSessionSummary; onOpen: () => void }> = ({ session, onOpen }) => {
+const SessionCard: React.FC<{ session: IDCSessionSummary; onOpen: () => void; onDelete: () => void }> = ({ session, onOpen, onDelete }) => {
   const approvedCount = Object.keys(session.approvals).length;
   const totalDisc = session.disciplines.length;
   const pct = totalDisc > 0 ? Math.round((approvedCount / totalDisc) * 100) : 0;
+  const [showDelete, setShowDelete] = useState(false);
 
   return (
+    <>
+    {showDelete && <DeleteModal session={session} onClose={() => setShowDelete(false)} onDeleted={() => { setShowDelete(false); onDelete(); }} />}
     <div onClick={onOpen} style={{
       background: '#0d1b2a', border: '1px solid #1e3a5f', borderRadius: 10, padding: 18,
-      cursor: 'pointer', transition: 'border-color 0.2s',
+      cursor: 'pointer', transition: 'border-color 0.2s', position: 'relative',
     }}
       onMouseEnter={e => (e.currentTarget.style.borderColor = '#3b82f6')}
       onMouseLeave={e => (e.currentTarget.style.borderColor = '#1e3a5f')}>
@@ -239,7 +286,13 @@ const SessionCard: React.FC<{ session: IDCSessionSummary; onOpen: () => void }> 
           <div style={{ fontSize: 15, fontWeight: 600, color: '#e2e8f0', marginTop: 2 }}>{session.document_title}</div>
           <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>{session.document_number} | Rev {session.revision_number}</div>
         </div>
-        <StatusBadge status={session.status} />
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <StatusBadge status={session.status} />
+          <button onClick={e => { e.stopPropagation(); setShowDelete(true); }}
+            style={{ padding: '3px 8px', background: '#450a0a', border: '1px solid #dc2626', borderRadius: 6, color: '#fca5a5', cursor: 'pointer', fontSize: 11 }}>
+            ✕
+          </button>
+        </div>
       </div>
 
       <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 8 }}>
@@ -264,6 +317,7 @@ const SessionCard: React.FC<{ session: IDCSessionSummary; onOpen: () => void }> 
         <div style={{ height: '100%', width: `${pct}%`, background: pct === 100 ? '#16a34a' : '#2563eb', borderRadius: 2, transition: 'width 0.3s' }} />
       </div>
     </div>
+    </>
   );
 };
 
@@ -372,7 +426,7 @@ const IDCModule: React.FC = () => {
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(360px, 1fr))', gap: 16 }}>
           {filtered.map(s => (
-            <SessionCard key={s.id} session={s} onOpen={() => setActiveSession(s)} />
+            <SessionCard key={s.id} session={s} onOpen={() => setActiveSession(s)} onDelete={loadSessions} />
           ))}
         </div>
       )}

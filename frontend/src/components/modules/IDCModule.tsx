@@ -111,7 +111,7 @@ const CreateSessionModal: React.FC<{ onClose: () => void; onCreated: (s: IDCSess
       Object.entries(form).forEach(([k, v]) => fd.append(k, v));
       fd.append('disciplines', JSON.stringify(selectedDisc));
       files.forEach(f => fd.append('files', f));
-      const res = await api.post('/api/idc/sessions', fd);
+      const res = await api.post('/idc/sessions', fd);
       onCreated(res.data);
     } catch (e: any) {
       setError(e.response?.data?.detail || 'Failed to create session');
@@ -278,7 +278,7 @@ const IDCModule: React.FC = () => {
 
   const loadSessions = useCallback(async () => {
     try {
-      const res = await api.get('/api/idc/sessions');
+      const res = await api.get('/idc/sessions');
       setSessions(res.data);
     } catch (e) {
       console.error('Failed to load IDC sessions', e);

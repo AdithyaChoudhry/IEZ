@@ -119,7 +119,7 @@ const CommentCard: React.FC<{
     try {
       const fd = new FormData();
       fd.append('employee_id', empId); fd.append('password', pw); fd.append('reply_text', replyText);
-      await api.post(`/api/idc/sessions/${sessionId}/comments/${comment.id}/reply`, fd);
+      await api.post(`/idc/sessions/${sessionId}/comments/${comment.id}/reply`, fd);
       setReplyText(''); setShowReply(false); setAuthGate(null);
       onStatusChange();
     } catch (e: any) { setError(e.response?.data?.detail || 'Failed'); } finally { setLoading(false); }
@@ -130,7 +130,7 @@ const CommentCard: React.FC<{
     try {
       const fd = new FormData();
       fd.append('employee_id', empId); fd.append('password', pw); fd.append('status', newStatus);
-      await api.patch(`/api/idc/sessions/${sessionId}/comments/${comment.id}`, fd);
+      await api.patch(`/idc/sessions/${sessionId}/comments/${comment.id}`, fd);
       setAuthGate(null); onStatusChange();
     } catch (e: any) { setError(e.response?.data?.detail || 'Failed'); } finally { setLoading(false); }
   };
@@ -217,7 +217,7 @@ const AddCommentForm: React.FC<{ sessionId: number; annUuid?: string; page: numb
         Object.entries(form).forEach(([k, v]) => fd.append(k, v));
         fd.append('page_number', String(page));
         if (annUuid) fd.append('ann_uuid', annUuid);
-        await api.post(`/api/idc/sessions/${sessionId}/comments`, fd);
+        await api.post(`/idc/sessions/${sessionId}/comments`, fd);
         onAdded();
       } catch (e: any) { setError(e.response?.data?.detail || 'Failed'); } finally { setLoading(false); }
     };
@@ -268,7 +268,7 @@ const ApprovalPanel: React.FC<{ session: IDCSession; onUpdate: () => void }> = (
     try {
       const fd = new FormData();
       fd.append('discipline', disc); fd.append('employee_id', empId); fd.append('password', pw);
-      await api.post(`/api/idc/sessions/${session.id}/approve`, fd);
+      await api.post(`/idc/sessions/${session.id}/approve`, fd);
       setShowApproveFor(null); onUpdate();
     } catch (e: any) { setError(e.response?.data?.detail || 'Failed'); } finally { setLoading(false); }
   };
@@ -278,7 +278,7 @@ const ApprovalPanel: React.FC<{ session: IDCSession; onUpdate: () => void }> = (
     try {
       const fd = new FormData();
       fd.append('employee_id', empId); fd.append('password', pw);
-      await api.post(`/api/idc/sessions/${session.id}/freeze`, fd);
+      await api.post(`/idc/sessions/${session.id}/freeze`, fd);
       setShowFreeze(false); onUpdate();
     } catch (e: any) { setError(e.response?.data?.detail || 'Failed'); } finally { setLoading(false); }
   };
@@ -533,9 +533,9 @@ const IDCReviewRoom: React.FC<Props> = ({ session: initialSession, onBack }) => 
   const loadData = useCallback(async () => {
     try {
       const [annRes, comRes, sessRes] = await Promise.all([
-        api.get(`/api/idc/sessions/${session.id}/annotations`),
-        api.get(`/api/idc/sessions/${session.id}/comments`),
-        api.get(`/api/idc/sessions/${session.id}`),
+        api.get(`/idc/sessions/${session.id}/annotations`),
+        api.get(`/idc/sessions/${session.id}/comments`),
+        api.get(`/idc/sessions/${session.id}`),
       ]);
       setAnnotations(annRes.data);
       setComments(comRes.data);

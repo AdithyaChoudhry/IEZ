@@ -208,14 +208,14 @@ def create_annotation(
     if s.status == "frozen":
         raise HTTPException(403, "Session is frozen")
     emp = _verify_emp(employee_id, password, db)
-    data = json.loads(data_json) if data_json else None
+    data = json.loads(data_json) if data_json else {}
     if text_content:
         data = {"text": text_content}
     ann = IDCAnnotation(
         session_id=session_id, document_id=document_id, ann_uuid=ann_uuid,
         tool_type=tool_type, page_number=page_number,
         x=x, y=y, width=width, height=height, color=color,
-        data_json=data, author_emp=emp.employee_id, author_name=emp.employee_name,
+        data_json=json.dumps(data), author_emp=emp.employee_id, author_name=emp.employee_name,
         discipline=emp.department or "Instrumentation Engineering",
     )
     db.add(ann); db.commit(); db.refresh(ann)
@@ -245,7 +245,7 @@ def list_annotations(session_id: int, db: DBSession = Depends(get_db), _: User =
         "id": a.id, "ann_uuid": a.ann_uuid, "document_id": a.document_id,
         "tool_type": a.tool_type, "page_number": a.page_number,
         "x": a.x, "y": a.y, "width": a.width, "height": a.height,
-        "data_json": a.data_json, "color": a.color,
+        "data_json": json.loads(a.data_json) if a.data_json else {}, "color": a.color,
         "author_emp": a.author_emp, "author_name": a.author_name, "discipline": a.discipline,
         "created_at": a.created_at.isoformat(),
     } for a in anns]

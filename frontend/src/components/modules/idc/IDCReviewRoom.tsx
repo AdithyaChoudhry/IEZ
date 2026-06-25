@@ -527,24 +527,54 @@ const PDFViewer: React.FC<{
         <div style={{ position: 'relative' }}>
           <canvas ref={canvasRef} style={{ display: 'block' }} />
           <canvas ref={overlayRef}
-            style={{ position: 'absolute', top: 0, left: 0, cursor: activeTool === 'text' ? 'text' : activeTool === 'cursor' ? 'default' : 'crosshair' }}
+            style={{
+              position: 'absolute', top: 0, left: 0,
+              cursor: activeTool === 'text' ? 'text' : activeTool === 'cursor' ? 'default' : 'crosshair',
+              pointerEvents: textPrompt ? 'none' : 'auto',
+            }}
             onMouseDown={mouseDown} onMouseMove={mouseMove} onMouseUp={mouseUp}
             onClick={handleCanvasClick}
           />
-          {/* Text annotation input */}
+          {/* Text annotation — floating modal so canvas can't block it */}
           {textPrompt && (
-            <div style={{ position: 'absolute', top: textPrompt.y, left: textPrompt.x, zIndex: 10 }}>
-              <input autoFocus value={textInput} onChange={e => setTextInput(e.target.value)}
-                placeholder="Type text…"
+            <div style={{
+              position: 'absolute', top: textPrompt.y, left: textPrompt.x,
+              zIndex: 100, background: '#0d1b2a', border: `2px solid ${activeColor}`,
+              borderRadius: 8, padding: 10, minWidth: 200, boxShadow: '0 4px 20px rgba(0,0,0,0.6)',
+            }}>
+              <div style={{ fontSize: 11, color: '#64748b', marginBottom: 6 }}>Add text annotation</div>
+              <input
+                ref={el => el && setTimeout(() => el.focus(), 0)}
+                value={textInput}
+                onChange={e => setTextInput(e.target.value)}
+                placeholder="Type here..."
                 onKeyDown={async e => {
+                  e.stopPropagation();
                   if (e.key === 'Enter' && textInput.trim()) {
                     await saveAnnotation('text', textPrompt.x, textPrompt.y, textPrompt.x + 150, textPrompt.y + 20, textInput.trim());
                     setTextPrompt(null); setTextInput('');
-                  } else if (e.key === 'Escape') { setTextPrompt(null); }
+                  } else if (e.key === 'Escape') { setTextPrompt(null); setTextInput(''); }
                 }}
-                style={{ background: 'rgba(30,58,95,0.95)', border: `1px solid ${activeColor}`, borderRadius: 4, padding: '4px 8px', color: activeColor, fontSize: 13, minWidth: 140, outline: 'none' }}
+                style={{
+                  width: '100%', background: '#1e293b', border: `1px solid ${activeColor}`,
+                  borderRadius: 5, padding: '6px 8px', color: '#e2e8f0', fontSize: 13,
+                  outline: 'none', boxSizing: 'border-box',
+                }}
               />
-              <div style={{ fontSize: 10, color: '#64748b', marginTop: 2 }}>Enter to save · Esc to cancel</div>
+              <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+                <button onClick={async () => {
+                  if (textInput.trim()) {
+                    await saveAnnotation('text', textPrompt.x, textPrompt.y, textPrompt.x + 150, textPrompt.y + 20, textInput.trim());
+                    setTextPrompt(null); setTextInput('');
+                  }
+                }} style={{ flex: 1, padding: '5px', background: '#1e40af', border: 'none', borderRadius: 5, color: '#fff', cursor: 'pointer', fontSize: 12 }}>
+                  Save
+                </button>
+                <button onClick={() => { setTextPrompt(null); setTextInput(''); }}
+                  style={{ padding: '5px 10px', background: '#1e293b', border: '1px solid #334155', borderRadius: 5, color: '#94a3b8', cursor: 'pointer', fontSize: 12 }}>
+                  ✕
+                </button>
+              </div>
             </div>
           )}
         </div>

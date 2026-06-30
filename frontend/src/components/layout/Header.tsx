@@ -1,8 +1,9 @@
 import { useAuth } from '@/context/AuthContext';
+import { useTheme } from '@/context/ThemeContext';
 import {
   Menu, LogOut, User, ChevronDown, Droplets, Bell, CheckCheck,
   Clock, ThumbsUp, ThumbsDown, Info, CheckCircle2, XCircle,
-  AlertTriangle, Loader2, X, FileText, Tag,
+  AlertTriangle, Loader2, X, FileText, Tag, Sun, Moon,
 } from 'lucide-react';
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -301,6 +302,7 @@ function QuickApproveDrawer({
 // ── Header ─────────────────────────────────────────────────────────────────────
 export default function Header({ onToggleSidebar }: HeaderProps) {
   const { user, logout } = useAuth();
+  const { theme, toggleTheme } = useTheme();
   const navigate = useNavigate();
 
   const [profileOpen, setProfileOpen] = useState(false);
@@ -422,6 +424,18 @@ export default function Header({ onToggleSidebar }: HeaderProps) {
 
         {/* Right */}
         <div className="flex items-center gap-2">
+
+          {/* Theme toggle */}
+          <button
+            onClick={toggleTheme}
+            title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+            className="w-8 h-8 flex items-center justify-center rounded-lg transition-all duration-150"
+            style={{ color: 'var(--t2)' }}
+            onMouseEnter={e => { e.currentTarget.style.background = 'var(--s3)'; e.currentTarget.style.color = 'var(--t0)'; }}
+            onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--t2)'; }}
+          >
+            {theme === 'dark' ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+          </button>
 
           {/* Bell */}
           <div className="relative" ref={bellRef}>

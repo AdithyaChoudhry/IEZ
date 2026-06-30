@@ -4,6 +4,7 @@ import {
   CheckCircle2, FileSpreadsheet, Cable, FileText, Network,
   GitBranch, Layers, ArrowRight, ArrowUpRight,
   ScanSearch, Sparkles, Gauge, Zap, BarChart3,
+  ShoppingCart, ClipboardCheck,
 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 
@@ -16,6 +17,8 @@ const modules = [
   { id: 'cover',       path: '/cover-sheet',       icon: Layers,        name: 'Cover Sheet',       desc: 'Build cover sheets with custom branding and WABAG revision control.',              accent: '#34d399', tag: 'Documents'  },
   { id: 'cable',       path: '/cable-schedule',    icon: Cable,         name: 'Cable Schedule',    desc: 'Create cable schedules grouped by junction box from field instrument data.',       accent: '#f87171', tag: 'Generator'  },
   { id: 'loop',        path: '/loop-wiring',       icon: GitBranch,     name: 'Loop Wiring',       desc: 'Generate loop wiring diagrams automatically from input files.',                   accent: '#fbbf24', tag: 'Generator'  },
+  { id: 'tbe',         path: '/tbe',               icon: ShoppingCart,  name: 'Vendor Analysis & TBE', desc: 'Compare vendor offers and generate technical bid evaluations.',              accent: '#22d3ee', tag: 'Procurement' },
+  { id: 'idc',         path: '/idc',               icon: ClipboardCheck,name: 'Inter Discipline Check', desc: 'Cross-check instrumentation data against other engineering disciplines.',  accent: '#f472b6', tag: 'Review'      },
 ];
 
 /* ── Animated counter ─────────────────────────────────────────────────────── */
@@ -112,7 +115,7 @@ export default function DashboardPage() {
   const { user } = useAuth();
 
   const stats = [
-    { label: 'Modules',  val: 8,   suffix: '',  icon: Gauge,    color: 'var(--em)' },
+    { label: 'Modules',  val: modules.length, suffix: '',  icon: Gauge,    color: 'var(--em)' },
     { label: 'AI Tools', val: 1,   suffix: '',  icon: Sparkles, color: 'var(--gold)' },
     { label: 'Auto-Gen', val: 6,   suffix: '',  icon: Zap,      color: 'var(--sky)' },
     { label: 'Uptime',   val: 100, suffix: '%', icon: BarChart3, color: '#4ade80' },

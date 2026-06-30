@@ -45,10 +45,52 @@
   --rose:    #f87171;
   --violet:  #a78bfa;
   --sky:     #38bdf8;
+
+  --glass-bg: rgba(8,17,31,0.96);
+}
+
+/* ─── Light theme overrides ──────────────────────────────────────────────── */
+[data-theme='light'] {
+  color-scheme: light;
+
+  --s0: #f4f7fb;
+  --s1: #ffffff;
+  --s2: #ffffff;
+  --s3: #eef2f9;
+  --s4: #e3e9f3;
+
+  --b0: rgba(30,58,107,0.06);
+  --b1: rgba(30,58,107,0.1);
+  --b2: rgba(30,58,107,0.16);
+  --b3: rgba(30,58,107,0.28);
+
+  --t0: #0f1b2e;
+  --t1: #43597a;
+  --t2: #7a8ca8;
+
+  --glass-bg: rgba(255,255,255,0.96);
+}
+
+[data-theme='light'] body { background: var(--s0); }
+
+/* Module page auto-cascade assumes white-on-dark; on light theme the original
+   light Tailwind classes already look right, so undo the dark overrides. */
+[data-theme='light'] main .bg-white,
+[data-theme='light'] main .bg-gray-50,
+[data-theme='light'] main .bg-gray-100,
+[data-theme='light'] main input[type="text"],
+[data-theme='light'] main input[type="password"],
+[data-theme='light'] main input[type="email"],
+[data-theme='light'] main input[type="number"],
+[data-theme='light'] main input[type="search"],
+[data-theme='light'] main select,
+[data-theme='light'] main textarea,
+[data-theme='light'] main input[type="file"] {
+  background: var(--s2) !important;
 }
 
 /* ─── Base ───────────────────────────────────────────────────────────────── */
-body  { margin:0; min-height:100vh; background:var(--s0); color:var(--t0); }
+body  { margin:0; min-height:100vh; background:var(--s0); color:var(--t0); transition: background-color .2s ease, color .2s ease; }
 #root { min-height:100vh; }
 
 /* ─── SDIE legacy keyframes (SmartDatasheetExtractor depends on these) ───── */
@@ -135,7 +177,7 @@ body  { margin:0; min-height:100vh; background:var(--s0); color:var(--t0); }
 
 /* ─── Glassmorphism (popups/dropdowns) ───────────────────────────────────── */
 .glass {
-  background:rgba(8,17,31,0.96);
+  background:var(--glass-bg);
   backdrop-filter:blur(20px);
   -webkit-backdrop-filter:blur(20px);
   border:1px solid var(--b2);

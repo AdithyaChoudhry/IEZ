@@ -1,15 +1,14 @@
 """
 Authentication endpoints: register, login, refresh token, logout.
 """
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from ..deps import get_db, get_current_user
 from ..models.auth import UserCreate, UserLogin, UserResponse, Token, RefreshTokenRequest
-from .models import User, AdminUser
+from .models import User, AdminUser, LoginLog
 from .utils import verify_password, get_password_hash, create_access_token, create_refresh_token, decode_token
-from .sms_alert import send_login_alert_sms
 from ..config import settings
 
 
@@ -62,7 +61,7 @@ def register(user_in: UserCreate, db: Session = Depends(get_db)):
 
 
 @router.post("/login", response_model=Token)
-def login(user_credentials: UserLogin, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+def login(user_credentials: UserLogin, db: Session = Depends(get_db)):
     """
     Login and receive access + refresh tokens.
     
@@ -99,11 +98,18 @@ def login(user_credentials: UserLogin, background_tasks: BackgroundTasks, db: Se
     # Look up engineering role from AdminUser table
     admin = db.query(AdminUser).filter(AdminUser.email_id == user.email).first()
 
-    background_tasks.add_task(
-        send_login_alert_sms,
-        admin.employee_name if admin else user.username,
-        admin.employee_id if admin else None,
-    )
+    # Record this login for the admin "Login Activity" screen
+    now = datetime.utcnow()
+    db.add(LoginLog(
+        employee_id=admin.employee_id if admin else None,
+        employee_name=admin.employee_name if admin else user.username,
+        role=admin.role if admin else "Engineer",
+        username=user.username,
+        login_at=now,
+    ))
+    if admin:
+        admin.last_login = now
+    db.commit()
 
     return {
         "access_token": access_token,

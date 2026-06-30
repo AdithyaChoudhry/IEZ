@@ -2,14 +2,15 @@
 Admin User Management — CRUD + Engineering Approval + Vendor Log
 """
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from ..deps import get_db, get_current_user, require_admin
-from ..auth.models import User, AdminUser, DatasheetApproval, VendorSelectionLog
+from ..auth.models import User, AdminUser, DatasheetApproval, VendorSelectionLog, LoginLog
 from ..auth.utils import get_password_hash, verify_password
+from ..config import settings
 from ..models.admin import (
     AdminUserCreate, AdminUserUpdate, AdminUserResponse,
     ResetPasswordRequest, ApprovalRequest, ApprovalResponse, VendorLogRequest,
@@ -258,3 +259,56 @@ def list_approvals(db: Session = Depends(get_db), _: User = Depends(get_current_
 @router.get("/vendor-logs")
 def list_vendor_logs(db: Session = Depends(get_db), _: User = Depends(get_current_user)):
     return db.query(VendorSelectionLog).order_by(VendorSelectionLog.id.desc()).all()
+
+
+# ── Login Activity ───────────────────────────────────────────────────────────
+
+@router.get("/login-activity")
+def login_activity(db: Session = Depends(get_db), _: User = Depends(require_admin)):
+    """
+    Total distinct users who have ever logged in, currently active sessions
+    (approximated by refresh-token lifetime since logout is client-side only),
+    and the most recent login history.
+    """
+    now = datetime.utcnow()
+    session_window = timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
+
+    logs = db.query(LoginLog).order_by(LoginLog.login_at.desc()).all()
+
+    total_users_logged_in = len({l.employee_id or l.username for l in logs})
+
+    latest_by_user: dict = {}
+    for l in logs:
+        key = l.employee_id or l.username
+        if key not in latest_by_user:
+            latest_by_user[key] = l
+
+    active_sessions = [
+        {
+            "employee_id": l.employee_id,
+            "employee_name": l.employee_name,
+            "role": l.role,
+            "login_at": l.login_at,
+            "expires_at": l.login_at + session_window,
+        }
+        for l in latest_by_user.values()
+        if l.login_at + session_window > now
+    ]
+    active_sessions.sort(key=lambda x: x["login_at"], reverse=True)
+
+    recent_logins = [
+        {
+            "employee_id": l.employee_id,
+            "employee_name": l.employee_name,
+            "role": l.role,
+            "login_at": l.login_at,
+        }
+        for l in logs[:200]
+    ]
+
+    return {
+        "total_users_logged_in": total_users_logged_in,
+        "active_session_count": len(active_sessions),
+        "active_sessions": active_sessions,
+        "recent_logins": recent_logins,
+    }

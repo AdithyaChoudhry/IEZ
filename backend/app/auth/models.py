@@ -41,6 +41,17 @@ class AdminUser(Base):
     last_login = Column(DateTime, nullable=True)
 
 
+class LoginLog(Base):
+    """One row per successful login — powers the admin Login Activity screen."""
+    __tablename__ = "login_logs"
+    id = Column(Integer, primary_key=True, index=True)
+    employee_id = Column(String, nullable=True, index=True)
+    employee_name = Column(String, nullable=False)
+    role = Column(String, nullable=True)
+    username = Column(String, nullable=False)
+    login_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+
 class DatasheetApproval(Base):
     __tablename__ = "datasheet_approval"
     id = Column(Integer, primary_key=True, index=True)

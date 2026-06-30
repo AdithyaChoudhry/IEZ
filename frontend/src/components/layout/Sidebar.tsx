@@ -4,6 +4,7 @@ import {
   Home, CheckCircle2, FileSpreadsheet, Network,
   FileText, Cable, GitBranch, Layers, ScanSearch,
   Sparkles, Droplets, ShieldCheck, ClipboardCheck, BarChart2, GitMerge,
+  Radio,
 } from 'lucide-react';
 import clsx from 'clsx';
 import api from '@/services/api';
@@ -64,6 +65,7 @@ const sections = [
     label: 'Admin',
     items: [
       { path: '/admin',          icon: ShieldCheck,   label: 'Admin Management', allowedRoles: ADMIN_ROLES },
+      { path: '/admin/login-activity', icon: Radio,   label: 'Login Activity',   allowedRoles: ADMIN_ROLES },
       { path: '/approval-queue', icon: ClipboardCheck, label: 'Approval Queue',  allowedRoles: LEAD_ROLES, badge: true },
     ],
   },

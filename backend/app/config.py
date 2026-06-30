@@ -46,13 +46,6 @@ class Settings(BaseSettings):
     # AI Extraction
     GROQ_API_KEY: str = ""
 
-    # SMS login alerts (Twilio)
-    TWILIO_ACCOUNT_SID: str = ""
-    TWILIO_AUTH_TOKEN: str = ""
-    TWILIO_FROM_NUMBER: str = ""
-    LOGIN_ALERT_PHONE: str = ""
-    LOGIN_ALERT_EXCLUDE_EMPLOYEE_ID: str = "ADMIN001"
-
     # WebSocket
     WS_HEARTBEAT_INTERVAL: int = 30
     

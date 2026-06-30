@@ -18,6 +18,7 @@ import AdminManagement from './components/modules/AdminManagement';
 import ApprovalQueue from './components/modules/ApprovalQueue';
 import VendorTBE from './components/modules/VendorTBE';
 import IDCModule from './components/modules/IDCModule';
+import LoginActivity from './components/modules/LoginActivity';
 import ErrorBoundary from './components/ui/ErrorBoundary';
 
 // Create React Query client
@@ -123,6 +124,11 @@ function AppRoutes() {
         <Route path="admin" element={
           <RoleRoute roles={['Admin']}>
             <AdminManagement />
+          </RoleRoute>
+        } />
+        <Route path="admin/login-activity" element={
+          <RoleRoute roles={['Admin']}>
+            <LoginActivity />
           </RoleRoute>
         } />
         <Route path="approval-queue" element={

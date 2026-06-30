@@ -28,6 +28,7 @@ interface AllUser {
   session_status: SessionStatus;
   last_login_at: string | null;
   in_admin_roster: boolean;
+  has_login_account: boolean;
 }
 
 interface LoginActivityResponse {
@@ -174,10 +175,17 @@ export default function LoginActivity() {
                             </span>
                           </td>
                           <td className="px-4 py-2.5">
-                            <span className="text-xs font-semibold px-2 py-0.5 rounded-full"
-                              style={{ background: badge.bg, color: badge.color }}>
-                              {badge.label}
-                            </span>
+                            {u.has_login_account ? (
+                              <span className="text-xs font-semibold px-2 py-0.5 rounded-full"
+                                style={{ background: badge.bg, color: badge.color }}>
+                                {badge.label}
+                              </span>
+                            ) : (
+                              <span className="text-xs font-semibold px-2 py-0.5 rounded-full"
+                                style={{ background: 'rgba(248,113,113,0.08)', color: 'var(--rose)' }}>
+                                No login account
+                              </span>
+                            )}
                           </td>
                           <td className="px-4 py-2.5" style={{ color: 'var(--t1)' }}>
                             {u.last_login_at ? fmt(u.last_login_at) : '—'}

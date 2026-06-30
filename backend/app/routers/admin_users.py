@@ -306,11 +306,13 @@ def login_activity(db: Session = Depends(get_db), _: User = Depends(require_admi
         for l in logs[:200]
     ]
 
-    # Full roster — every account that can log in, including self-registered
-    # accounts (no AdminUser record) and ones that never logged in or whose
-    # session has since expired ("logged out").
+    # Full roster — union of every JWT login account and every Admin-created
+    # account, including self-registered users, admin-created users who
+    # haven't activated a JWT login yet, and ones that never logged in or
+    # whose session has since expired ("logged out").
     admin_by_email = {a.email_id: a for a in db.query(AdminUser).all()}
     all_jwt_users = db.query(User).order_by(User.id).all()
+    jwt_emails = {u.email for u in all_jwt_users}
 
     all_users = []
     for u in all_jwt_users:
@@ -337,6 +339,24 @@ def login_activity(db: Session = Depends(get_db), _: User = Depends(require_admi
             "session_status": session_status,
             "last_login_at": last_login_at,
             "in_admin_roster": admin is not None,
+            "has_login_account": True,
+        })
+
+    # Admin-created accounts that have no JWT login yet — they exist in
+    # Admin Management but literally cannot log in until one is created.
+    for a in admin_by_email.values():
+        if a.email_id in jwt_emails:
+            continue
+        all_users.append({
+            "employee_id": a.employee_id,
+            "employee_name": a.employee_name,
+            "email": a.email_id,
+            "role": a.role,
+            "account_status": a.status,
+            "session_status": "never_logged_in",
+            "last_login_at": None,
+            "in_admin_roster": True,
+            "has_login_account": False,
         })
 
     return {

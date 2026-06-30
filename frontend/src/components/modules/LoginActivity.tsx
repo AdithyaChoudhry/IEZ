@@ -20,12 +20,14 @@ interface RecentLogin {
 type SessionStatus = 'active_now' | 'logged_out' | 'never_logged_in';
 
 interface AllUser {
-  employee_id: string;
+  employee_id: string | null;
   employee_name: string;
+  email: string;
   role: string;
   account_status: string;
   session_status: SessionStatus;
   last_login_at: string | null;
+  in_admin_roster: boolean;
 }
 
 interface LoginActivityResponse {
@@ -135,8 +137,9 @@ export default function LoginActivity() {
                 <table className="w-full text-sm">
                   <thead>
                     <tr style={{ background: 'var(--s1)' }}>
-                      <th className="text-left px-4 py-2.5 text-xs font-semibold" style={{ color: 'var(--t1)' }}>Employee</th>
+                      <th className="text-left px-4 py-2.5 text-xs font-semibold" style={{ color: 'var(--t1)' }}>User</th>
                       <th className="text-left px-4 py-2.5 text-xs font-semibold" style={{ color: 'var(--t1)' }}>Role</th>
+                      <th className="text-left px-4 py-2.5 text-xs font-semibold" style={{ color: 'var(--t1)' }}>Source</th>
                       <th className="text-left px-4 py-2.5 text-xs font-semibold" style={{ color: 'var(--t1)' }}>Account</th>
                       <th className="text-left px-4 py-2.5 text-xs font-semibold" style={{ color: 'var(--t1)' }}>Session</th>
                       <th className="text-left px-4 py-2.5 text-xs font-semibold" style={{ color: 'var(--t1)' }}>Last login</th>
@@ -146,12 +149,21 @@ export default function LoginActivity() {
                     {data.all_users.map((u) => {
                       const badge = SESSION_BADGE[u.session_status];
                       return (
-                        <tr key={u.employee_id} style={{ borderTop: '1px solid var(--b0)' }}>
+                        <tr key={u.email} style={{ borderTop: '1px solid var(--b0)' }}>
                           <td className="px-4 py-2.5">
                             <div className="font-medium" style={{ color: 'var(--t0)' }}>{u.employee_name}</div>
-                            <div className="text-xs" style={{ color: 'var(--t2)' }}>{u.employee_id}</div>
+                            <div className="text-xs" style={{ color: 'var(--t2)' }}>{u.employee_id || u.email}</div>
                           </td>
                           <td className="px-4 py-2.5" style={{ color: 'var(--t1)' }}>{u.role}</td>
+                          <td className="px-4 py-2.5">
+                            <span className="text-xs font-semibold px-2 py-0.5 rounded-full"
+                              style={{
+                                background: u.in_admin_roster ? 'var(--em-dim)' : 'rgba(167,139,250,0.1)',
+                                color: u.in_admin_roster ? 'var(--em-lt)' : 'var(--violet)',
+                              }}>
+                              {u.in_admin_roster ? 'Admin-created' : 'Self-registered'}
+                            </span>
+                          </td>
                           <td className="px-4 py-2.5">
                             <span className="text-xs font-semibold px-2 py-0.5 rounded-full capitalize"
                               style={{

@@ -64,7 +64,7 @@ const sections = [
   {
     label: 'Admin',
     items: [
-      { path: '/admin',          icon: ShieldCheck,   label: 'Admin Management', allowedRoles: ADMIN_ROLES },
+      { path: '/admin',          icon: ShieldCheck,   label: 'Admin Management', allowedRoles: ADMIN_ROLES, exact: true },
       { path: '/admin/login-activity', icon: Radio,   label: 'Login Activity',   allowedRoles: ADMIN_ROLES },
       { path: '/approval-queue', icon: ClipboardCheck, label: 'Approval Queue',  allowedRoles: LEAD_ROLES, badge: true },
     ],

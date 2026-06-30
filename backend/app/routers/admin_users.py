@@ -306,12 +306,18 @@ def login_activity(db: Session = Depends(get_db), _: User = Depends(require_admi
         for l in logs[:200]
     ]
 
-    # Full roster — every created account, including ones that never logged in
-    # or whose session has since expired ("logged out").
-    all_admin_users = db.query(AdminUser).order_by(AdminUser.employee_name).all()
+    # Full roster — every account that can log in, including self-registered
+    # accounts (no AdminUser record) and ones that never logged in or whose
+    # session has since expired ("logged out").
+    admin_by_email = {a.email_id: a for a in db.query(AdminUser).all()}
+    all_jwt_users = db.query(User).order_by(User.id).all()
+
     all_users = []
-    for u in all_admin_users:
-        latest = latest_by_user.get(u.employee_id)
+    for u in all_jwt_users:
+        admin = admin_by_email.get(u.email)
+        key = admin.employee_id if admin else u.username
+        latest = latest_by_user.get(key)
+
         if latest is None:
             session_status = "never_logged_in"
             last_login_at = None
@@ -323,12 +329,14 @@ def login_activity(db: Session = Depends(get_db), _: User = Depends(require_admi
             last_login_at = latest.login_at
 
         all_users.append({
-            "employee_id": u.employee_id,
-            "employee_name": u.employee_name,
-            "role": u.role,
-            "account_status": u.status,
+            "employee_id": admin.employee_id if admin else None,
+            "employee_name": admin.employee_name if admin else u.username,
+            "email": u.email,
+            "role": admin.role if admin else "Engineer",
+            "account_status": admin.status if admin else ("active" if u.is_active else "disabled"),
             "session_status": session_status,
             "last_login_at": last_login_at,
+            "in_admin_roster": admin is not None,
         })
 
     return {

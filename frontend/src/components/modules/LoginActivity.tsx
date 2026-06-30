@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Users, Radio, History, Loader2 } from 'lucide-react';
+import { Users, Radio, History, Loader2, UserCheck } from 'lucide-react';
 import api from '@/services/api';
 
 interface ActiveSession {
@@ -17,12 +17,30 @@ interface RecentLogin {
   login_at: string;
 }
 
+type SessionStatus = 'active_now' | 'logged_out' | 'never_logged_in';
+
+interface AllUser {
+  employee_id: string;
+  employee_name: string;
+  role: string;
+  account_status: string;
+  session_status: SessionStatus;
+  last_login_at: string | null;
+}
+
 interface LoginActivityResponse {
   total_users_logged_in: number;
   active_session_count: number;
   active_sessions: ActiveSession[];
   recent_logins: RecentLogin[];
+  all_users: AllUser[];
 }
+
+const SESSION_BADGE: Record<SessionStatus, { label: string; bg: string; color: string }> = {
+  active_now:       { label: 'Active now',       bg: 'rgba(74,222,128,0.1)', color: '#4ade80' },
+  logged_out:       { label: 'Logged out',       bg: 'rgba(147,175,212,0.1)', color: 'var(--t2)' },
+  never_logged_in:  { label: 'Never logged in',  bg: 'rgba(251,191,36,0.08)', color: '#fbbf24' },
+};
 
 function fmt(iso: string): string {
   return new Date(iso).toLocaleString();
@@ -66,7 +84,7 @@ export default function LoginActivity() {
       {data && (
         <>
           {/* Stat cards */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div className="rounded-xl p-5 flex items-center gap-4" style={{ background: 'var(--s2)', border: '1px solid var(--b1)' }}>
               <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0" style={{ background: 'var(--em-dim)' }}>
                 <Users className="w-5 h-5" style={{ color: 'var(--em-lt)' }} />
@@ -89,6 +107,75 @@ export default function LoginActivity() {
                 </div>
                 <div className="text-xs" style={{ color: 'var(--t2)' }}>Active sessions now</div>
               </div>
+            </div>
+
+            <div className="rounded-xl p-5 flex items-center gap-4" style={{ background: 'var(--s2)', border: '1px solid var(--b1)' }}>
+              <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0" style={{ background: 'var(--gold-dim)' }}>
+                <UserCheck className="w-5 h-5" style={{ color: 'var(--gold)' }} />
+              </div>
+              <div>
+                <div className="text-2xl font-black" style={{ fontFamily: "'Space Grotesk', sans-serif", color: 'var(--t0)' }}>
+                  {data.all_users.length}
+                </div>
+                <div className="text-xs" style={{ color: 'var(--t2)' }}>Total created accounts</div>
+              </div>
+            </div>
+          </div>
+
+          {/* All users — every created account */}
+          <div>
+            <p className="text-[10px] font-semibold tracking-widest uppercase mb-3 flex items-center gap-1.5" style={{ color: 'var(--t2)' }}>
+              <UserCheck className="w-3 h-3" />
+              All Users
+            </p>
+            <div className="rounded-xl overflow-hidden" style={{ background: 'var(--s2)', border: '1px solid var(--b1)' }}>
+              {data.all_users.length === 0 ? (
+                <div className="py-10 text-center text-sm" style={{ color: 'var(--t2)' }}>No accounts created yet.</div>
+              ) : (
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr style={{ background: 'var(--s1)' }}>
+                      <th className="text-left px-4 py-2.5 text-xs font-semibold" style={{ color: 'var(--t1)' }}>Employee</th>
+                      <th className="text-left px-4 py-2.5 text-xs font-semibold" style={{ color: 'var(--t1)' }}>Role</th>
+                      <th className="text-left px-4 py-2.5 text-xs font-semibold" style={{ color: 'var(--t1)' }}>Account</th>
+                      <th className="text-left px-4 py-2.5 text-xs font-semibold" style={{ color: 'var(--t1)' }}>Session</th>
+                      <th className="text-left px-4 py-2.5 text-xs font-semibold" style={{ color: 'var(--t1)' }}>Last login</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.all_users.map((u) => {
+                      const badge = SESSION_BADGE[u.session_status];
+                      return (
+                        <tr key={u.employee_id} style={{ borderTop: '1px solid var(--b0)' }}>
+                          <td className="px-4 py-2.5">
+                            <div className="font-medium" style={{ color: 'var(--t0)' }}>{u.employee_name}</div>
+                            <div className="text-xs" style={{ color: 'var(--t2)' }}>{u.employee_id}</div>
+                          </td>
+                          <td className="px-4 py-2.5" style={{ color: 'var(--t1)' }}>{u.role}</td>
+                          <td className="px-4 py-2.5">
+                            <span className="text-xs font-semibold px-2 py-0.5 rounded-full capitalize"
+                              style={{
+                                background: u.account_status === 'active' ? 'rgba(74,222,128,0.08)' : 'rgba(248,113,113,0.08)',
+                                color: u.account_status === 'active' ? '#4ade80' : 'var(--rose)',
+                              }}>
+                              {u.account_status}
+                            </span>
+                          </td>
+                          <td className="px-4 py-2.5">
+                            <span className="text-xs font-semibold px-2 py-0.5 rounded-full"
+                              style={{ background: badge.bg, color: badge.color }}>
+                              {badge.label}
+                            </span>
+                          </td>
+                          <td className="px-4 py-2.5" style={{ color: 'var(--t1)' }}>
+                            {u.last_login_at ? fmt(u.last_login_at) : '—'}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
             </div>
           </div>
 

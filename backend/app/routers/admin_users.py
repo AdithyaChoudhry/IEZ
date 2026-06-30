@@ -306,9 +306,35 @@ def login_activity(db: Session = Depends(get_db), _: User = Depends(require_admi
         for l in logs[:200]
     ]
 
+    # Full roster — every created account, including ones that never logged in
+    # or whose session has since expired ("logged out").
+    all_admin_users = db.query(AdminUser).order_by(AdminUser.employee_name).all()
+    all_users = []
+    for u in all_admin_users:
+        latest = latest_by_user.get(u.employee_id)
+        if latest is None:
+            session_status = "never_logged_in"
+            last_login_at = None
+        elif latest.login_at + session_window > now:
+            session_status = "active_now"
+            last_login_at = latest.login_at
+        else:
+            session_status = "logged_out"
+            last_login_at = latest.login_at
+
+        all_users.append({
+            "employee_id": u.employee_id,
+            "employee_name": u.employee_name,
+            "role": u.role,
+            "account_status": u.status,
+            "session_status": session_status,
+            "last_login_at": last_login_at,
+        })
+
     return {
         "total_users_logged_in": total_users_logged_in,
         "active_session_count": len(active_sessions),
         "active_sessions": active_sessions,
         "recent_logins": recent_logins,
+        "all_users": all_users,
     }

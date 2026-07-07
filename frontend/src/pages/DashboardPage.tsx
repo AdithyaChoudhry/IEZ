@@ -4,7 +4,7 @@ import {
   CheckCircle2, FileSpreadsheet, Cable, FileText, Network,
   GitBranch, Layers, ArrowRight, ArrowUpRight,
   ScanSearch, Sparkles, Gauge, Zap, BarChart3,
-  ShoppingCart, ClipboardCheck,
+  ShoppingCart,
 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 
@@ -18,7 +18,6 @@ const modules = [
   { id: 'cable',       path: '/cable-schedule',    icon: Cable,         name: 'Cable Schedule',    desc: 'Create cable schedules grouped by junction box from field instrument data.',       accent: '#f87171', tag: 'Generator'  },
   { id: 'loop',        path: '/loop-wiring',       icon: GitBranch,     name: 'Loop Wiring',       desc: 'Generate loop wiring diagrams automatically from input files.',                   accent: '#fbbf24', tag: 'Generator'  },
   { id: 'tbe',         path: '/tbe',               icon: ShoppingCart,  name: 'Vendor Analysis & TBE', desc: 'Compare vendor offers and generate technical bid evaluations.',              accent: '#22d3ee', tag: 'Procurement' },
-  { id: 'idc',         path: '/idc',               icon: ClipboardCheck,name: 'Inter Discipline Check', desc: 'Cross-check instrumentation data against other engineering disciplines.',  accent: '#f472b6', tag: 'Review'      },
 ];
 
 /* ── Animated counter ─────────────────────────────────────────────────────── */

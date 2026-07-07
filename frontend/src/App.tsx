@@ -120,8 +120,7 @@ function AppRoutes() {
         <Route path="loop-wiring" element={<LoopWiringGenerator />} />
         <Route path="smart-datasheet" element={<SmartDatasheetExtractor />} />
         <Route path="tbe" element={<VendorTBE />} />
-        <Route path="idc" element={<IDCModule />} />
-        <Route path="admin" element={
+<Route path="admin" element={
           <RoleRoute roles={['Admin']}>
             <AdminManagement />
           </RoleRoute>

@@ -521,7 +521,8 @@ export default function DataSheetGenerator() {
         if (s.approval) setApproval(s.approval);
         if (s.pendingReqId) setPendingReqId(s.pendingReqId);
         if (s.reqStatus) setReqStatus(s.reqStatus);
-        if (s.genStatus) setGenStatus(s.genStatus);
+        // A 'processing' job can't be resumed after a reload, so only restore finished ones.
+        if (s.genStatus && s.genStatus.status !== 'processing') setGenStatus(s.genStatus);
       }
     } catch { /* ignore */ }
     return () => {
@@ -728,9 +729,19 @@ export default function DataSheetGenerator() {
     try {
       const res = await api.get('/sop-datasheet/download', { responseType: 'blob' });
       const url = URL.createObjectURL(new Blob([res.data], { type: 'application/zip' }));
-      const a = document.createElement('a'); a.href = url; a.download = 'Datasheets.zip'; a.click();
-      URL.revokeObjectURL(url);
-    } catch { setError('Download failed'); }
+      const a = document.createElement('a');
+      a.href = url; a.download = 'Datasheets.zip';
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (e: any) {
+      if (e?.response?.status === 404) {
+        // Server no longer has the file (e.g. it restarted) — let the user generate again.
+        setGenStatus(null);
+        setError('The generated file is no longer available on the server. Please click Generate again.');
+      } else {
+        setError(`Download failed${e?.response?.status ? ` (HTTP ${e.response.status})` : ''}. Please try again.`);
+      }
+    }
   };
 
   // ── Render ─────────────────────────────────────────────────────────────────────
@@ -1202,7 +1213,8 @@ export default function DataSheetGenerator() {
           </>)}
 
           <div className="flex gap-3">
-            <Button onClick={() => setStep(7)} className="w-full">
+            <Button variant="secondary" onClick={() => setStep(5)}>← Back</Button>
+            <Button onClick={() => setStep(7)} className="flex-1">
               SIMRE Vendor Matching <ChevronRight className="w-3.5 h-3.5" />
             </Button>
           </div>

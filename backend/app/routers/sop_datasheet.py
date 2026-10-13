@@ -14,6 +14,8 @@ import json
 import uuid
 import logging
 import threading
+import tempfile
+from pathlib import Path
 
 from ..deps import get_current_user
 from ..auth.models import User
@@ -55,6 +57,14 @@ ALLOWED_IODB_EXTENSIONS = {".xls", ".xlsx", ".xlsm"}
 # In-memory job + download caches (in production, use Redis or a database).
 generation_jobs: dict = {}
 generation_cache: dict = {}
+
+# Generated ZIPs are also written to disk so a download still works after the
+# service restarts (every deploy restarts iez.service and wipes the dicts above).
+_OUTPUT_DIR = Path(tempfile.gettempdir()) / "iez_sop_datasheet_output"
+
+
+def _output_path(user_id) -> Path:
+    return _OUTPUT_DIR / f"{user_id}_sop_datasheet.zip"
 
 
 def _check_ext(filename: str, allowed: set[str]) -> None:
@@ -188,6 +198,11 @@ def _run_generate_job(job_id, sop_bytes, sop_filename, datasheet_sheet,
             generation_jobs[job_id] = {"status": "error", "error": err}
             return
         generation_cache[f"{user_id}_sop_datasheet"] = {"bytes": zip_bytes, "filename": filename}
+        try:
+            _OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+            _output_path(user_id).write_bytes(zip_bytes)
+        except OSError:
+            logger.warning("Could not persist datasheet ZIP to disk", exc_info=True)
         generation_jobs[job_id] = {
             "status": "done",
             "result": GenerateResult(
@@ -256,13 +271,18 @@ async def get_generate_status(job_id: str, current_user: User = Depends(get_curr
 async def download(current_user: User = Depends(get_current_user)):
     """Download the generated datasheets ZIP."""
     cached = generation_cache.get(f"{current_user.id}_sop_datasheet")
-    if not cached:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
-                            detail="No generated datasheets found. Please generate first.")
+    if cached:
+        data, filename = cached["bytes"], cached["filename"]
+    else:
+        path = _output_path(current_user.id)
+        if not path.exists():
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                                detail="No generated datasheets found. Please generate first.")
+        data, filename = path.read_bytes(), "Datasheets.zip"
     return StreamingResponse(
-        io.BytesIO(cached["bytes"]),
+        io.BytesIO(data),
         media_type="application/zip",
-        headers={"Content-Disposition": f"attachment; filename={cached['filename']}"},
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 

@@ -31,3 +31,6 @@ frontend/dist/
 
 # Claude local settings
 .claude/
+
+# Generated deliverables + source files kept by the document registry
+backend/document_store/

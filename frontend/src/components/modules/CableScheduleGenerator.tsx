@@ -6,6 +6,7 @@ import { useState } from 'react';
 import { Cable, Upload, FileText, Download, CheckCircle2 } from 'lucide-react';
 import api from '@/services/api';
 import PageHeader from '../ui/PageHeader';
+import ProjectSelector from '../ui/ProjectSelector';
 import Card from '../ui/Card';
 import Button from '../ui/Button';
 import Alert from '../ui/Alert';
@@ -144,6 +145,7 @@ export default function CableScheduleGenerator() {
         title="Cable Schedule Generator"
         description="Generate a cable schedule grouped by junction box from your IODB and Cable Schedule template."
       />
+      <ProjectSelector />
 
       {error && <Alert variant="error" title="Error" onClose={() => setError(null)}>{error}</Alert>}
 

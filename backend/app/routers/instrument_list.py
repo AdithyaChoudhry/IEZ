@@ -9,6 +9,7 @@ import json
 
 from ..deps import get_current_user
 from ..auth.models import User
+from ..services.document_registry import register_safe
 from ..models.list_generator import ListAnalyzeResponse, ListGenerateResponse
 
 # Import existing business logic
@@ -43,6 +44,7 @@ async def generate_instrument_list(
     template_file: Optional[UploadFile] = File(None),
     selected_columns: str = Form(...),  # JSON array of column names
     filters: str = Form("{}"),  # JSON object of {column: [values]}
+    project_id: Optional[str] = Form(None),  # optional: register output in the project document registry
     current_user: User = Depends(get_current_user),
 ):
     try:
@@ -65,6 +67,7 @@ async def generate_instrument_list(
 
     iodb_bytes = await iodb_file.read()
     template_buffer = None
+    template_bytes = None
     if template_file is not None:
         template_bytes = await template_file.read()
         template_buffer = io.BytesIO(template_bytes)
@@ -76,13 +79,27 @@ async def generate_instrument_list(
         template_file=template_buffer,
     )
 
+    reg_params = {"selected_columns": columns_list, "filters": filters_dict}
     if err:
+        register_safe("failure", project_id=project_id, module="instrument_list", user=current_user.username,
+                      error=err, source_bytes=iodb_bytes, source_filename=iodb_file.filename or "IODB.xlsx",
+                      params=reg_params, template_bytes=template_bytes,
+                      template_filename=template_file.filename if template_file is not None else None)
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=err)
 
     cache_key = f"{current_user.id}_instrument_list"
     instrument_list_cache[cache_key] = {"bytes": out_bytes, "filename": filename}
 
-    return ListGenerateResponse(filename=filename, message="Instrument List generated successfully")
+    registry = register_safe(
+        "success", project_id=project_id, module="instrument_list", user=current_user.username,
+        source_bytes=iodb_bytes, source_filename=iodb_file.filename or "IODB.xlsx",
+        output_bytes=out_bytes, output_filename=filename, params=reg_params,
+        template_bytes=template_bytes,
+        template_filename=template_file.filename if template_file is not None else None,
+    )
+
+    return ListGenerateResponse(filename=filename, message="Instrument List generated successfully",
+                                 registry=registry)
 
 
 @router.get("/download")

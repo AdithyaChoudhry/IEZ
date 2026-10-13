@@ -2,7 +2,7 @@
 Pydantic models for the Cable Schedule generator.
 """
 from pydantic import BaseModel
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 
 class ColumnsResponse(BaseModel):
@@ -16,3 +16,5 @@ class JBSummaryResponse(BaseModel):
 class CableScheduleGenerateResponse(BaseModel):
     filename: str
     message: str
+    # Set when a project_id was supplied: result of registering the output.
+    registry: Optional[Dict[str, Any]] = None

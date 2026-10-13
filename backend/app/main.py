@@ -29,6 +29,7 @@ from .routers.notifications import router as notifications_router
 from .routers.notification_routes import router as notification_routes_router
 from .routers.idc import router as idc_router
 from .routers.idc_ws import router as idc_ws_router
+from .routers.projects import router as projects_router
 
 
 @asynccontextmanager
@@ -97,6 +98,7 @@ app.include_router(notification_routes_router, prefix="/api")
 app.include_router(tbe_router, prefix="/api")
 app.include_router(idc_router, prefix="/api")
 app.include_router(idc_ws_router, prefix="/api")
+app.include_router(projects_router, prefix="/api")
 
 
 @app.get("/")

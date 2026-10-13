@@ -1,7 +1,8 @@
 """
 Loop Wiring Generator router.
 """
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile, File, status
+from typing import Optional
+from fastapi import APIRouter, BackgroundTasks, Depends, Form, HTTPException, UploadFile, File, status
 from fastapi.responses import StreamingResponse
 import io
 import uuid
@@ -9,6 +10,7 @@ import pandas as pd
 
 from ..deps import get_current_user
 from ..auth.models import User
+from ..services.document_registry import register_safe
 from ..models.loop_wiring import (
     LoopWiringPreviewResponse,
     LoopWiringGenerateResponse,
@@ -75,12 +77,22 @@ def _run_generate_job(
     loop_input_bytes: bytes,
     template_bytes: bytes,
     user_id: int,
+    project_id: Optional[str] = None,
+    user_label: Optional[str] = None,
+    input_filename: str = "Loop_Wiring_Input.xlsx",
+    template_filename: str = "Loop_Wiring_Template.xlsx",
 ):
     """Run loop wiring generation in the background and store the result/status."""
     try:
+        def _fail(message: str) -> None:
+            loop_wiring_jobs[job_id] = {"status": "error", "error": message}
+            register_safe("failure", project_id=project_id, module="loop_wiring", user=user_label,
+                          error=message, source_bytes=loop_input_bytes, source_filename=input_filename,
+                          template_bytes=template_bytes, template_filename=template_filename)
+
         df, err = read_loop_wiring_input(io.BytesIO(loop_input_bytes))
         if err:
-            loop_wiring_jobs[job_id] = {"status": "error", "error": err}
+            _fail(err)
             return
 
         tag_col = _find_tag_column(df)
@@ -88,7 +100,7 @@ def _run_generate_job(
 
         wb, tmpl_buf, err = load_workbook_from_upload(io.BytesIO(template_bytes))
         if err:
-            loop_wiring_jobs[job_id] = {"status": "error", "error": f"Failed to load Loop Wiring template: {err}"}
+            _fail(f"Failed to load Loop Wiring template: {err}")
             return
 
         tmpl_buf.seek(0)
@@ -96,11 +108,18 @@ def _run_generate_job(
 
         out_bytes, filename, err = _generate_loop_wiring(df, wb, template_bytes=tmpl_bytes)
         if err:
-            loop_wiring_jobs[job_id] = {"status": "error", "error": err}
+            _fail(err)
             return
 
         cache_key = f"{user_id}_loop_wiring"
         loop_wiring_cache[cache_key] = {"bytes": out_bytes, "filename": filename}
+
+        registry = register_safe(
+            "success", project_id=project_id, module="loop_wiring", user=user_label,
+            source_bytes=loop_input_bytes, source_filename=input_filename,
+            output_bytes=out_bytes, output_filename=filename, sheet_count=sheet_count,
+            template_bytes=template_bytes, template_filename=template_filename,
+        )
 
         loop_wiring_jobs[job_id] = {
             "status": "done",
@@ -108,6 +127,7 @@ def _run_generate_job(
                 filename=filename,
                 message=f"Loop Wiring generated successfully ({sheet_count} sheet(s))",
                 sheet_count=sheet_count,
+                registry=registry,
             ),
         }
     except Exception as exc:
@@ -119,6 +139,7 @@ async def generate_loop_wiring(
     background_tasks: BackgroundTasks,
     loop_input_file: UploadFile = File(...),
     template_file: UploadFile = File(...),
+    project_id: Optional[str] = Form(None),  # optional: register output in the project document registry
     current_user: User = Depends(get_current_user),
 ):
     """
@@ -137,6 +158,10 @@ async def generate_loop_wiring(
         loop_input_bytes,
         template_bytes,
         current_user.id,
+        project_id,
+        current_user.username,
+        loop_input_file.filename or "Loop_Wiring_Input.xlsx",
+        template_file.filename or "Loop_Wiring_Template.xlsx",
     )
 
     return LoopWiringJobResponse(job_id=job_id, status="processing")

@@ -6,6 +6,7 @@ import { useState } from 'react';
 import { GitBranch, Upload, FileText, Download, CheckCircle2 } from 'lucide-react';
 import api from '@/services/api';
 import PageHeader from '../ui/PageHeader';
+import ProjectSelector from '../ui/ProjectSelector';
 import Card from '../ui/Card';
 import Button from '../ui/Button';
 import Alert from '../ui/Alert';
@@ -134,6 +135,7 @@ export default function LoopWiringGenerator() {
         title="Loop Wiring Generator"
         description="Generate one loop wiring sheet per tag from your Loop Wiring input file and template."
       />
+      <ProjectSelector />
 
       {error && <Alert variant="error" title="Error" onClose={() => setError(null)}>{error}</Alert>}
 

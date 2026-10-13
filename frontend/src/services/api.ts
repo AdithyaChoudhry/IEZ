@@ -3,6 +3,7 @@
  */
 import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';
 import type { TokenResponse } from '@/types';
+import { getCurrentProject } from './projectContext';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || '/api';
 
@@ -12,6 +13,14 @@ const api = axios.create({
     'Content-Type': 'application/json',
   },
 });
+
+// Generators whose output is registered in the project document registry.
+const REGISTERED_GENERATE_URLS = [
+  '/instrument-list/generate',
+  '/io-list/generate',
+  '/cable-schedule/generate',
+  '/loop-wiring/generate',
+];
 
 // Request interceptor to add auth token
 api.interceptors.request.use(
@@ -23,6 +32,11 @@ api.interceptors.request.use(
     // Let browser set Content-Type automatically for FormData (includes multipart boundary)
     if (config.data instanceof FormData) {
       delete config.headers['Content-Type'];
+      // Register generator output in the selected project's document registry.
+      if (REGISTERED_GENERATE_URLS.some((u) => (config.url || '').endsWith(u)) && !config.data.has('project_id')) {
+        const projectId = getCurrentProject();
+        if (projectId) config.data.append('project_id', projectId);
+      }
     }
     return config;
   },

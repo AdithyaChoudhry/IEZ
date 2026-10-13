@@ -134,6 +134,9 @@ def init_db():
         IDCSession, IDCDocument, IDCDiscipline, IDCAnnotation,
         IDCComment, IDCCommentReply, IDCApproval,
     )
+    from .models.document_registry import (  # noqa: F401
+        Project, SourceVersion, GeneratedDocument, CoversheetLink, DocumentAuditLog,
+    )
     Base.metadata.create_all(bind=engine)
     _seed_notification_routes()
     _seed_default_admin()

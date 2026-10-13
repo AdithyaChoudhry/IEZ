@@ -15,6 +15,8 @@ class ListAnalyzeResponse(BaseModel):
 class ListGenerateResponse(BaseModel):
     filename: str
     message: str
+    # Set when a project_id was supplied: result of registering the output.
+    registry: Optional[Dict[str, Any]] = None
 
 
 class ListGenerateRequest(BaseModel):

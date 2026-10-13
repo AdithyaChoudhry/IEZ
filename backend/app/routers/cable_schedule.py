@@ -1,12 +1,14 @@
 """
 Cable Schedule Generator router.
 """
+from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, status
 from fastapi.responses import StreamingResponse
 import io
 
 from ..deps import get_current_user
 from ..auth.models import User
+from ..services.document_registry import register_safe
 from ..models.cable_schedule import (
     ColumnsResponse,
     JBSummaryResponse,
@@ -62,6 +64,7 @@ async def generate_cable_schedule(
     template_file: UploadFile = File(...),
     jb_column: str = Form(...),
     tag_column: str = Form(...),
+    project_id: Optional[str] = Form(None),  # optional: register output in the project document registry
     current_user: User = Depends(get_current_user),
 ):
     iodb_bytes = await iodb_file.read()
@@ -74,13 +77,26 @@ async def generate_cable_schedule(
         tag_column,
     )
 
+    reg_params = {"jb_column": jb_column, "tag_column": tag_column}
     if err:
+        register_safe("failure", project_id=project_id, module="cable_schedule", user=current_user.username,
+                      error=err, source_bytes=iodb_bytes, source_filename=iodb_file.filename or "IODB.xlsx",
+                      params=reg_params, template_bytes=template_bytes,
+                      template_filename=template_file.filename)
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=err)
 
     cache_key = f"{current_user.id}_cable_schedule"
     cable_schedule_cache[cache_key] = {"bytes": out_bytes, "filename": filename}
 
-    return CableScheduleGenerateResponse(filename=filename, message="Cable Schedule generated successfully")
+    registry = register_safe(
+        "success", project_id=project_id, module="cable_schedule", user=current_user.username,
+        source_bytes=iodb_bytes, source_filename=iodb_file.filename or "IODB.xlsx",
+        output_bytes=out_bytes, output_filename=filename, params=reg_params,
+        template_bytes=template_bytes, template_filename=template_file.filename,
+    )
+
+    return CableScheduleGenerateResponse(filename=filename, message="Cable Schedule generated successfully",
+                                         registry=registry)
 
 
 @router.get("/download")

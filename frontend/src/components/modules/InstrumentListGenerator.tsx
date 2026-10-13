@@ -6,6 +6,7 @@ import { useState, useMemo } from 'react';
 import { FileSpreadsheet, Upload, FileText, Download, CheckCircle2, ChevronLeft, ChevronRight } from 'lucide-react';
 import api from '@/services/api';
 import PageHeader from '../ui/PageHeader';
+import ProjectSelector from '../ui/ProjectSelector';
 import Card from '../ui/Card';
 import Button from '../ui/Button';
 import Alert from '../ui/Alert';
@@ -141,6 +142,7 @@ export default function InstrumentListGenerator() {
         title="Instrument List Generator"
         description="Generate an instrument list from your IODB, with column selection and per-column filters."
       />
+      <ProjectSelector />
 
       {error && <Alert variant="error" title="Error" onClose={() => setError(null)}>{error}</Alert>}
 

@@ -41,6 +41,9 @@ class Settings(BaseSettings):
     # File upload
     MAX_UPLOAD_SIZE: int = 50 * 1024 * 1024  # 50MB
     TEMP_FILE_DIR: str = "/tmp/iez_uploads"
+    # Persistent store for generated deliverables + the source files they came from.
+    # Empty = <backend>/document_store
+    DOCUMENT_STORE_DIR: str = ""
     FILE_RETENTION_HOURS: int = 1
     
     # AI Extraction

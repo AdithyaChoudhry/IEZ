@@ -2,7 +2,7 @@
 Pydantic models for the Loop Wiring generator.
 """
 from pydantic import BaseModel
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 
 class LoopWiringPreviewResponse(BaseModel):
@@ -15,6 +15,8 @@ class LoopWiringGenerateResponse(BaseModel):
     filename: str
     message: str
     sheet_count: int
+    # Set when a project_id was supplied: result of registering the output.
+    registry: Optional[Dict[str, Any]] = None
 
 
 class LoopWiringJobResponse(BaseModel):

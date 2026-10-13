@@ -18,7 +18,24 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/deploy", tags=["Deploy"])
 
 DEPLOY_SECRET = os.environ.get("DEPLOY_SECRET", "")
-REPO_ROOT = "/var/www/iez"
+# Git checkout the service runs from, and the folder nginx serves the built site from.
+REPO_ROOT = os.environ.get("IEZ_REPO_ROOT", "/home/opc/iez")
+WEB_ROOT = os.environ.get("IEZ_WEB_ROOT", "/var/www/iez")
+
+_DEPLOY_SCRIPT = f"""
+set -e
+cd {REPO_ROOT}
+git pull --ff-only origin main
+if command -v npm >/dev/null 2>&1; then
+  cd frontend
+  npm install --no-audit --no-fund
+  npm run build
+  rm -rf {WEB_ROOT}/assets
+  cp -r dist/. {WEB_ROOT}/
+else
+  echo "npm not installed - skipped frontend build"
+fi
+"""
 
 
 def _verify(secret: str, body: bytes, sig_header: str) -> bool:
@@ -58,14 +75,15 @@ async def webhook(
 ):
     body = await request.body()
 
-    if DEPLOY_SECRET and not _verify(DEPLOY_SECRET, body, x_hub_signature_256):
+    if not DEPLOY_SECRET:
+        logger.warning("DEPLOY_SECRET is not set - deploy webhook is unauthenticated")
+    elif not _verify(DEPLOY_SECRET, body, x_hub_signature_256):
         raise HTTPException(status_code=401, detail="Invalid signature")
 
     logger.info("Deploy webhook triggered — pulling and building")
 
     result = subprocess.run(
-        ["bash", "-c",
-         f"cd {REPO_ROOT} && git stash && git pull origin main && cd frontend && npm install && npm run build"],
+        ["bash", "-c", _DEPLOY_SCRIPT],
         capture_output=True, text=True, timeout=300,
     )
 

@@ -45,6 +45,7 @@ class Settings(BaseSettings):
     
     # AI Extraction
     GROQ_API_KEY: str = ""
+    GEMINI_API_KEY: str = ""
 
     # WebSocket
     WS_HEARTBEAT_INTERVAL: int = 30

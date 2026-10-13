@@ -9,6 +9,7 @@ class ListAnalyzeResponse(BaseModel):
     columns: List[str]
     unique_values: Dict[str, List[str]]
     preview: List[Dict[str, Any]]
+    total_rows: int = 0
 
 
 class ListGenerateResponse(BaseModel):

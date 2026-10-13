@@ -329,21 +329,23 @@ def get_iodb_dataframe(iodb_file) -> tuple[pd.DataFrame | None, str | None]:
     return read_iodb(iodb_file)
 
 
-def get_iodb_preview(iodb_file, max_unique: int = 200, preview_rows: int = 20):
+def get_iodb_preview(iodb_file, max_unique: int = 200, preview_rows: int = 100):
     """
     Read IODB and return everything the column-selection/filter UI needs:
 
-    Returns (columns, unique_values, preview, error)
+    Returns (columns, unique_values, preview, error, total_rows)
       - columns: list[str]
       - unique_values: dict[col_name, list[str]] (capped at `max_unique` per column)
       - preview: list[dict] (first `preview_rows` rows, JSON-safe)
       - error: None on success, error string on failure
+      - total_rows: total number of rows in the IODB
     """
     df, err = read_iodb(iodb_file)
     if err:
-        return None, None, None, err
+        return None, None, None, err, 0
 
     columns = list(df.columns)
+    total_rows = len(df)
 
     unique_values: dict[str, list[str]] = {}
     for col in columns:
@@ -353,7 +355,7 @@ def get_iodb_preview(iodb_file, max_unique: int = 200, preview_rows: int = 20):
     preview_df = df.head(preview_rows).astype(object).where(pd.notnull(df.head(preview_rows)), None)
     preview = preview_df.to_dict(orient="records")
 
-    return columns, unique_values, preview, None
+    return columns, unique_values, preview, None, total_rows
 
 
 def get_jb_summary(iodb_file, jb_column: str, tag_column: str):

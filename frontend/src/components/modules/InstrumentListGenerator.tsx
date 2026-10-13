@@ -3,7 +3,7 @@
  * Upload an IODB file, pick columns + per-column filters, preview, and generate.
  */
 import { useState, useMemo } from 'react';
-import { FileSpreadsheet, Upload, FileText, Download, CheckCircle2 } from 'lucide-react';
+import { FileSpreadsheet, Upload, FileText, Download, CheckCircle2, ChevronLeft, ChevronRight } from 'lucide-react';
 import api from '@/services/api';
 import PageHeader from '../ui/PageHeader';
 import Card from '../ui/Card';
@@ -16,6 +16,7 @@ interface AnalyzeResponse {
   columns: string[];
   unique_values: Record<string, string[]>;
   preview: Record<string, any>[];
+  total_rows: number;
 }
 
 interface GenerateResponse {
@@ -30,6 +31,9 @@ export default function InstrumentListGenerator() {
   const [selectedColumns, setSelectedColumns] = useState<string[]>([]);
   const [filters, setFilters] = useState<Record<string, string[]>>({});
   const [filterColumn, setFilterColumn] = useState<string>('');
+
+  const [page, setPage] = useState(0);
+  const PAGE_SIZE = 25;
 
   const [analyzing, setAnalyzing] = useState(false);
   const [generating, setGenerating] = useState(false);
@@ -53,6 +57,7 @@ export default function InstrumentListGenerator() {
       setSelectedColumns(response.data.columns);
       setFilters({});
       setFilterColumn('');
+      setPage(0);
     } catch (err: any) {
       setError(err.response?.data?.detail || 'Failed to analyze IODB file');
     } finally {
@@ -119,6 +124,9 @@ export default function InstrumentListGenerator() {
       activeFilters.every(([col, values]) => values.includes(String(row[col] ?? '')))
     );
   }, [analysis, filters]);
+
+  const totalPages = Math.ceil(filteredPreview.length / PAGE_SIZE);
+  const pagedRows = filteredPreview.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
 
   const previewColumns = useMemo(() => {
     if (!analysis) return [];
@@ -204,11 +212,48 @@ export default function InstrumentListGenerator() {
           </Card>
 
           {/* Preview */}
-          <Card title={`Preview (${filteredPreview.length} of ${analysis.preview.length} rows shown)`}>
+          <Card>
+            <div className="flex items-center justify-between mb-3">
+              <div>
+                <h3 className="font-semibold text-gray-800">
+                  Preview
+                </h3>
+                <p className="text-sm text-gray-500 mt-0.5">
+                  Showing {filteredPreview.length} of{' '}
+                  <span className="font-semibold text-blue-600">{analysis.total_rows} total rows</span>
+                  {Object.keys(filters).length > 0 && ' (filtered)'}
+                  {analysis.total_rows > analysis.preview.length && (
+                    <span className="text-orange-600 ml-2">
+                      · First {analysis.preview.length} rows loaded — generate to get all rows
+                    </span>
+                  )}
+                </p>
+              </div>
+              {totalPages > 1 && (
+                <div className="flex items-center gap-2 text-sm text-gray-600">
+                  <button
+                    onClick={() => setPage((p) => Math.max(0, p - 1))}
+                    disabled={page === 0}
+                    className="p-1 rounded hover:bg-gray-100 disabled:opacity-40"
+                  >
+                    <ChevronLeft className="w-4 h-4" />
+                  </button>
+                  <span>Page {page + 1} of {totalPages}</span>
+                  <button
+                    onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
+                    disabled={page === totalPages - 1}
+                    className="p-1 rounded hover:bg-gray-100 disabled:opacity-40"
+                  >
+                    <ChevronRight className="w-4 h-4" />
+                  </button>
+                </div>
+              )}
+            </div>
             <div className="border border-gray-200 rounded-lg overflow-auto max-h-96">
               <table className="w-full text-sm whitespace-nowrap">
                 <thead className="bg-gray-50 sticky top-0">
                   <tr>
+                    <th className="px-3 py-2 text-left font-medium text-gray-400 w-10">#</th>
                     {previewColumns.map((col) => (
                       <th key={col} className="px-3 py-2 text-left font-medium text-gray-700">
                         {col}
@@ -217,8 +262,9 @@ export default function InstrumentListGenerator() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-200">
-                  {filteredPreview.map((row, idx) => (
+                  {pagedRows.map((row, idx) => (
                     <tr key={idx} className="hover:bg-gray-50">
+                      <td className="px-3 py-2 text-gray-400 text-xs">{page * PAGE_SIZE + idx + 1}</td>
                       {previewColumns.map((col) => (
                         <td key={col} className="px-3 py-2 text-gray-700">
                           {row[col] ?? ''}
@@ -226,9 +272,21 @@ export default function InstrumentListGenerator() {
                       ))}
                     </tr>
                   ))}
+                  {pagedRows.length === 0 && (
+                    <tr>
+                      <td colSpan={previewColumns.length + 1} className="px-3 py-8 text-center text-gray-400">
+                        No rows match the current filters
+                      </td>
+                    </tr>
+                  )}
                 </tbody>
               </table>
             </div>
+            {totalPages > 1 && (
+              <p className="text-xs text-gray-400 mt-2 text-right">
+                Rows {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, filteredPreview.length)} of {filteredPreview.length}
+              </p>
+            )}
           </Card>
 
           {/* Generate */}

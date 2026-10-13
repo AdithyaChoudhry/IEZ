@@ -565,12 +565,12 @@ def _run_ai_extraction(
     template_fields: list[str] | None = None,
 ) -> tuple[list[dict[str, Any]], str]:
     """
-    Call Groq API — returns (sections, summary_instrument_type).
+    Call Google Gemini Flash API (free tier) — returns (sections, summary_instrument_type).
     Each section: {heading, instrument_type, specs: [ExtractedSpec-compatible dicts]}
     """
-    groq_key = os.environ.get("GROQ_API_KEY", "")
-    if not groq_key:
-        logger.warning("SDIE: GROQ_API_KEY not set — AI extraction skipped")
+    api_key = os.environ.get("GEMINI_API_KEY", "")
+    if not api_key:
+        logger.warning("SDIE: GEMINI_API_KEY not set — AI extraction skipped")
         return [], ""
 
     import json as _json
@@ -584,28 +584,25 @@ def _run_ai_extraction(
             f"DOCUMENT TEXT:\n{ocr_text[:7500]}"
         )
 
+    prompt = f"{_GROQ_SYSTEM}\n\nDOCUMENT:\n{user_content}"
+
     try:
         resp = _requests.post(
-            "https://api.groq.com/openai/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {groq_key}",
-                "Content-Type": "application/json",
-            },
+            f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key={api_key}",
+            headers={"Content-Type": "application/json"},
             json={
-                "model": "llama-3.3-70b-versatile",
-                "messages": [
-                    {"role": "system", "content": _GROQ_SYSTEM},
-                    {"role": "user", "content": user_content},
-                ],
-                "temperature": 0.1,
-                "max_tokens": 3000,
+                "contents": [{"parts": [{"text": prompt}]}],
+                "generationConfig": {
+                    "temperature": 0.1,
+                    "maxOutputTokens": 4096,
+                },
             },
             timeout=60,
         )
         resp.raise_for_status()
-        raw = resp.json()["choices"][0]["message"]["content"].strip()
+        raw = resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
     except Exception as exc:
-        logger.error("SDIE: Groq API call failed: %s", exc)
+        logger.error("SDIE: Gemini API call failed: %s", exc)
         return [], ""
 
     import json as _json
@@ -615,7 +612,7 @@ def _run_ai_extraction(
         import re as _re
         m = _re.search(r"\{.*\}", raw, _re.DOTALL)
         if not m:
-            logger.error("SDIE: Could not parse JSON from Groq response")
+            logger.error("SDIE: Could not parse JSON from Gemini response")
             return [], ""
         try:
             ai_result = _json.loads(m.group())
@@ -668,7 +665,7 @@ def extract_specifications(
             ocr_text_parts.append(line.get("text", ""))
 
     ocr_text = "\n".join(line for line in ocr_text_parts if len(line.strip()) > 3)
-    logger.info("SDIE: sending %d chars to Groq AI", len(ocr_text))
+    logger.info("SDIE: sending %d chars to Gemini AI", len(ocr_text))
 
     template_fields: list[str] = []
     if template_bytes:

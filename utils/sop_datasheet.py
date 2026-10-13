@@ -764,6 +764,10 @@ def _generate_xlsx_inplace(sop_bytes: bytes, sheet_name: str,
     for sn in list(wb.sheetnames):
         if sn != sheet_name:
             del wb[sn]
+    # The EG example sheets are often hidden in the SOP; openpyxl cannot save a
+    # workbook whose only sheet is hidden, so make the kept sheet visible/active.
+    ws.sheet_state = "visible"
+    wb.active = 0
 
     out = io.BytesIO()
     wb.save(out)
@@ -776,24 +780,43 @@ def generate(
     iodb_bytes: bytes, instrument_type: str, selected_tags: list[str],
     overrides: dict[str, list[str]] | None = None,
 ) -> tuple[bytes | None, str, str | None]:
+    """Backward-compatible wrapper: (zip_bytes, filename, error)."""
+    zip_bytes, filename, err, _failed = generate_with_report(
+        sop_bytes, sop_filename, datasheet_sheet, iodb_bytes, instrument_type,
+        selected_tags, overrides,
+    )
+    return zip_bytes, filename, err
+
+
+def generate_with_report(
+    sop_bytes: bytes, sop_filename: str, datasheet_sheet: str,
+    iodb_bytes: bytes, instrument_type: str, selected_tags: list[str],
+    overrides: dict[str, list[str]] | None = None,
+) -> tuple[bytes | None, str, str | None, list[dict]]:
     """
     Generate one datasheet (.xlsx) per selected tag, zipped.
+
+    A tag that cannot be generated (not in the IODB, or an error while filling
+    its sheet) is skipped and reported in the returned `failed` list instead of
+    being written as a blank datasheet or aborting the whole package.
 
     For .xlsx SOPs the original workbook is loaded and only value cells are
     written (full formatting/logo/formula preservation). For .xls SOPs the
     sheet is rebuilt from the parsed model (best-effort; no logos/images).
 
-    Returns (zip_bytes, filename, error).
+    Returns (zip_bytes, filename, error, failed) where failed is
+    [{"tag": str, "reason": str}, ...].
     """
     overrides = overrides or {}
+    failed: list[dict] = []
     is_xlsx = (sop_filename.rsplit(".", 1)[-1].lower() in ("xlsx", "xlsm")) if "." in sop_filename else False
 
     try:
         sheets = read_workbook(sop_bytes, sop_filename)
     except Exception as exc:
-        return None, "Datasheets.zip", f"Failed to read SOP workbook: {exc}"
+        return None, "Datasheets.zip", f"Failed to read SOP workbook: {exc}", failed
     if datasheet_sheet not in sheets:
-        return None, "Datasheets.zip", f"Sheet '{datasheet_sheet}' not found in SOP workbook."
+        return None, "Datasheets.zip", f"Sheet '{datasheet_sheet}' not found in SOP workbook.", failed
 
     # Target the EG example sheet (it carries the predefined defaults + formatting).
     infos = {d.sheet: d for d in list_datasheet_sheets(sheets)}
@@ -804,39 +827,50 @@ def generate(
 
     df, err = _load_iodb_df(iodb_bytes)
     if err:
-        return None, "Datasheets.zip", f"Failed to load IODB: {err}"
+        return None, "Datasheets.zip", f"Failed to load IODB: {err}", failed
     tag_col = _find_column(df, IODB_TAG_KEYS)
     if tag_col is None:
-        return None, "Datasheets.zip", "No 'TAG NO' column found in IODB."
+        return None, "Datasheets.zip", "No 'TAG NO' column found in IODB.", failed
 
     iodb_colmap = _build_iodb_colmap(df, fields)
 
     zip_buf = io.BytesIO()
     written = 0
+    seen: set[str] = set()
     with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
         for tag in selected_tags:
-            iodb_row = None
+            if str(tag) in seen:                      # duplicate selection - one file per tag
+                continue
+            seen.add(str(tag))
+
             match = df[df[tag_col].astype(str).str.strip() == str(tag).strip()]
-            if not match.empty:
-                iodb_row = match.iloc[0]
+            if match.empty:
+                failed.append({"tag": str(tag), "reason": "Tag not found in the IODB"})
+                continue
+            iodb_row = match.iloc[0]
 
-            resolved = _resolve_values_for_tag(fields, overrides, iodb_row, iodb_colmap, tag)
+            try:
+                resolved = _resolve_values_for_tag(fields, overrides, iodb_row, iodb_colmap, tag)
 
-            if is_xlsx:
-                file_bytes = _generate_xlsx_inplace(sop_bytes, target_name, resolved)
-            else:
-                wb = build_datasheet_xlsx(target_model, fields, resolved)
-                buf = io.BytesIO()
-                wb.save(buf)
-                buf.seek(0)
-                file_bytes = buf.read()
+                if is_xlsx:
+                    file_bytes = _generate_xlsx_inplace(sop_bytes, target_name, resolved)
+                else:
+                    wb = build_datasheet_xlsx(target_model, fields, resolved)
+                    buf = io.BytesIO()
+                    wb.save(buf)
+                    buf.seek(0)
+                    file_bytes = buf.read()
+            except Exception as exc:
+                failed.append({"tag": str(tag), "reason": str(exc) or exc.__class__.__name__})
+                continue
 
             safe_tag = re.sub(r'[\\/*?:\[\]]', "_", str(tag))
             zf.writestr(f"{safe_tag} Datasheet.xlsx", file_bytes)
             written += 1
 
     if written == 0:
-        return None, "Datasheets.zip", "No datasheets generated — no matching tags."
+        detail = "; ".join(f"{f['tag']}: {f['reason']}" for f in failed[:5])
+        return None, "Datasheets.zip", "No datasheets generated" + (f" - {detail}" if detail else " - no matching tags."), failed
 
     zip_buf.seek(0)
-    return zip_buf.read(), "Datasheets.zip", None
+    return zip_buf.read(), "Datasheets.zip", None, failed

@@ -43,7 +43,7 @@ interface FieldSpec {
 }
 interface DatasheetInfo { sheet: string; eg_sheet: string | null; title: string; }
 interface ApprovalInfo { approved_by: string; employee_id: string; role: string; date: string; time_log: string; }
-interface GenStatus { job_id: string; status: 'processing' | 'done' | 'error'; result?: { filename: string; tag_count: number; message: string }; error?: string; }
+interface GenStatus { job_id: string; status: 'processing' | 'done' | 'error'; result?: { filename: string; tag_count: number; message: string; requested_count?: number; failed_tags?: { tag: string; reason: string }[] }; error?: string; }
 
 type SpecSource = 'iodb' | 'ai' | 'user';
 
@@ -1396,10 +1396,32 @@ export default function DataSheetGenerator() {
               {genStatus?.status === 'done' && (
                 <>
                   <CheckCircle2 className="w-10 h-10 mx-auto mb-3" style={{ color: '#4ade80' }} />
-                  <p className="text-base font-bold mb-1" style={{ color: '#4ade80' }}>Datasheets Ready!</p>
+                  <p className="text-base font-bold mb-1" style={{ color: '#4ade80' }}>
+                    {(genStatus.result?.failed_tags?.length ?? 0) > 0
+                      ? `${genStatus.result?.tag_count} of ${(genStatus.result?.tag_count ?? 0) + (genStatus.result?.failed_tags?.length ?? 0)} Datasheets Generated`
+                      : (genStatus.result?.tag_count ?? 0) === 1 ? '1 Datasheet Ready!' : `${genStatus.result?.tag_count ?? ''} Datasheets Ready!`}
+                  </p>
                   <p className="text-xs mb-5" style={{ color: 'var(--t2)' }}>{genStatus.result?.message}</p>
+                  {(genStatus.result?.failed_tags?.length ?? 0) > 0 && (
+                    <div className="text-left mb-5 mx-auto max-w-xl">
+                      <Alert variant="warning" title="Some datasheets were not generated">
+                        <ul className="text-xs space-y-0.5">
+                          {genStatus.result!.failed_tags!.map(f => (
+                            <li key={f.tag}><span className="font-mono">{f.tag}</span> — {f.reason}</li>
+                          ))}
+                        </ul>
+                        <p className="text-xs mt-2">The ZIP below contains only the successful datasheets. Download it before retrying.</p>
+                        <Button variant="secondary" size="sm" className="mt-2" onClick={() => {
+                          setSelectedTags(genStatus.result!.failed_tags!.map(f => f.tag));
+                          setGenStatus(null);
+                        }}>
+                          Retry Failed Tags
+                        </Button>
+                      </Alert>
+                    </div>
+                  )}
                   <Button onClick={downloadZip} size="lg">
-                    <Download className="w-4 h-4" /> Download ZIP
+                    <Download className="w-4 h-4" /> {(genStatus.result?.tag_count ?? 0) === 1 ? 'Download Datasheet (ZIP)' : 'Download Datasheets (ZIP)'}
                   </Button>
                 </>
               )}

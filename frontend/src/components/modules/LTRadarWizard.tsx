@@ -413,6 +413,7 @@ export default function LTRadarWizard({ iodbFile, instrumentType, onBack, onStep
 
   // Step 7 — generate
   const [downloadUrl, setDownloadUrl]     = useState('');
+  const [downloadName, setDownloadName]   = useState('');
   const [genDone, setGenDone]             = useState(false);
 
   // ── Load tags on mount ─────────────────────────────────────────────────────
@@ -543,9 +544,35 @@ export default function LTRadarWizard({ iodbFile, instrumentType, onBack, onStep
         responseType: 'blob',
       });
       const blob = new Blob([res.data], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-      setDownloadUrl(URL.createObjectURL(blob));
+      if (blob.size === 0) {
+        setError('The datasheet was generated but the downloadable file is empty. Please try again.');
+        return;
+      }
+      // Prefer the filename the server chose (it is safe for any number of tags).
+      const cd: string = res.headers?.['content-disposition'] || '';
+      const m = /filename\*=UTF-8''([^;]+)/i.exec(cd) || /filename="([^"]+)"/i.exec(cd);
+      const tagCount = selectedTags.length;
+      const fallback = `${selectedTags[0]?.tag || 'LT_Radar'}${tagCount > 1 ? `_plus_${tagCount - 1}_more` : ''}_LT_Radar_Datasheet.xlsx`;
+      setDownloadName(m ? decodeURIComponent(m[1]) : fallback);
+      setDownloadUrl(prev => { if (prev) URL.revokeObjectURL(prev); return URL.createObjectURL(blob); });
       setGenDone(true);
-    } catch { setError('Generation failed. Please try again.'); }
+    } catch (e: any) {
+      // With responseType 'blob' the server's JSON error arrives as a Blob - read it.
+      let detail = '';
+      try {
+        const data = e?.response?.data;
+        const text = data instanceof Blob ? await data.text() : '';
+        const j = text ? JSON.parse(text) : null;
+        const d = j?.detail;
+        detail = typeof d === 'string' ? d : d?.validation_errors ? d.validation_errors.join('; ') : '';
+      } catch { /* not JSON */ }
+      const status = e?.response?.status;
+      setError(detail
+        ? `Generation failed: ${detail}`
+        : status
+          ? `Generation failed (HTTP ${status}). Please try again.`
+          : 'Could not download the generated datasheet (network or browser blocked the response). Please try again.');
+    }
     finally { setBusy(false); }
   };
 
@@ -1208,11 +1235,13 @@ export default function LTRadarWizard({ iodbFile, instrumentType, onBack, onStep
           card(
             <div className="text-center py-6">
               <CheckCircle2 className="w-10 h-10 mx-auto mb-3" style={{ color: '#4ade80' }} />
-              <p className="text-base font-bold mb-1" style={{ color: '#4ade80' }}>Datasheet Ready!</p>
+              <p className="text-base font-bold mb-1" style={{ color: '#4ade80' }}>
+                {selectedTags.length > 1 ? `Datasheet Ready — covers ${selectedTags.length} tags` : 'Datasheet Ready!'}
+              </p>
               <p className="text-xs mb-5" style={{ color: 'var(--t2)' }}>
                 {selectedTags.map(t => t.tag).join(', ')} · {header.project || 'Project'} · Rev {header.rev_no}
               </p>
-              <a href={downloadUrl} download={`${selectedTags[0]?.tag}_LT_Radar_Datasheet.xlsx`}
+              <a href={downloadUrl} download={downloadName || `${selectedTags[0]?.tag}_LT_Radar_Datasheet.xlsx`}
                 className="inline-flex items-center gap-2 px-6 py-3 rounded-xl text-sm font-bold"
                 style={{ background: 'linear-gradient(135deg,#16a34a,#15803d)', color: '#fff' }}>
                 <Download className="w-4 h-4" /> Download XLSX

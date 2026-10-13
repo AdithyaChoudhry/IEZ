@@ -57,10 +57,17 @@ class GenerateJobResponse(BaseModel):
     status: str
 
 
+class FailedTag(BaseModel):
+    tag: str
+    reason: str
+
+
 class GenerateResult(BaseModel):
     filename: str
-    tag_count: int
+    tag_count: int                 # datasheets actually generated
     message: str
+    requested_count: int = 0       # tags the user selected
+    failed_tags: list[FailedTag] = []
 
 
 class GenerateStatusResponse(BaseModel):

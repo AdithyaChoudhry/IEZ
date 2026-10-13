@@ -44,7 +44,7 @@ from utils.sop_datasheet import (
     parse_field_spec,
     get_iodb_instrument_types,
     get_iodb_tags,
-    generate as generate_datasheets,
+    generate_with_report as generate_datasheets,
 )
 
 logger = logging.getLogger(__name__)
@@ -190,13 +190,14 @@ def _run_generate_job(job_id, sop_bytes, sop_filename, datasheet_sheet,
                       iodb_bytes, instrument_type, selected_tags, overrides, user_id):
     """Generate one datasheet per tag in a background thread."""
     try:
-        zip_bytes, filename, err = generate_datasheets(
+        zip_bytes, filename, err, failed = generate_datasheets(
             sop_bytes, sop_filename, datasheet_sheet,
             iodb_bytes, instrument_type, selected_tags, overrides,
         )
         if err:
             generation_jobs[job_id] = {"status": "error", "error": err}
             return
+        generated = len(set(map(str, selected_tags))) - len(failed)
         generation_cache[f"{user_id}_sop_datasheet"] = {"bytes": zip_bytes, "filename": filename}
         try:
             _OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -207,11 +208,19 @@ def _run_generate_job(job_id, sop_bytes, sop_filename, datasheet_sheet,
             "status": "done",
             "result": GenerateResult(
                 filename=filename,
-                tag_count=len(selected_tags),
-                message=f"Generated {len(selected_tags)} datasheet(s) for {instrument_type}",
+                tag_count=generated,
+                requested_count=len(set(map(str, selected_tags))),
+                failed_tags=failed,
+                message=(
+                    f"Generated {generated} datasheet(s) for {instrument_type}"
+                    if not failed else
+                    f"{generated} of {generated + len(failed)} datasheets generated for {instrument_type}. "
+                    f"{len(failed)} failed."
+                ),
             ),
         }
-        logger.info("SOP datasheet job %s done: %d tags", job_id, len(selected_tags))
+        logger.info("SOP datasheet job %s done: %d generated, %d failed, zip=%d bytes",
+                    job_id, generated, len(failed), len(zip_bytes))
     except Exception as exc:
         logger.exception("SOP datasheet job %s failed", job_id)
         generation_jobs[job_id] = {"status": "error", "error": str(exc)}
@@ -279,10 +288,15 @@ async def download(current_user: User = Depends(get_current_user)):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                                 detail="No generated datasheets found. Please generate first.")
         data, filename = path.read_bytes(), "Datasheets.zip"
+    logger.info("SOP datasheet download: user=%s file=%s bytes=%d source=%s",
+                current_user.id, filename, len(data), "memory" if cached else "disk")
     return StreamingResponse(
         io.BytesIO(data),
         media_type="application/zip",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Content-Length": str(len(data)),
+        },
     )
 
 

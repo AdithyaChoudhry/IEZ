@@ -13,6 +13,8 @@ import io
 import json
 import logging
 import os
+import re
+from urllib.parse import quote
 
 import httpx
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
@@ -201,6 +203,30 @@ async def ai_extract(
 
 
 # ---------------------------------------------------------------------------
+def _safe_filename_part(text: str) -> str:
+    """Keep letters, digits, '.', '_' and '-' only (no commas, spaces, slashes)."""
+    return re.sub(r"[^A-Za-z0-9._-]+", "_", text).strip("._") or "TAG"
+
+
+def _datasheet_filename(tag_no: str) -> str:
+    """
+    `tag_no` is a comma-separated list when several tags share one datasheet.
+    Never put the raw list in the filename: a comma in Content-Disposition makes
+    browsers (Chrome) reject the response as having multiple Content-Disposition values.
+    """
+    tags = [t.strip() for t in str(tag_no).split(",") if t.strip()] or ["LT_RADAR"]
+    first = _safe_filename_part(tags[0])[:60]
+    extra = f"_plus_{len(tags) - 1}_more" if len(tags) > 1 else ""
+    return f"LT_Radar_Datasheet_{first}{extra}.xlsx"
+
+
+def _content_disposition(filename: str) -> str:
+    """Quoted ASCII filename (+ RFC 5987 form for non-ASCII) - safe for every browser."""
+    ascii_name = filename.encode("ascii", "ignore").decode() or "download.xlsx"
+    ascii_name = ascii_name.replace('"', "").replace("\\", "")
+    return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(filename)}"
+
+
 @router.post("/generate")
 async def generate_datasheet(
     values_json: str = Form(...),
@@ -228,11 +254,16 @@ async def generate_datasheet(
         logger.exception("LT radar datasheet generation failed")
         raise HTTPException(status_code=500, detail=f"Generation failed: {exc}")
 
-    tag_no = values.get("tag_no", "LT_RADAR").replace("/", "-").replace(" ", "_")
-    filename = f"LT_Radar_Datasheet_{tag_no}.xlsx"
+    filename = _datasheet_filename(values.get("tag_no") or "LT_RADAR")
+    tag_count = len([t for t in str(values.get("tag_no", "")).split(",") if t.strip()]) or 1
+    logger.info("LT radar datasheet: tags=%d file=%s bytes=%d", tag_count, filename, len(xlsx_bytes))
 
     return StreamingResponse(
         io.BytesIO(xlsx_bytes),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f"attachment; filename={filename}"},
+        headers={
+            "Content-Disposition": _content_disposition(filename),
+            "Content-Length": str(len(xlsx_bytes)),
+            "X-Tag-Count": str(tag_count),
+        },
     )

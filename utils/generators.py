@@ -839,6 +839,19 @@ def generate_cable_schedule(
                     except Exception:
                         continue
 
+        # ── CABLE SUMMARY: quantities per cable type, appended as the LAST sheet ──
+        # Separate from the schedule logic above; a failure here never blocks the schedule.
+        try:
+            from utils.cable_summary import build_cable_summary, append_cable_summary_sheet
+            _summary = build_cable_summary(df, tag_column)
+            append_cable_summary_sheet(out_wb, _summary)
+            import sys
+            for _line in _summary.log_lines():
+                print(_line, file=sys.stderr)
+        except Exception as _exc:
+            import sys
+            print(f"[Cable Summary] not added: {_exc}", file=sys.stderr)
+
         out_bytes = workbook_to_bytes(out_wb)
         if tag_warnings:
             import sys

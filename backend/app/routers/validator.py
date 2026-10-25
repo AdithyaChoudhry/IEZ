@@ -56,6 +56,7 @@ def _run_validation_job(
     auto_correct_spelling: bool,
     dynamic_rules,
     user_id: int,
+    validate_empty_cells: bool = False,
 ):
     """Run validation in the background and store the result/status."""
     try:
@@ -63,6 +64,7 @@ def _run_validation_job(
             file_bytes,
             auto_correct_spelling=auto_correct_spelling,
             dynamic_rules=dynamic_rules if dynamic_rules else None,
+            validate_empty_cells=validate_empty_cells,
         )
 
         if err_msg:
@@ -90,7 +92,10 @@ def _run_validation_job(
                 has_error_log=log_bytes is not None,
                 has_highlighted=hl_bytes is not None,
                 has_tba=tba_bytes is not None,
-                message=f"Validation complete: {len(errors)} error(s) found" if errors else "No errors found",
+                message=(
+                    (f"Validation complete: {len(errors)} error(s) found" if errors else "No errors found")
+                    + ("" if validate_empty_cells else " (empty-cell check off)")
+                ),
             ),
         }
     except Exception as exc:
@@ -102,11 +107,13 @@ async def validate_iodb(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     auto_correct_spelling: bool = Form(False),
+    validate_empty_cells: bool = Form(False),   # opt-in: Rule 1 "Cell cannot be empty"
     current_user: User = Depends(get_current_user),
 ):
     """
     Kick off validation of an IODB Excel file with predefined and dynamic
-    rules. Validation runs in the background — poll
+    rules. Empty-cell errors (Rule 1) are reported only when
+    `validate_empty_cells` is true. Validation runs in the background — poll
     GET /validator/validate/status/{job_id} for the result.
     """
     file_bytes = await file.read()
@@ -122,6 +129,7 @@ async def validate_iodb(
         auto_correct_spelling,
         dynamic_rules,
         current_user.id,
+        validate_empty_cells,
     )
 
     return ValidationJobResponse(job_id=job_id, status="processing")

@@ -1397,10 +1397,14 @@ def generate_iodb_validation(
     wb: openpyxl.Workbook,
     auto_correct_spelling: bool = False,
     dynamic_rules=None,          # list[DynamicRule] | None
+    validate_empty_cells: bool = True,
 ) -> tuple[bytes | None, bytes | None, bytes | None, list[dict], str | None]:
     """
     Run all 12 predefined IODB validation rules *and* any active user-defined
     dynamic rules on *df* and return:
+
+    `validate_empty_cells` switches Rule 1 ("Cell cannot be empty") on or off.
+    The other rules are cross-field checks and always run.
 
       error_log_bytes   — Formatted Excel validation report
       highlighted_bytes — Original workbook with error cells highlighted
@@ -1511,7 +1515,7 @@ def generate_iodb_validation(
         # ══════════════════════════════════════════════════════════════════════
         # RULE 1 — Empty cell validation (except STATUS and REMARKS)
         # ══════════════════════════════════════════════════════════════════════
-        for col in col_names:
+        for col in (col_names if validate_empty_cells else []):
             if col.strip().upper() in SKIP_EMPTY:
                 continue
             # Columns left blank for every row are treated as unused by this

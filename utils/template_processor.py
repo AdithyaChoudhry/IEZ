@@ -396,6 +396,7 @@ def process_iodb_validation(
     raw_bytes: bytes,
     auto_correct_spelling: bool = False,
     dynamic_rules=None,          # list[DynamicRule] | None
+    validate_empty_cells: bool = True,
 ) -> tuple[bytes | None, bytes | None, bytes | None, list[dict], str | None]:
     """
     Drive the full IODB validation pipeline.
@@ -423,7 +424,8 @@ def process_iodb_validation(
         if err:
             return None, None, [], err
 
-        return generate_iodb_validation(df, wb, auto_correct_spelling, dynamic_rules=dynamic_rules)
+        return generate_iodb_validation(df, wb, auto_correct_spelling, dynamic_rules=dynamic_rules,
+                                        validate_empty_cells=validate_empty_cells)
     except Exception as exc:
         import traceback
         return None, None, None, [], f"Failed to process file: {exc}\n{traceback.format_exc()}"

@@ -58,6 +58,7 @@ const MAX_POLL_ATTEMPTS = 200; // ~10 minutes
 export default function IODBValidator() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [autoCorrect, setAutoCorrect] = useState(false);
+  const [validateEmpty, setValidateEmpty] = useState(false);
   const [validating, setValidating] = useState(false);
   const [result, setResult] = useState<ValidationResult | null>(null);
   const [downloading, setDownloading] = useState<string | null>(null);
@@ -81,6 +82,7 @@ export default function IODBValidator() {
     const formData = new FormData();
     formData.append('file', selectedFile);
     formData.append('auto_correct_spelling', autoCorrect.toString());
+    formData.append('validate_empty_cells', validateEmpty.toString());
 
     try {
       const kickoff = await api.post<ValidationJob>('/validator/validate', formData, {
@@ -215,6 +217,23 @@ export default function IODBValidator() {
             />
             <label htmlFor="autoCorrect" className="ml-2 text-sm text-gray-700">
               Auto-correct spelling in highlighted output
+            </label>
+          </div>
+
+          <div className="flex items-start">
+            <input
+              type="checkbox"
+              id="validateEmpty"
+              checked={validateEmpty}
+              onChange={(e) => setValidateEmpty(e.target.checked)}
+              className="w-4 h-4 mt-0.5 text-primary-600 border-gray-300 rounded focus:ring-primary-500"
+            />
+            <label htmlFor="validateEmpty" className="ml-2 text-sm text-gray-700">
+              Validate empty cells
+              <span className="block text-xs text-gray-500">
+                Off by default: blank cells are not reported. Turn on to flag every empty cell
+                (except STATUS and REMARKS) as an error.
+              </span>
             </label>
           </div>
 

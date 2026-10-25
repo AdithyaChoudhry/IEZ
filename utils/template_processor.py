@@ -196,6 +196,13 @@ def process_cable_schedule(
 
     Returns (bytes, "Cable_Schedule.xlsx", error)
     """
+    try:                                   # raw IODB bytes: lets the cable summary find its columns by header name
+        iodb_file.seek(0)
+        iodb_raw = iodb_file.read()
+        iodb_file.seek(0)
+    except Exception:
+        iodb_raw = None
+
     df, err = read_iodb(iodb_file)
     if err:
         return None, None, f"Failed to read IODB: {err}"
@@ -218,7 +225,7 @@ def process_cable_schedule(
 
     return generate_cable_schedule(
         df, wb, jb_column, tag_column, progress_callback,
-        template_bytes=tmpl_bytes,
+        template_bytes=tmpl_bytes, iodb_bytes=iodb_raw,
     )
 
 

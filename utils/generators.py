@@ -488,6 +488,7 @@ def generate_cable_schedule(
     tag_column: str = "TAG NO",
     progress_callback=None,
     template_bytes: bytes = None,
+    iodb_bytes: bytes = None,
 ) -> tuple[bytes | None, str | None, str | None]:
     """
     Generate a Cable Schedule from IODB data using the uploaded template.
@@ -855,8 +856,15 @@ def generate_cable_schedule(
         # ── CABLE SUMMARY: quantities per cable type, appended as the LAST sheet ──
         # Separate from the schedule logic above; a failure here never blocks the schedule.
         try:
-            from utils.cable_summary import build_cable_summary, append_cable_summary_sheet
-            _summary = build_cable_summary(df, tag_column)
+            from utils.cable_summary import (build_cable_summary, append_cable_summary_sheet,
+                                             locate_cable_source, formula_hint_for)
+            _src_df, _info = locate_cable_source(df, iodb_bytes, tag_column)
+            _summary = build_cable_summary(_src_df, tag_column)
+            if _info:
+                _summary.source = {"sheet": _info["sheet"], "header_row": _info["header_row"],
+                                   "columns": _info["columns"]}
+                if not _summary.rows and iodb_bytes:
+                    _summary.formula_hint = formula_hint_for(iodb_bytes, _info)
             append_cable_summary_sheet(out_wb, _summary)
             import sys
             for _line in _summary.log_lines():

@@ -245,7 +245,7 @@ def test_iodb_without_cable_columns_still_produces_schedule_and_empty_summary():
     assert err is None
     wb = openpyxl.load_workbook(io.BytesIO(out))
     assert wb.sheetnames[-1] == CABLE_SUMMARY_SHEET
-    assert "No cable type" in str(wb[CABLE_SUMMARY_SHEET]["B8"].value)
+    assert "Cable columns not found" in str(wb[CABLE_SUMMARY_SHEET]["B8"].value)
 
 
 def test_summary_failure_never_blocks_the_schedule(monkeypatch):

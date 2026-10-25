@@ -358,6 +358,30 @@ def get_iodb_preview(iodb_file, max_unique: int = 200, preview_rows: int = 100):
     return columns, unique_values, preview, None, total_rows
 
 
+def analyze_iodb_for_list(iodb_file, list_type: str, max_unique: int = 200, preview_rows: int = 100):
+    """
+    Everything the Instrument List / I/O List UI needs after an IODB upload: columns,
+    filter options (with a "(blank)" option where a column has empty cells), a preview,
+    the total row count and the DEFAULT column selection / filters for `list_type`
+    ("instrument_list" | "io_list"). Defaults are only an initial state for the user.
+
+    Returns (analysis dict, error)
+    """
+    from utils.list_defaults import build_list_defaults, unique_values_with_blank
+
+    df, err = read_iodb(iodb_file)
+    if err:
+        return None, err
+    preview_df = df.head(preview_rows).astype(object).where(pd.notnull(df.head(preview_rows)), None)
+    return {
+        "columns": list(df.columns),
+        "unique_values": unique_values_with_blank(df, max_unique),
+        "preview": preview_df.to_dict(orient="records"),
+        "total_rows": len(df),
+        "defaults": build_list_defaults(list_type, df),
+    }, None
+
+
 def get_jb_summary(iodb_file, jb_column: str, tag_column: str):
     """
     Group IODB rows by junction box column and return tag counts per JB,

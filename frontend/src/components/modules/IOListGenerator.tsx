@@ -12,20 +12,20 @@ import Button from '../ui/Button';
 import Alert from '../ui/Alert';
 import MultiSelect from '../ui/MultiSelect';
 import FileUploadCard from '../ui/FileUploadCard';
+import ListDefaultsNotice, { filterValueOf, type ListDefaults } from '../ui/ListDefaultsNotice';
 
 interface AnalyzeResponse {
   columns: string[];
   unique_values: Record<string, string[]>;
   preview: Record<string, any>[];
   total_rows: number;
+  defaults?: ListDefaults | null;
 }
 
 interface GenerateResponse {
   filename: string;
   message: string;
 }
-
-const IO_KEYWORDS = ['signal', 'i/o', 'io', 'type', 'tag', 'loop', 'rack', 'slot', 'channel', 'panel'];
 
 export default function IOListGenerator() {
   const [iodbFile, setIodbFile] = useState<File | null>(null);
@@ -57,13 +57,10 @@ export default function IOListGenerator() {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
       setAnalysis(response.data);
-
-      // Pre-suggest I/O-relevant columns
-      const suggested = response.data.columns.filter((c) =>
-        IO_KEYWORDS.some((k) => c.toLowerCase().includes(k))
-      );
-      setSelectedColumns(suggested.length > 0 ? suggested : response.data.columns);
-      setFilters({});
+      // Default columns / filters are only an initial state - the user can change them freely.
+      const d = response.data.defaults;
+      setSelectedColumns(d && d.columns.length > 0 ? d.columns : response.data.columns);
+      setFilters(d ? { ...d.filters } : {});
       setFilterColumn('');
       setPage(0);
     } catch (err: any) {
@@ -128,9 +125,18 @@ export default function IOListGenerator() {
     const activeFilters = Object.entries(filters);
     if (activeFilters.length === 0) return analysis.preview;
     return analysis.preview.filter((row) =>
-      activeFilters.every(([col, values]) => values.includes(String(row[col] ?? '')))
+      activeFilters.every(([col, values]) => values.includes(filterValueOf(row[col])))
     );
   }, [analysis, filters]);
+
+  const resetToDefaults = () => {
+    if (!analysis) return;
+    const d = analysis.defaults;
+    setSelectedColumns(d && d.columns.length > 0 ? d.columns : analysis.columns);
+    setFilters(d ? { ...d.filters } : {});
+    setPage(0);
+  };
+  const clearAllFilters = () => { setFilters({}); setPage(0); };
 
   const totalPages = Math.ceil(filteredPreview.length / PAGE_SIZE);
   const pagedRows = filteredPreview.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
@@ -146,7 +152,7 @@ export default function IOListGenerator() {
         icon={Network}
         iconClassName="text-purple-500"
         title="I/O List Generator"
-        description="Generate an I/O list from your IODB with I/O-relevant columns pre-suggested, plus per-column filters."
+        description="Generate an I/O list from your IODB with default columns preselected, plus per-column filters."
       />
       <ProjectSelector />
 
@@ -181,9 +187,16 @@ export default function IOListGenerator() {
       {/* Column Selection & Filters */}
       {analysis && (
         <>
+          <ListDefaultsNotice
+            defaults={analysis.defaults}
+            selectedColumns={selectedColumns}
+            filters={filters}
+            onReset={resetToDefaults}
+            onClearFilters={clearAllFilters}
+          />
+
           <Card title={`Select Columns (${selectedColumns.length} of ${analysis.columns.length})`}
-            description="I/O-relevant columns are pre-selected based on common keywords (signal, I/O, type, loop, rack, slot, channel, panel...)."
-          >
+            description="Default columns selected. You may add or remove columns.">
             <MultiSelect
               options={analysis.columns}
               selected={selectedColumns}
@@ -192,7 +205,7 @@ export default function IOListGenerator() {
             />
           </Card>
 
-          <Card title="Column Filters" description="Optionally restrict the preview/output to specific values in a column.">
+          <Card title="Column Filters" description="Default filters applied. You may modify the selections before generating. Only the selected values of a filtered column are kept; empty cells are shown as (blank).">
             <div className="flex flex-wrap gap-2 mb-4">
               {analysis.columns.map((col) => (
                 <button

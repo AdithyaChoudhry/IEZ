@@ -10,6 +10,8 @@ class ListAnalyzeResponse(BaseModel):
     unique_values: Dict[str, List[str]]
     preview: List[Dict[str, Any]]
     total_rows: int = 0
+    # Default column selection / filters for this list (an initial state, never locked).
+    defaults: Optional[Dict[str, Any]] = None
 
 
 class ListGenerateResponse(BaseModel):

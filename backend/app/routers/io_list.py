@@ -15,7 +15,7 @@ from ..models.list_generator import ListAnalyzeResponse, ListGenerateResponse
 # Import existing business logic
 import sys
 sys.path.insert(0, '/app')
-from utils.template_processor import get_iodb_preview, process_io_list
+from utils.template_processor import analyze_iodb_for_list, process_io_list
 
 
 router = APIRouter(prefix="/io-list", tags=["I/O List"])
@@ -30,12 +30,12 @@ async def analyze_iodb(
 ):
     """Read the IODB file and return its columns, unique values, and a preview."""
     file_bytes = await file.read()
-    columns, unique_values, preview, err, total_rows = get_iodb_preview(io.BytesIO(file_bytes))
+    analysis, err = analyze_iodb_for_list(io.BytesIO(file_bytes), "io_list")
 
     if err:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=err)
 
-    return ListAnalyzeResponse(columns=columns, unique_values=unique_values, preview=preview, total_rows=total_rows)
+    return ListAnalyzeResponse(**analysis)
 
 
 @router.post("/generate", response_model=ListGenerateResponse)

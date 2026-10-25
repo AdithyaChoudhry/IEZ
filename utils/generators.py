@@ -29,6 +29,29 @@ _HEADER_FONT = Font(name='Calibri', size=14, bold=True)
 # 1. Instrument List Generator
 # ─────────────────────────────────────────────────────────────────────────────
 
+BLANK_FILTER_TOKEN = "(blank)"
+
+
+def _apply_column_filters(df: pd.DataFrame, filters: dict | None) -> pd.DataFrame:
+    """
+    Keep rows whose value in each filtered column is one of the allowed values.
+    "(blank)" among the allowed values also keeps empty cells. Applied to the whole IODB
+    frame (not just the output columns); the IODB data itself is never changed.
+    """
+    if not filters:
+        return df
+    for col, allowed in filters.items():
+        if col not in df.columns or not allowed:
+            continue
+        allowed_text = [str(v) for v in allowed]
+        text = df[col].astype(str)
+        mask = text.isin(allowed_text)
+        if BLANK_FILTER_TOKEN in allowed_text:
+            mask = mask | df[col].isna() | (text.str.strip() == "")
+        df = df[mask]
+    return df
+
+
 def generate_instrument_list(
     df: pd.DataFrame,
     selected_columns: list[str],
@@ -45,12 +68,7 @@ def generate_instrument_list(
         available = [c for c in selected_columns if c in df.columns]
         if not available:
             return None, None, "None of the selected columns were found in the IODB file."
-        result = df[available].copy()
-        # Apply per-column filters
-        if filters:
-            for col, allowed in filters.items():
-                if col in result.columns and allowed:
-                    result = result[result[col].astype(str).isin([str(v) for v in allowed])]
+        result = _apply_column_filters(df, filters)[available].copy()
         if result.empty:
             return None, None, "No rows remain after applying filters."
         if template_wb is not None:
@@ -82,12 +100,7 @@ def generate_io_list(
         available = [c for c in selected_columns if c in df.columns]
         if not available:
             return None, None, "None of the selected columns were found in the IODB file."
-        result = df[available].copy()
-        # Apply per-column filters
-        if filters:
-            for col, allowed in filters.items():
-                if col in result.columns and allowed:
-                    result = result[result[col].astype(str).isin([str(v) for v in allowed])]
+        result = _apply_column_filters(df, filters)[available].copy()
         if result.empty:
             return None, None, "No rows remain after applying filters."
         if template_wb is not None:

@@ -12,12 +12,14 @@ import Button from '../ui/Button';
 import Alert from '../ui/Alert';
 import MultiSelect from '../ui/MultiSelect';
 import FileUploadCard from '../ui/FileUploadCard';
+import ListDefaultsNotice, { filterValueOf, type ListDefaults } from '../ui/ListDefaultsNotice';
 
 interface AnalyzeResponse {
   columns: string[];
   unique_values: Record<string, string[]>;
   preview: Record<string, any>[];
   total_rows: number;
+  defaults?: ListDefaults | null;
 }
 
 interface GenerateResponse {
@@ -55,8 +57,10 @@ export default function InstrumentListGenerator() {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
       setAnalysis(response.data);
-      setSelectedColumns(response.data.columns);
-      setFilters({});
+      // Default columns / filters are only an initial state - the user can change them freely.
+      const d = response.data.defaults;
+      setSelectedColumns(d && d.columns.length > 0 ? d.columns : response.data.columns);
+      setFilters(d ? { ...d.filters } : {});
       setFilterColumn('');
       setPage(0);
     } catch (err: any) {
@@ -122,9 +126,18 @@ export default function InstrumentListGenerator() {
     const activeFilters = Object.entries(filters);
     if (activeFilters.length === 0) return analysis.preview;
     return analysis.preview.filter((row) =>
-      activeFilters.every(([col, values]) => values.includes(String(row[col] ?? '')))
+      activeFilters.every(([col, values]) => values.includes(filterValueOf(row[col])))
     );
   }, [analysis, filters]);
+
+  const resetToDefaults = () => {
+    if (!analysis) return;
+    const d = analysis.defaults;
+    setSelectedColumns(d && d.columns.length > 0 ? d.columns : analysis.columns);
+    setFilters(d ? { ...d.filters } : {});
+    setPage(0);
+  };
+  const clearAllFilters = () => { setFilters({}); setPage(0); };
 
   const totalPages = Math.ceil(filteredPreview.length / PAGE_SIZE);
   const pagedRows = filteredPreview.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
@@ -175,7 +188,16 @@ export default function InstrumentListGenerator() {
       {/* Column Selection & Filters */}
       {analysis && (
         <>
-          <Card title={`Select Columns (${selectedColumns.length} of ${analysis.columns.length})`}>
+          <ListDefaultsNotice
+            defaults={analysis.defaults}
+            selectedColumns={selectedColumns}
+            filters={filters}
+            onReset={resetToDefaults}
+            onClearFilters={clearAllFilters}
+          />
+
+          <Card title={`Select Columns (${selectedColumns.length} of ${analysis.columns.length})`}
+            description="Default columns selected. You may add or remove columns.">
             <MultiSelect
               options={analysis.columns}
               selected={selectedColumns}
@@ -184,7 +206,7 @@ export default function InstrumentListGenerator() {
             />
           </Card>
 
-          <Card title="Column Filters" description="Optionally restrict the preview/output to specific values in a column.">
+          <Card title="Column Filters" description="Default filters applied. You may modify the selections before generating. Only the selected values of a filtered column are kept; empty cells are shown as (blank).">
             <div className="flex flex-wrap gap-2 mb-4">
               {analysis.columns.map((col) => (
                 <button

@@ -137,6 +137,7 @@ def init_db():
     from .models.document_registry import (  # noqa: F401
         Project, SourceVersion, GeneratedDocument, CoversheetLink, DocumentAuditLog,
     )
+    from .models.mdl import ProjectMDL, MDLRecord  # noqa: F401
     Base.metadata.create_all(bind=engine)
     _seed_notification_routes()
     _seed_default_admin()

@@ -205,6 +205,8 @@ def generate_cover_sheet(
     orientation: str = "portrait",
     col_width_overrides: dict | None = None,
     row_height_overrides: dict | None = None,
+    document_number: str | None = None,
+    document_title: str | None = None,
 ) -> tuple[bytes | None, str | None, str | None]:
     """
     Fill the cover sheet template with project information, revision
@@ -346,10 +348,19 @@ def generate_cover_sheet(
             except Exception:
                 pass
 
+        if document_number:
+            # Traceability: the complete (MDL) document number travels with the file.
+            wb.properties.identifier = document_number
+            wb.properties.title = f"{document_number} - {document_title or ''}".strip(" -")
+            wb.properties.subject = document_title or ""
+
         out_bytes = workbook_to_bytes(wb)
         doc_code = project_info.get("doc_code", "COVER")
         serial_no = project_info.get("serial_no", "")
         filename = f"{doc_code}_{serial_no}_CoverSheet.xlsx".replace(" ", "_")
+        if document_number:
+            safe = "".join(ch if ch.isalnum() or ch in "-._" else "_" for ch in document_number)
+            filename = f"{safe}_CoverSheet.xlsx"
         return out_bytes, filename, None
 
     except Exception as e:

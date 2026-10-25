@@ -74,6 +74,8 @@ class CoverSheetResponse(BaseModel):
     """Response from cover sheet generation."""
     filename: str
     message: str
+    # Set when the document number/title came from the project's MDL.
+    mdl: Optional[Dict[str, Any]] = None
 
 
 class CoverSheetPreviewResponse(BaseModel):

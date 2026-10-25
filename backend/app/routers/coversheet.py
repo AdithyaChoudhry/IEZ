@@ -12,8 +12,12 @@ from typing import List, Optional
 import io
 import json
 
-from ..deps import get_current_user
+from sqlalchemy.orm import Session
+
+from ..deps import get_current_user, get_db
 from ..auth.models import User
+from ..services import document_registry as _registry
+from ..services import mdl_service
 from ..models.coversheet import (
     CoverSheetRequest,
     CoverSheetPreviewRequest,
@@ -107,9 +111,18 @@ async def generate(
     approved_signature: Optional[UploadFile] = File(None),
     extra_images: List[UploadFile] = File(default=[]),
     extra_image_meta: str = Form(default="[]"),
+    project_id: Optional[str] = Form(None),       # optional: enables MDL-driven document number/title
+    mdl_record_id: Optional[str] = Form(None),    # the MDL record the cover sheet is generated for
     current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
-    """Generate the final cover sheet with all overrides applied."""
+    """
+    Generate the final cover sheet with all overrides applied.
+
+    If `project_id` has an active Master Document List, the document number and title
+    come from the selected MDL record (server-side, so the generated file never depends
+    on what the browser sent). Without an MDL the existing manual workflow is unchanged.
+    """
     try:
         payload = CoverSheetRequest(**json.loads(data))
     except Exception as e:
@@ -148,11 +161,43 @@ async def generate(
             entry["placement"] = p if isinstance(p, dict) else p.model_dump()
         images[img_id] = entry
 
+    project_info = payload.project_info.model_dump()
+    cell_overrides = payload.cell_overrides
+    mdl_record = None
+    mdl_warnings: list = []
+    if project_id and not getattr(payload, "blank_mode", False):
+        try:
+            pid = _registry.normalize_project_id(project_id)
+        except _registry.RegistryError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        if mdl_service.get_active(db, pid):
+            if not mdl_record_id:
+                raise HTTPException(status_code=400, detail=(
+                    "An MDL is uploaded for this project. Select the document from the MDL "
+                    "before generating the cover sheet."))
+            mdl_record = mdl_service.get_record(db, pid, mdl_record_id)
+            if mdl_record is None:
+                raise HTTPException(status_code=409, detail=(
+                    "The selected document is not in this project's active MDL. "
+                    "Select a document again."))
+            mapped = mdl_service.coversheet_fields(mdl_record)
+            project_info.update(mapped["fields"])
+            mdl_warnings = mapped["warnings"]
+            # The MDL is authoritative: ignore canvas text edits on the MDL-controlled cells
+            # (formatting overrides on those cells are kept).
+            cell_overrides = {
+                coord: ({k: v for k, v in ov.items() if k != "value"}
+                        if coord.upper() in mdl_service.MDL_CONTROLLED_CELLS else ov)
+                for coord, ov in (cell_overrides or {}).items()
+            }
+
     out_bytes, filename, err = generate_cover_sheet(
-        project_info=payload.project_info.model_dump(),
+        project_info=project_info,
         revisions=[r.model_dump() for r in payload.revisions],
         images=images,
-        cell_overrides=payload.cell_overrides,
+        cell_overrides=cell_overrides,
+        document_number=mdl_record["document_number"] if mdl_record else None,
+        document_title=mdl_record["document_name"] if mdl_record else None,
         template_bytes=template_bytes,
         merge_ranges=getattr(payload, "merge_ranges", []) or [],
         unmerge_coords=getattr(payload, "unmerge_coords", []) or [],
@@ -167,7 +212,14 @@ async def generate(
 
     cache_key = f"{current_user.id}_coversheet"
     coversheet_cache[cache_key] = {"bytes": out_bytes, "filename": filename}
-    return CoverSheetResponse(filename=filename, message="Cover sheet generated successfully")
+    if mdl_record:
+        mdl_service.audit_generation(db, pid, current_user.username, mdl_record, filename)
+    return CoverSheetResponse(
+        filename=filename, message="Cover sheet generated successfully",
+        mdl=({"document_number": mdl_record["document_number"],
+              "document_name": mdl_record["document_name"],
+              "mdl_file": mdl_record["source_file"], "warnings": mdl_warnings} if mdl_record else None),
+    )
 
 
 @router.get("/download")

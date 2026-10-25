@@ -12,7 +12,7 @@ import { useAuth } from '@/context/AuthContext';
 import {
   FileSpreadsheet, Upload, Download, Plus, Trash2, Save,
   Eye, ImagePlus, ChevronDown, ChevronRight, FileUp, X, CheckCircle2,
-  Lock, LayoutGrid, AlertTriangle, Loader2, FileUp as FileUpIcon, Send,
+  Lock, LayoutGrid, AlertTriangle, Loader2, Send,
 } from 'lucide-react';
 import api from '@/services/api';
 import CoverSheetPreview, { colLetter } from './coversheet/CoverSheetPreview';
@@ -22,6 +22,8 @@ import type {
 } from './coversheet/types';
 import PageHeader from '../ui/PageHeader';
 import ConnectedDocuments, { type DocInfo } from './coversheet/ConnectedDocuments';
+import MdlSelector, { type MdlSelection, type MdlSummary } from './coversheet/MdlSelector';
+import { getCurrentProject } from '@/services/projectContext';
 import Button from '../ui/Button';
 import Alert from '../ui/Alert';
 
@@ -60,6 +62,9 @@ const FIXED_IMAGE_FIELDS: { key: ImageKey; label: string }[] = [
   { key: 'checked_signature', label: 'Checked By Signature' },
   { key: 'approved_signature', label: 'Approved By Signature' },
 ];
+
+// Fields owned by the MDL while one is active (document title + the document-number boxes).
+const MDL_FIELDS: (keyof ProjectInfo)[] = ['doc_title_short', 'doc_title_full', 'job_no', 'project_no', 'doc_code', 'serial_no'];
 
 const emptyProjectInfo = (): ProjectInfo => ({
   client: '', pmc: '', contractor: '', project_description: '',
@@ -102,6 +107,7 @@ const ic = 'w-full px-3 py-2 rounded-xl text-sm outline-none';
 const icSt = { background: 'var(--s0)', border: '1px solid var(--b2)', color: 'var(--t0)' };
 const lc = 'block text-[10px] font-semibold uppercase tracking-wider mb-1';
 const lcSt = { color: 'var(--t2)' };
+const lockedSt = { ...icSt, opacity: 0.8, cursor: 'not-allowed' as const };
 
 // ── Collapsible section ────────────────────────────────────────────────────────
 function Section({ title, subtitle, defaultOpen = true, badge, children }: {
@@ -355,8 +361,16 @@ export default function CoverSheetGenerator() {
   const [rowOverrides, setRowOverrides] = useState<Record<number, number>>({});
   const [paperSize, setPaperSize] = useState('9'); // A4 default
   const [orientation, setOrientation] = useState<'portrait' | 'landscape'>('portrait');
-  const mdlInputRef = useRef<HTMLInputElement>(null);
-  const [mdlFile, setMdlFile] = useState<File | null>(null);
+  // Master Document List (MDL): when a project has one, document title/number come from it.
+  const [mdlSummary, setMdlSummary] = useState<MdlSummary | null>(null);
+  const [mdlSelection, setMdlSelection] = useState<MdlSelection | null>(null);
+  const [mdlInvalid, setMdlInvalid] = useState<string | null>(null);
+  const mdlActive = !!mdlSummary?.uploaded;
+  /** Why generation must wait (null = fine). Blank canvas and no-MDL projects keep the manual workflow. */
+  const mdlProblem: string | null = isBlank ? null
+    : mdlInvalid ? 'The uploaded MDL is not valid. Upload a corrected MDL or remove it.'
+    : mdlActive && !mdlSelection ? 'Select the document from the MDL (document name and number are taken from it).'
+    : null;
 
   const [masterSaved, setMasterSaved] = useState(false);
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -370,6 +384,11 @@ export default function CoverSheetGenerator() {
   const [csPendingReqId, setCSPendingReqId] = useState<number | null>(null);
   const [csReqStatus, setCSReqStatus] = useState<'idle' | 'pending' | 'approved' | 'rejected'>('idle');
   const csPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Selecting an MDL record fills the document title and number boxes.
+  useEffect(() => {
+    if (mdlSelection) setProjectInfo(p => ({ ...p, ...mdlSelection.fields }));
+  }, [mdlSelection]);
 
   // Restore persisted canvas state on mount
   useEffect(() => {
@@ -492,6 +511,13 @@ export default function CoverSheetGenerator() {
         approver_id: ai?.employee_id || '',
       } : {}),
     }));
+    if (includeOverrides && !isBlank) {
+      const pid = getCurrentProject();
+      if (pid) {
+        fd.append('project_id', pid);
+        if (mdlSelection) fd.append('mdl_record_id', mdlSelection.record.mdl_record_id);
+      }
+    }
     if (templateFile && !isBlank) fd.append('template_file', templateFile);
     Object.entries(fixedImages).forEach(([k, f]) => { if (f) fd.append(k, f); });
     customImages.forEach(ci => fd.append('extra_images', ci.file));
@@ -525,6 +551,7 @@ export default function CoverSheetGenerator() {
   };
 
   const doGenerate = async (ai: AuthInfo) => {
+    if (mdlProblem) { setError(mdlProblem); return; }
     setGenerating(true); setResult(null); setError(null);
     try {
       const res = await api.post('/coversheet/generate', buildFD(true, ai), {
@@ -555,35 +582,23 @@ export default function CoverSheetGenerator() {
             description="Click any cell to edit · Shift+click to select range · Merge / Unmerge · Drag images · Admin auth required to generate" />
         </div>
 
-        {/* Upload MDL — top right, no processing yet */}
-        <div className="flex-shrink-0 pt-1">
-          <input ref={mdlInputRef} type="file" accept=".xlsx,.xls,.csv" className="hidden"
-            onChange={e => setMdlFile(e.target.files?.[0] || null)} />
-          <button onClick={() => mdlInputRef.current?.click()}
-            className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold transition-all"
-            style={{
-              background: mdlFile ? 'rgba(74,222,128,0.08)' : 'var(--s2)',
-              color: mdlFile ? '#4ade80' : 'var(--t1)',
-              border: `1.5px dashed ${mdlFile ? 'rgba(74,222,128,0.4)' : 'var(--b2)'}`,
-            }}>
-            <FileUpIcon className="w-3.5 h-3.5" />
-            {mdlFile ? mdlFile.name.length > 22 ? mdlFile.name.slice(0, 20) + '…' : mdlFile.name : 'Upload MDL'}
-          </button>
-          {mdlFile && (
-            <button onClick={() => setMdlFile(null)}
-              className="text-[10px] mt-1 ml-1 opacity-50 hover:opacity-100"
-              style={{ color: 'var(--rose)' }}>✕ Remove</button>
-          )}
-        </div>
       </div>
 
       {error && <Alert variant="error" onClose={() => setError(null)}>{error}</Alert>}
+
+      {/* ── Master Document List: authoritative document title / number ── */}
+      <Section title="Master Document List"
+        subtitle="Upload the project MDL, then pick the document this cover sheet is for - its name and number fill in automatically"
+        defaultOpen
+        badge={mdlInvalid ? 'Invalid MDL' : mdlSelection ? mdlSelection.record.document_number : mdlActive ? `${mdlSummary?.document_count ?? ''} documents` : 'Not uploaded'}>
+        <MdlSelector selected={mdlSelection} onSelect={setMdlSelection} onSummary={setMdlSummary} onInvalid={setMdlInvalid} />
+      </Section>
 
       {/* ── Connected engineering documents (document register) ── */}
       <Section title="Connected Engineering Documents"
         subtitle="Documents generated by the Instrument List, I/O List, Cable Schedule and Loop Wiring generators for the selected project"
         defaultOpen={false}>
-        <ConnectedDocuments onUseDocument={applyRegisteredDocument} />
+        <ConnectedDocuments onUseDocument={mdlActive ? undefined : applyRegisteredDocument} />
       </Section>
 
       {/* ── Template / Blank canvas ── */}
@@ -659,8 +674,9 @@ export default function CoverSheetGenerator() {
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-4">
             {([['Client', 'client'], ['PMC', 'pmc'], ['Contractor', 'contractor']] as [string, keyof ProjectInfo][]).map(([lbl, k]) => (
               <div key={k}>
-                <label className={lc} style={lcSt}>{lbl}</label>
-                <input className={ic} style={icSt} value={projectInfo[k]} onChange={e => setPI(k, e.target.value)} />
+                <label className={lc} style={lcSt}>{lbl}{mdlActive && MDL_FIELDS.includes(k) && ' · from MDL'}</label>
+                <input className={ic} style={mdlActive && MDL_FIELDS.includes(k) ? lockedSt : icSt}
+                  readOnly={mdlActive && MDL_FIELDS.includes(k)} value={projectInfo[k]} onChange={e => setPI(k, e.target.value)} />
               </div>
             ))}
             <div className="sm:col-span-3">
@@ -669,8 +685,8 @@ export default function CoverSheetGenerator() {
                 value={projectInfo.project_description} onChange={e => setPI('project_description', e.target.value)} />
             </div>
             <div>
-              <label className={lc} style={lcSt}>Doc Title (short)</label>
-              <input className={ic} style={icSt} value={projectInfo.doc_title_short} onChange={e => setPI('doc_title_short', e.target.value)} />
+              <label className={lc} style={lcSt}>Doc Title (short){mdlActive && ' · from MDL'}</label>
+              <input className={ic} style={mdlActive ? lockedSt : icSt} readOnly={mdlActive} value={projectInfo.doc_title_short} onChange={e => setPI('doc_title_short', e.target.value)} />
             </div>
             <div>
               <label className={lc} style={lcSt}>Doc Class</label>
@@ -683,8 +699,8 @@ export default function CoverSheetGenerator() {
               <input className={ic} style={icSt} value={projectInfo.discipline} onChange={e => setPI('discipline', e.target.value)} />
             </div>
             <div className="sm:col-span-3">
-              <label className={lc} style={lcSt}>Doc Title (full)</label>
-              <textarea className={ic} style={{ ...icSt, resize: 'none' }} rows={2}
+              <label className={lc} style={lcSt}>Doc Title (full){mdlActive && ' · from MDL'}</label>
+              <textarea className={ic} style={{ ...(mdlActive ? lockedSt : icSt), resize: 'none' }} rows={2} readOnly={mdlActive}
                 value={projectInfo.doc_title_full} onChange={e => setPI('doc_title_full', e.target.value)} />
             </div>
             {([['Job No.', 'job_no'], ['Unit No.', 'unit_no'], ['Project No.', 'project_no'], ['Doc Code', 'doc_code'], ['Serial No.', 'serial_no'], ['Page No.', 'page_no']] as [string, keyof ProjectInfo][]).map(([lbl, k]) => (
@@ -893,10 +909,30 @@ export default function CoverSheetGenerator() {
           </div>
         )}
 
+        {!isBlank && (mdlActive || mdlInvalid) && (
+          <div className="rounded-xl p-3 mb-3 text-xs space-y-0.5" style={{ background: 'var(--s3)', border: '1px solid var(--b2)', color: 'var(--t1)' }}>
+            <p className="font-bold" style={{ color: 'var(--t0)' }}>MDL check before generation</p>
+            {([
+              ['MDL uploaded', mdlActive || !!mdlInvalid],
+              ['Valid MDL structure', mdlActive && !mdlInvalid],
+              ['Document selected', !!mdlSelection],
+              ['Document number available', !!mdlSelection?.record.document_number],
+              ['Document name available', !!mdlSelection?.record.document_name],
+            ] as [string, boolean][]).map(([label, ok]) => (
+              <p key={label} style={{ color: ok ? '#4ade80' : 'var(--rose)' }}>{ok ? '✓' : '✗'} {label}</p>
+            ))}
+            {mdlSelection && (
+              <p className="pt-1" style={{ color: 'var(--t2)' }}>
+                Will generate for <span className="font-mono">{mdlSelection.record.document_number}</span> · {mdlSelection.record.document_name}
+              </p>
+            )}
+          </div>
+        )}
+
         <div className="flex flex-wrap items-center gap-3">
           {/* Raise Request — shown when not yet pending or rejected */}
           {(csReqStatus === 'idle' || csReqStatus === 'rejected') && !authInfo && (
-            <Button onClick={() => setShowCSRaiseModal(true)} disabled={!previewLayout} size="lg"
+            <Button onClick={() => setShowCSRaiseModal(true)} disabled={!previewLayout || !!mdlProblem} size="lg"
               style={{ background: 'linear-gradient(135deg,var(--gold),#d97706)', color: '#000' }}>
               <Send className="w-4 h-4" /> Request Lead Approval
             </Button>
@@ -906,7 +942,7 @@ export default function CoverSheetGenerator() {
             <Button onClick={() => {
               if (authInfo) { doGenerate(authInfo); }
               else { setShowAuthModal(true); }
-            }} loading={generating} disabled={!previewLayout} size="lg">
+            }} loading={generating} disabled={!previewLayout || !!mdlProblem} size="lg">
               <FileSpreadsheet className="w-4 h-4" />
               {generating ? 'Generating…' : 'Generate Cover Sheet'}
             </Button>
@@ -914,6 +950,7 @@ export default function CoverSheetGenerator() {
           {!previewLayout && (
             <p className="text-xs" style={{ color: 'var(--t2)' }}>Build a preview first.</p>
           )}
+          {mdlProblem && <p className="text-xs" style={{ color: 'var(--rose)' }}>{mdlProblem}</p>}
           {result && (
             <Button onClick={handleDownload} size="lg"
               style={{ background: 'linear-gradient(135deg,#4ade80,#22c55e)', color: '#000' }}>

@@ -39,7 +39,7 @@ def _make_custom_fields(cf: dict) -> list:
     return fields
 
 
-def _resolve_fields(cfg, subtype, custom_fields):
+def _resolve_fields(cfg, subtype, custom_fields, selected_fields=None):
     """Return the ordered list of ProcessField to actually write for this type/subtype.
     Filters out any field whose subtype_only is non-empty and doesn't include the chosen subtype.
     For is_custom types, builds ProcessField objects on the fly from custom_fields
@@ -49,6 +49,8 @@ def _resolve_fields(cfg, subtype, custom_fields):
     result = []
     for f in cfg.fields:
         if f.subtype_only and subtype not in f.subtype_only:
+            continue
+        if selected_fields is not None and f.name not in selected_fields:
             continue
         result.append(f)
     return result
@@ -89,13 +91,14 @@ def generate_process_data_requisition(
     source_filename: str,
     custom_fields=None,
     custom_name: str = "",
+    selected_fields=None,
 ) -> tuple[bytes, str]:
     """Build the full workbook. matched_rows and prefill are parallel lists (same length/order).
     matched_rows[i] has the 8 identification values (keys: tag_no, equipment_description, pid_no,
     service, equipment_no, line, line_size). prefill[i] is {process_field_name: value}.
     Returns (xlsx_bytes, filename)."""
     cfg = INSTRUMENT_TYPES[type_key]
-    fields = _resolve_fields(cfg, subtype, custom_fields)
+    fields = _resolve_fields(cfg, subtype, custom_fields, selected_fields)
     id_names = [f.name for f in IDENTIFICATION_COLUMNS]
     all_column_names = id_names + [column_header(f) for f in fields]
 

@@ -8,7 +8,7 @@ import json
 from ..deps import get_current_user
 from ..auth.models import User
 from ..models.process_data import (
-    InstrumentTypeOption, InstrumentTypesResponse, MatchedTag,
+    InstrumentTypeOption, InstrumentTypesResponse, MatchedTag, ProcessFieldOption,
     ProcessDataMatchResponse, ProcessDataGenerateResponse,
 )
 
@@ -88,6 +88,7 @@ async def match_tags_endpoint(
         tag_count=len(matched_rows),
         identification_columns=IDENTIFICATION_COLUMNS,
         process_columns=process_columns,
+        process_fields=[ProcessFieldOption(name=f.name, header=column_header(f), mandatory=f.mandatory) for f in fields],
         warnings=warnings,
     )
 
@@ -101,6 +102,7 @@ async def generate_process_data(
     use_iodb_values: bool = Form(False),
     custom_fields: Optional[str] = Form(None),
     custom_name: Optional[str] = Form(None),
+    selected_fields: Optional[str] = Form(None),
     project_id: Optional[str] = Form(None),
     current_user: User = Depends(get_current_user),
 ):
@@ -131,6 +133,24 @@ async def generate_process_data(
             detail="At least one custom process-data field must be defined before generating.",
         )
 
+    selected_fields_list = None
+    if selected_fields and not cfg.is_custom:
+        try:
+            selected_fields_list = json.loads(selected_fields)
+            if not isinstance(selected_fields_list, list) or not all(isinstance(x, str) for x in selected_fields_list):
+                raise ValueError("expected a list of field names")
+        except Exception as e:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                                 detail=f"Invalid selected_fields format: {e}")
+        valid = {f.name for f in cfg.fields}
+        unknown = [x for x in selected_fields_list if x not in valid]
+        if unknown:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                                 detail=f"Unknown process data column(s): {', '.join(unknown[:5])}")
+        if not selected_fields_list:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                                 detail="Select at least one process data column to request.")
+
     iodb_bytes = await iodb_file.read()
     df, err = read_iodb(io.BytesIO(iodb_bytes))
     if err:
@@ -159,6 +179,7 @@ async def generate_process_data(
         subtype=subtype, project_name=project_name,
         source_filename=iodb_file.filename or "IODB.xlsx",
         custom_fields=custom_fields_list, custom_name=(custom_name or "").strip(),
+        selected_fields=selected_fields_list,
     )
 
     cache_key = f"{current_user.id}_process_data"

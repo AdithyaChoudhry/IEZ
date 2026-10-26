@@ -25,12 +25,19 @@ class MatchedTag(BaseModel):
     row_index: int
 
 
+class ProcessFieldOption(BaseModel):
+    name: str
+    header: str
+    mandatory: bool = False
+
+
 class ProcessDataMatchResponse(BaseModel):
     instrument_type: str
     matched_tags: List[MatchedTag]
     tag_count: int
     identification_columns: List[str]
     process_columns: List[str]
+    process_fields: List[ProcessFieldOption] = []
     warnings: List[str] = []
 
 

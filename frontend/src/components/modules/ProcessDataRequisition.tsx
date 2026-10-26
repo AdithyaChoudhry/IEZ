@@ -37,6 +37,7 @@ interface MatchTagsResponse {
   tag_count: number;
   identification_columns: string[];
   process_columns: string[];
+  process_fields: { name: string; header: string; mandatory: boolean }[];
   warnings: string[];
 }
 
@@ -65,6 +66,7 @@ export default function ProcessDataRequisition() {
   const [selectedTagNos, setSelectedTagNos] = useState<string[]>([]);
   const [tagSearch, setTagSearch] = useState('');
 
+  const [selectedFieldNames, setSelectedFieldNames] = useState<string[]>([]);
   const [useIodbValues, setUseIodbValues] = useState(false);
   const [customRows, setCustomRows] = useState<CustomRow[]>([]);
   const [customName, setCustomName] = useState('');
@@ -114,6 +116,7 @@ export default function ProcessDataRequisition() {
       });
       setMatchResult(response.data);
       setSelectedTagNos(response.data.matched_tags.map((t) => t.tag_no));
+      setSelectedFieldNames((response.data.process_fields || []).map((f) => f.name));
       setTagSearch('');
     } catch (err: any) {
       setError(err.response?.data?.detail || 'Failed to match tags');
@@ -150,7 +153,11 @@ export default function ProcessDataRequisition() {
   };
 
   const validCustomRows = customRows.filter((r) => r.parameter.trim());
-  const canGenerate = selectedTagNos.length > 0 && (!isCustomType || validCustomRows.length > 0);
+  const canGenerate = selectedTagNos.length > 0 &&
+    (isCustomType ? validCustomRows.length > 0 : selectedFieldNames.length > 0);
+
+  const toggleField = (name: string) =>
+    setSelectedFieldNames((prev) => (prev.includes(name) ? prev.filter((n) => n !== name) : [...prev, name]));
 
   const handleGenerate = async () => {
     if (!iodbFile || !selectedTypeKey || !canGenerate) return;
@@ -163,6 +170,7 @@ export default function ProcessDataRequisition() {
     if (selectedSubtype) formData.append('subtype', selectedSubtype);
     formData.append('selected_tags', JSON.stringify(selectedTagNos));
     formData.append('use_iodb_values', String(useIodbValues));
+    if (!isCustomType) formData.append('selected_fields', JSON.stringify(selectedFieldNames));
     if (isCustomType) {
       formData.append('custom_fields', JSON.stringify(validCustomRows));
       formData.append('custom_name', customName.trim());
@@ -196,7 +204,7 @@ export default function ProcessDataRequisition() {
   };
 
   // each custom parameter becomes Minimum / Normal / Maximum / Remarks columns
-  const processColumnCount = isCustomType ? validCustomRows.length * 4 : matchResult?.process_columns.length || 0;
+  const processColumnCount = isCustomType ? validCustomRows.length * 4 : selectedFieldNames.length;
   const totalColumns = 8 + processColumnCount;
 
   return (
@@ -429,7 +437,7 @@ export default function ProcessDataRequisition() {
 
       {/* Step 5: Preview */}
       {matchResult && (
-        <Card title="Step 5 — Preview" description="Summary of the requisition that will be generated.">
+        <Card title="Step 5 — Preview & Columns" description="Choose which process data columns to request, then generate.">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
             <div>
               <p className="text-xs" style={{ color: 'var(--t2)' }}>Instrument Type</p>
@@ -451,13 +459,37 @@ export default function ProcessDataRequisition() {
           <p className="text-sm mt-3" style={{ color: 'var(--t1)' }}>
             Total columns: <strong>{totalColumns}</strong>
           </p>
-          {!isCustomType && matchResult.process_columns.length > 0 && (
-            <details className="mt-3 text-sm" style={{ color: 'var(--t1)' }}>
-              <summary className="cursor-pointer font-medium">Process data columns to be requested</summary>
-              <ol className="list-decimal pl-6 mt-2 columns-1 md:columns-2 gap-6">
-                {matchResult.process_columns.map((c) => <li key={c}>{c}</li>)}
-              </ol>
-            </details>
+          {!isCustomType && matchResult.process_fields.length > 0 && (
+            <div className="mt-4">
+              <div className="flex items-center justify-between gap-3 mb-2 flex-wrap">
+                <p className="text-sm font-medium" style={{ color: 'var(--t0)' }}>
+                  Process data columns to request ({selectedFieldNames.length} of {matchResult.process_fields.length})
+                </p>
+                <div className="flex gap-2">
+                  <Button variant="ghost" size="sm"
+                    onClick={() => setSelectedFieldNames(matchResult.process_fields.map((f) => f.name))}>
+                    Select All
+                  </Button>
+                  <Button variant="ghost" size="sm" onClick={() => setSelectedFieldNames([])}>Clear All</Button>
+                </div>
+              </div>
+              <div className="border border-gray-200 rounded-lg p-3 max-h-80 overflow-auto grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-1">
+                {matchResult.process_fields.map((f) => (
+                  <label key={f.name} className="flex items-start gap-2 text-sm cursor-pointer" style={{ color: 'var(--t1)' }}>
+                    <input
+                      type="checkbox"
+                      checked={selectedFieldNames.includes(f.name)}
+                      onChange={() => toggleField(f.name)}
+                      className="w-4 h-4 mt-0.5 text-primary-600 border-gray-300 rounded"
+                    />
+                    <span>{f.header}</span>
+                  </label>
+                ))}
+              </div>
+              {selectedFieldNames.length === 0 && (
+                <p className="text-xs mt-2 text-red-500">Select at least one process data column.</p>
+              )}
+            </div>
           )}
         </Card>
       )}

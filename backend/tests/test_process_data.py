@@ -246,3 +246,24 @@ def test_api_custom_type_pick_tags_and_parameters(api):
     assert hdr[8:] == ["Residual Hydrogen Peroxide Minimum (mg/L)", "Residual Hydrogen Peroxide Normal (mg/L)",
                        "Residual Hydrogen Peroxide Maximum (mg/L)", "Residual Hydrogen Peroxide Remarks"]
     assert "H2O2 Analyzer" in ws["A2"].value
+
+
+def test_api_selected_process_columns_only(api):
+    m = _post_match(api, "level_transmitter").json()
+    assert len(m["process_fields"]) == 49 and m["process_fields"][1]["header"] == "Minimum Level (m)"
+    pick = ["Minimum Level", "Remarks"]
+    g = api.post("/api/process-data/generate", data={
+        "instrument_type": "level_transmitter", "selected_tags": '["200-LIT-001"]',
+        "selected_fields": __import__("json").dumps(pick)},
+        files={"iodb_file": ("iodb.xlsx", _iodb_bytes(_df()))})
+    assert g.status_code == 200, g.text
+    ws = load_workbook(io.BytesIO(api.get("/api/process-data/download").content))["PROCESS DATA REQUISITION"]
+    assert [c.value for c in ws[5]][8:] == ["Minimum Level (m)", "Remarks"]
+    bad = api.post("/api/process-data/generate", data={
+        "instrument_type": "level_transmitter", "selected_tags": '["200-LIT-001"]', "selected_fields": '["Nope"]'},
+        files={"iodb_file": ("iodb.xlsx", _iodb_bytes(_df()))})
+    assert bad.status_code == 400
+    empty = api.post("/api/process-data/generate", data={
+        "instrument_type": "level_transmitter", "selected_tags": '["200-LIT-001"]', "selected_fields": '[]'},
+        files={"iodb_file": ("iodb.xlsx", _iodb_bytes(_df()))})
+    assert empty.status_code == 400

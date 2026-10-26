@@ -11,6 +11,7 @@ import api from '@/services/api';
 import Alert from '../../ui/Alert';
 import Button from '../../ui/Button';
 import Card from '../../ui/Card';
+import DiagramCanvas from './DiagramCanvas';
 import { Check, Library, LoopConfig, SOURCE_STYLE, TagDetail, Validation } from './types';
 
 interface Props {
@@ -49,7 +50,7 @@ export default function LoopDesigner({ sid, tag, library, selectedTags, onBack, 
   const base = `/loop-wiring-test/sessions/${sid}`;
   const [detail, setDetail] = useState<TagDetail | null>(null);
   const [config, setConfig] = useState<LoopConfig | null>(null);
-  const [svg, setSvg] = useState('');
+  const [model, setModel] = useState<{ blocks: any[]; links: any[] } | null>(null);
   const [validation, setValidation] = useState<Validation | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -72,7 +73,7 @@ export default function LoopDesigner({ sid, tag, library, selectedTags, onBack, 
   }, [base, tag]);
 
   useEffect(() => {
-    setConfig(null); setSvg(''); setValidation(null); setResults(null); setNotice(''); setError(''); setTemplateId('');
+    setConfig(null); setModel(null); setValidation(null); setResults(null); setNotice(''); setError(''); setTemplateId('');
     loadDetail().then((d) => { if (d?.saved_config) setConfig(d.saved_config); });
   }, [loadDetail]);
 
@@ -84,7 +85,7 @@ export default function LoopDesigner({ sid, tag, library, selectedTags, onBack, 
       try {
         const r = await api.post(`${base}/preview`, { config });
         if (mine !== seq.current) return;
-        setSvg(r.data.svg); setValidation(r.data.validation);
+        setModel(r.data.model); setValidation(r.data.validation);
         const ends = (c: LoopConfig) => (c.links || []).map((l: any) => `${l.from_id}>${l.to_id}`).join('|');
         if (ends(r.data.config) !== ends(config)) setConfig((c) => (c ? { ...c, links: r.data.config.links } : c));
       } catch (e) { if (mine === seq.current) err(e, 'Preview failed.'); }
@@ -493,9 +494,9 @@ export default function LoopDesigner({ sid, tag, library, selectedTags, onBack, 
       {config && (
         <>
           <div className="grid grid-cols-1 xl:grid-cols-[1fr,360px] gap-4">
-            <Card title="Loop preview" description="The same model that is written to the workbook. Missing data is shown in red, never invented.">
-              <div className="rounded-lg overflow-auto" style={{ background: '#fff', border: '1px solid #d0d0d0', maxHeight: 760 }}
-                dangerouslySetInnerHTML={{ __html: svg || '<p style="padding:24px;color:#777;font-family:Arial">Building preview…</p>' }} />
+            <Card title="Loop preview" description="Drag boxes, connect them, edit what is inside. Missing data is shown in red, never invented.">
+              {model ? <DiagramCanvas config={config} model={model} library={library} onChange={setConfig} />
+                : <p style={{ padding: 24, color: 'var(--t2)' }}>Building preview…</p>}
             </Card>
             <Card title={validation ? `Validation · ${validation.passed}/${validation.total} passed` : 'Validation'}>
               {validation?.checks.map((c) => (

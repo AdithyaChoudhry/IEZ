@@ -504,3 +504,19 @@ def test_motor_segment_wires_follow_the_signals_until_the_engineer_edits_them(cl
                                             "direction": "system_to_field", "io_index": None}]
     final = client.post(base + "/preview", json={"config": again}).json()["config"]
     assert len(final["links"][0]["wires"]) == 2 and len(final["links"][1]["wires"]) == 6    # edited link keeps its wires
+
+
+def test_manual_links_are_kept_and_dangling_ones_dropped():
+    from utils.loop_test import library as lib
+    cfg = lib.new_config("AI_2WIRE", tag_no="T-1")
+    ids = [c["id"] for c in cfg["components"]]
+    extra = lib.default_link(ids[0], ids[-1], ["SIGNAL_PLUS"], "custom")
+    cfg["manual_links"] = True
+    cfg["links"] = [extra, lib.default_link(ids[0], "gone", [], "none")]
+    out = lib.reconcile_links(cfg)
+    assert [(l["from_id"], l["to_id"]) for l in out["links"]] == [(ids[0], ids[-1])]
+
+
+def test_custom_box_kind_exists():
+    from utils.loop_test import library as lib
+    assert "custom_box" in lib.COMPONENT_KINDS

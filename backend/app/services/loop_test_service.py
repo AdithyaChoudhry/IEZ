@@ -278,7 +278,8 @@ def preview(session_id: str, user_id: int, user_label: str, config: dict) -> dic
     entry, data = _merged(session_id, state, cfg)
     model = lt.diagram.build_diagram(cfg, data, _meta(state, user_label))
     return {"svg": lt.diagram.render_svg(model), "validation": lt.validation.validate_config(cfg, entry, data),
-            "config": cfg, "model": {"signals": model["signals"]}}
+            "config": cfg,
+            "model": {"signals": model["signals"], "blocks": model["blocks"], "links": model["links"]}}
 
 
 def validate_only(session_id: str, user_id: int, config: dict) -> dict:

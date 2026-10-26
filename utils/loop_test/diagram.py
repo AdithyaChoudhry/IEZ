@@ -105,8 +105,9 @@ def _block(c: dict, config: dict, data: dict) -> dict:
     for t in c.get("terminals", []):
         terms.append({"label": t.get("number") or "?", "value": " ".join(x for x in (t.get("polarity", ""), t.get("description", "")) if x),
                       "missing": False, "source": USER})
-    if c.get("notes"):
-        lines.append({"text": c["notes"], "missing": False, "source": USER})
+    for note in str(c.get("notes") or "").splitlines():
+        if note.strip():
+            lines.append({"text": note.strip(), "missing": False, "source": USER})
     return {"id": c["id"], "kind": kind, "group": group, "placement": c.get("placement", "main"),
             "attach_to": c.get("attach_to", ""), "heading": c.get("label") or COMPONENT_KINDS.get(kind, {}).get("label", kind),
             "title": title, "lines": lines, "terminals": terms}
@@ -186,6 +187,7 @@ def build_diagram(config: dict, data: dict, meta: dict) -> dict:
         "loop_type": spec.get("label", config["loop_type"]), "template": config.get("template_id", ""),
         "orientation": config.get("layout", {}).get("orientation", "vertical"),
         "flow": config.get("layout", {}).get("flow_direction", ""),
+        "positions": config.get("layout", {}).get("positions", {}),
         "blocks": blocks, "links": links, "signals": sig_rows, "sources": source_rows(data),
         "title_block": meta, "params": config.get("params", {}),
     }

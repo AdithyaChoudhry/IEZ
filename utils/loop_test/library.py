@@ -31,6 +31,7 @@ COMPONENT_KINDS: dict[str, dict[str, str]] = {
     "power_supply": {"label": "Power supply", "group": "interface"},
     "shield_bar": {"label": "Shield bar", "group": "interface"},
     "earth": {"label": "Earth", "group": "interface"},
+    "custom_box": {"label": "Custom box", "group": "interface"},
     "remote_io": {"label": "Remote I/O", "group": "system"},
     "plc": {"label": "PLC", "group": "system"},
     "dcs": {"label": "DCS", "group": "system"},
@@ -232,6 +233,17 @@ def signal_wires(signals: list[dict]) -> list[dict]:
 
 def reconcile_links(config: dict) -> dict:
     """Make sure every consecutive pair of MAIN components has a link (keeps existing links by endpoints)."""
+    if config.get("manual_links"):
+        # the engineer drew the connections: keep exactly those (dropping any whose end was deleted)
+        ids = {c["id"] for c in config["components"]}
+        seen, kept = set(), []
+        for l in config.get("links", []):
+            key = (l["from_id"], l["to_id"])
+            if l["from_id"] in ids and l["to_id"] in ids and l["from_id"] != l["to_id"] and key not in seen:
+                seen.add(key)
+                kept.append(l)
+        config["links"] = kept
+        return config
     main = [c for c in config["components"] if c.get("placement", "main") == "main"]
     existing = {(l["from_id"], l["to_id"]): l for l in config.get("links", [])}
     roles = wires_for(config["loop_type"], config.get("params", {}))

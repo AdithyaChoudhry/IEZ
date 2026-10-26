@@ -152,8 +152,15 @@ def _link(l: dict, F: dict) -> dict:
               "note": cab.get("termination_note", "")}
     wires = [{"label": w.get("label") or w.get("role", ""), "colour": w.get("colour", ""), "number": w.get("number", ""),
               "terminal_from": w.get("terminal_from", ""), "terminal_to": w.get("terminal_to", "")} for w in l.get("wires", [])]
+    def _cf(prefix: str) -> str:
+        for ln in lines:
+            if ln["text"].startswith(prefix + ":"):
+                return ln["text"].split(":", 1)[1].strip()
+        return ""
+
     return {"from_id": l["from_id"], "to_id": l["to_id"], "lines": lines, "wires": wires, "shield": shield,
-            "has_cable": src != "none"}
+            "has_cable": src != "none",
+            "cable_fields": {"tag": _cf("Cable"), "type": _cf("Type"), "length": _cf("Length")}}
 
 
 def source_rows(data: dict) -> list[dict]:

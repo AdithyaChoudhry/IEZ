@@ -175,7 +175,9 @@ def match_all(iodb_rows: list[dict], io_rows: list[dict], decisions: Optional[di
         "warnings": sum(1 for e in entries for c in e["conflicts"] if c["severity"] == "warning"),
         "by_status": counts,
     }
-    entries.sort(key=lambda e: e["tag"])
+    # tags that exist in BOTH documents (and need attention) first; IODB-only tags last
+    priority = {"CONFLICT": 0, "REVIEW REQUIRED": 1, "DUPLICATE": 2, "MATCHED": 3, "IODB NOT FOUND": 4, "IO NOT FOUND": 5}
+    entries.sort(key=lambda e: (priority.get(e["status"], 9), e["tag"]))
     return {"entries": entries, "summary": summary}
 
 

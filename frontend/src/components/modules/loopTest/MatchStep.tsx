@@ -118,7 +118,7 @@ export default function MatchStep({ sid, summary, busy, version, selected, onSel
                         <td className={cell}>{m.loop || '—'}</td>
                         <td className={cell}>{m.in_iodb ? <CheckCircle2 className="w-4 h-4" style={{ color: '#4ade80' }} /> : <XCircle className="w-4 h-4" style={{ color: 'var(--rose)' }} />}</td>
                         <td className={cell}>{m.in_io ? <CheckCircle2 className="w-4 h-4" style={{ color: '#4ade80' }} /> : <XCircle className="w-4 h-4" style={{ color: 'var(--rose)' }} />}</td>
-                        <td className={cell}><span className="px-2 py-0.5 rounded text-[10px] font-bold" style={{ background: st.bg, color: st.fg }}>{m.status}</span></td>
+                        <td className={cell}><span className="px-2 py-0.5 rounded text-[10px] font-bold whitespace-nowrap" style={{ background: st.bg, color: st.fg }}>{m.status}</span></td>
                         <td className={cell}>
                           {m.conflicts.map((c) => (
                             <div key={c.field} className="mb-1.5">

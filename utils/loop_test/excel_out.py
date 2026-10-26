@@ -25,6 +25,8 @@ F_SMALL = Font(name="Arial", size=8, color="555555")
 F_MISS = Font(name="Arial", size=10, italic=True, color="C00000")
 FILL_HEAD = PatternFill("solid", fgColor="E6E6E6")
 LEFT = Alignment(horizontal="left", vertical="center", wrap_text=True)
+LEFT_NW = Alignment(horizontal="left", vertical="center", wrap_text=False)
+FIT = Alignment(horizontal="left", vertical="center", shrink_to_fit=True)
 CENTER = Alignment(horizontal="center", vertical="center", wrap_text=True)
 
 
@@ -56,7 +58,7 @@ def _write_block(ws, b: dict, r0: int, c0: int, c1: int) -> int:
         if c1 > c0:
             ws.merge_cells(start_row=r, start_column=c0, end_row=r, end_column=c1)
         cell = ws.cell(r, c0)
-        cell.alignment = LEFT
+        cell.alignment = FIT
         if kind == "heading":
             cell.value, cell.font = content, F_SMALL
         elif kind == "title":
@@ -82,7 +84,7 @@ def _table(ws, r0: int, c0: int, title: str, headers: list[str], rows: list[list
         for j, v in enumerate(row):
             c = ws.cell(r, c0 + j, v)
             c.font = F_MISS if v in ("MISSING", "NOT LINKED") else F_BASE
-            c.alignment, c.border = LEFT, Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
+            c.alignment, c.border = LEFT_NW, Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
     return r + 2
 
 
@@ -138,12 +140,12 @@ def write_loop_sheet(ws, model: dict) -> None:
                 for k, t in enumerate(text[: y2 - y1 + 1 + 3]):
                     cell = ws.cell(y1 + k, 6, t)
                     cell.font = F_MISS if (k < len(l["lines"]) and l["lines"][k]["missing"]) or t.endswith("NOT DEFINED") else F_BASE
-                    cell.alignment = LEFT
+                    cell.alignment = LEFT_NW
             else:                                              # side component -> target
                 ws.cell(a[0] + 1, 3, "──►").alignment = CENTER
                 ws.cell(a[0] + 2, 3, f'{len(l["wires"])}w').font = F_SMALL
         table_col, table_row = 8, top
-        for col, w in zip("GHIJKLMNO", (3, 26, 24, 20, 14, 12, 14, 14, 26)):
+        for col, w in zip("GHIJKLMNOPQR", (3, 26, 26, 20, 16, 12, 22, 10, 10, 14, 14, 34)):
             ws.column_dimensions[col].width = w
         last_diagram_row = diagram_end
     else:
@@ -171,7 +173,7 @@ def write_loop_sheet(ws, model: dict) -> None:
             text.append("Shield: " + (sh["type"] or "NOT DEFINED"))
             for k, t in enumerate(text):
                 cell = ws.cell(top + 2 + k, gap_col, t)
-                cell.font, cell.alignment = F_BASE, LEFT
+                cell.font, cell.alignment = F_BASE, LEFT_NW
         for k, b in enumerate(side):
             end = _write_block(ws, b, deepest + 2, 2, 2)
             deepest = max(deepest, end)
@@ -183,14 +185,16 @@ def write_loop_sheet(ws, model: dict) -> None:
     wire_rows = []
     names = {b["id"]: (b["title"] or b["heading"]) for b in model["blocks"]}
     for l in model["links"]:
-        cable = " | ".join(x["text"] for x in l["lines"]) or "—"
+        cf = l.get("cable_fields", {})
         sh = l["shield"]
         shield = (sh["type"] or "NOT DEFINED") + (f" ({sh['termination']})" if sh["termination"] else "")
         for w in l["wires"]:
-            wire_rows.append([names.get(l["from_id"], ""), names.get(l["to_id"], ""), cable, w["label"], w["colour"],
-                              w["number"], w["terminal_from"], w["terminal_to"], shield])
+            wire_rows.append([names.get(l["from_id"], ""), names.get(l["to_id"], ""), cf.get("tag") or "—", cf.get("type") or "—",
+                              cf.get("length") or "—", w["label"], w["colour"], w["number"], w["terminal_from"],
+                              w["terminal_to"], shield])
     r = _table(ws, r, table_col, "WIRING SCHEDULE",
-               ["From", "To", "Cable", "Wire", "Colour", "Wire no.", "Terminal from", "Terminal to", "Shield"], wire_rows)
+               ["From", "To", "Cable tag", "Cable type", "Length", "Wire", "Colour", "Wire no.", "Terminal from",
+                "Terminal to", "Shield"], wire_rows)
     if model["signals"]:
         r = _table(ws, r, table_col, "SIGNALS IN THIS LOOP",
                    ["Signal", "Type", "Direction", "I/O type", "Rack", "Slot", "Module", "Channel", "Terminals / status"],
@@ -199,6 +203,8 @@ def write_loop_sheet(ws, model: dict) -> None:
     _table(ws, r, table_col, "SOURCE DATA", ["Field", "Value", "Source"],
            [[x["label"], x["value"], x["source"]] for x in model["sources"]])
 
+    for rr in range(2, ws.max_row + 1):                       # uniform rows: tables beside the diagram cannot stretch its blocks
+        ws.row_dimensions[rr].height = 15
     ws.page_setup.orientation = "landscape"
     ws.page_setup.paperSize = 8                                # A3
     ws.page_setup.fitToWidth, ws.page_setup.fitToHeight = 1, 0

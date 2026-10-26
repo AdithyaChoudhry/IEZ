@@ -31,6 +31,7 @@ from .routers.idc import router as idc_router
 from .routers.idc_ws import router as idc_ws_router
 from .routers.projects import router as projects_router
 from .routers.coversheet_mdl import router as coversheet_mdl_router
+from .routers.loop_wiring_test import router as loop_wiring_test_router
 
 
 @asynccontextmanager
@@ -101,6 +102,7 @@ app.include_router(idc_router, prefix="/api")
 app.include_router(idc_ws_router, prefix="/api")
 app.include_router(projects_router, prefix="/api")
 app.include_router(coversheet_mdl_router, prefix="/api")
+app.include_router(loop_wiring_test_router, prefix="/api")
 
 
 @app.get("/")

@@ -12,7 +12,7 @@ import Alert from '../ui/Alert';
 import PageHeader from '../ui/PageHeader';
 import ProjectSelector from '../ui/ProjectSelector';
 import InputsStep from './loopTest/InputsStep';
-import LoopDesigner from './loopTest/LoopDesigner';
+import GraphDesigner from './loopTest/GraphDesigner';
 import MatchStep from './loopTest/MatchStep';
 import { IodbInfo, IoInfo, Library, MatchSummary } from './loopTest/types';
 
@@ -120,7 +120,7 @@ export default function LoopWiringTest() {
       {ready && sid && summary && designTag && library && (
         <>
           <SectionTitle n={3} title="Design, preview and generate" />
-          <LoopDesigner sid={sid} tag={designTag} library={library} selectedTags={selected.filter((t) => t !== designTag)}
+          <GraphDesigner sid={sid} tag={designTag} library={library} selectedTags={selected.filter((t) => t !== designTag)}
             onBack={() => setDesignTag('')} onLibraryChanged={loadLibrary} onDecisionMade={() => { setVersion((v) => v + 1); runMatch(); }} />
         </>
       )}

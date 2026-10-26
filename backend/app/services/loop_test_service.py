@@ -267,6 +267,9 @@ def _prepare(config: dict) -> dict:
     cfg = copy.deepcopy(config)
     if not cfg.get("tag_no"):
         raise LoopTestError("The configuration has no tag.")
+    if "graph" in cfg:                              # explicit graph: nothing is inferred or re-linked
+        cfg["loop_type"] = "GRAPH"
+        return cfg
     cfg.setdefault("links", [])
     return lt.library.reconcile_links(cfg)
 
@@ -304,11 +307,17 @@ def generate(session_id: str, user_id: int, user_label: str, tags: list[str], co
     lt = _lt()
     state = _load_state(session_id, user_id)
     configs = configs or {}
-    items, results = [], []
+    items, results, graph_items = [], [], []
     for tag in tags:
         raw = configs.get(tag) or state["configs"].get(tag)
         if raw is None:
             results.append({"tag": tag, "status": "SKIPPED", "reason": "No loop configuration for this tag."})
+            continue
+        if "graph" in raw:
+            res, item = _generate_graph(session_id, state, user_label, tag, raw, allow_warnings)
+            results.append(res)
+            if item:
+                graph_items.append(item)
             continue
         try:
             cfg = _prepare(raw)
@@ -328,9 +337,14 @@ def generate(session_id: str, user_id: int, user_label: str, tags: list[str], co
         model = lt.diagram.build_diagram(cfg, data, _meta(state, user_label))
         items.append({"tag": tag, "model": model})
         results.append({"tag": tag, "status": "GENERATED", "warnings": check["warnings"]})
-    if not items:
+    if graph_items:
+        import utils.loop_test.graph_excel as gx
+        out = gx.build_workbook(graph_items)
+        items = graph_items
+    elif not items:
         return {"generated": 0, "results": results, "filename": None}
-    out = lt.excel_out.build_workbook(items)
+    else:
+        out = lt.excel_out.build_workbook(items)
     project = re.sub(r"[^A-Za-z0-9._-]+", "_", state["project_id"] or "Project")
     rev = re.sub(r"[^A-Za-z0-9._-]+", "_", state["iodb"].get("revision") or "R0")
     filename = f"Loop_Wiring_Test_{project}_{rev}.xlsx"
@@ -361,7 +375,11 @@ def save_template(db: Session, user: str, name: str, description: str, config: d
     if not name:
         raise LoopTestError("Give the template a name.")
     cfg = copy.deepcopy(config)
-    if cfg.get("loop_type") not in lt.library.LOOP_TYPES:
+    if "graph" in cfg:
+        cfg["loop_type"] = "GRAPH"
+        cfg["graph"]["tag"] = ""
+        cfg["graph"]["loop"] = ""
+    elif cfg.get("loop_type") not in lt.library.LOOP_TYPES:
         raise LoopTestError("The configuration has no valid loop type.")
     for key in ("tag_no", "loop_number", "project_id", "overrides"):      # a template carries structure, not one tag's data
         cfg[key] = "" if key != "overrides" else {}
@@ -398,6 +416,8 @@ def apply_template(db: Session, template_id: str, session_id: str, user_id: int,
         if not row:
             raise LoopTestError("Template not found.")
         cfg = json.loads(row.config_json)
+        if "graph" in cfg:
+            return clone_config(session_id, user_id, {**cfg, "tag_no": tag}, tag)
         cfg.update(tag_no=tag, loop_number=entry["loop"], project_id=state["project_id"], template_id=template_id)
         if len(entry["io_idx"]) == 1:
             for s in cfg.get("signals", []):
@@ -412,6 +432,9 @@ def clone_config(session_id: str, user_id: int, config: dict, tag: str) -> dict:
     state = _load_state(session_id, user_id)
     entry = _entry(session_id, state, tag)
     cfg = copy.deepcopy(config)
+    if "graph" in cfg:
+        g, report = _gmods().templates.duplicate_for_tag(cfg["graph"], tag, entry["loop"], _datas_for(session_id, state, {"tag": tag, "nodes": []}))
+        return {**cfg, "tag_no": tag, "loop_number": entry["loop"], "project_id": state["project_id"], "graph": g, "duplicate_report": report}
     cfg.update(tag_no=tag, loop_number=entry["loop"], project_id=state["project_id"], overrides={})
     n_io = len(entry["io_idx"])
     signals = cfg.get("signals", [])
@@ -423,3 +446,218 @@ def clone_config(session_id: str, user_id: int, config: dict, tag: str) -> dict:
         else:
             sig["io_index"] = None                   # never guess a channel allocation - validation will flag it
     return lt.library.reconcile_links(cfg)
+
+
+# ═══ graph designer (explicit blocks / ports / wires) ═══════════════════════
+def _gmods():
+    _lt()
+    import utils.loop_test.graph as graph
+    import utils.loop_test.graph_scene as scene
+    import utils.loop_test.graph_templates as templates
+    import utils.loop_test.graph_validate as validate
+
+    class NS:
+        pass
+    ns = NS()
+    ns.graph, ns.scene, ns.templates, ns.validate = graph, scene, templates, validate
+    return ns
+
+
+def _datas_for(session_id: str, state: dict, graph: dict) -> dict:
+    tags = {graph.get("tag", "")} | {n.get("bind_tag", "") for n in graph.get("nodes", [])}
+    out = {}
+    for t in tags:
+        if not t:
+            continue
+        try:
+            _, data = _merged(session_id, state, {"tag_no": t, "overrides": {}})
+            out[t] = data
+        except LoopTestError:
+            continue
+    return out
+
+
+def graph_library() -> dict:
+    gm = _gmods()
+    groups: dict[str, list] = {g: [] for g in gm.graph.PALETTE_ORDER}
+    for c in gm.graph.LIBRARY.values():
+        groups[c["group"]].append({"id": c["id"], "label": c["label"], "zone": c["zone"]})
+    return {"templates": gm.templates.template_list(), "palette": [{"group": k, "items": v} for k, v in groups.items()],
+            "shield_types": gm.graph.SHIELD_TYPES, "shield_terminations": gm.graph.SHIELD_TERMINATIONS,
+            "kinds": list(gm.graph.KINDS), "families": list(gm.graph.FAMILIES), "orientations": list(gm.graph.ORIENTATIONS),
+            "default_zones": gm.graph.DEFAULT_ZONES,
+            "profiles": {"AI_2WIRE": "2-wire (loop powered)", "AI_4WIRE": "4-wire (separate power)", "AO": "AO", "DI_DRY": "DI dry contact",
+                         "DI_POWERED": "DI powered contact", "DO": "DO", "RTD_2": "RTD 2-wire", "RTD_3": "RTD 3-wire", "RTD_4": "RTD 4-wire",
+                         "TC": "Thermocouple", "PULSE": "Pulse / frequency", "NONE": "No ports (define manually)"}}
+
+
+def _bundle(session_id: str, state: dict, user_label: str, graph: dict) -> dict:
+    gm = _gmods()
+    g = gm.graph.clean_graph(graph)
+    datas = _datas_for(session_id, state, g)
+    gm.scene.normalize_positions(g, datas)
+    tag = g.get("tag", "")
+    conflicts = (datas.get(tag) or {}).get("conflicts", [])
+    check = gm.validate.validate_graph(g, datas, conflicts)
+    scene = gm.scene.build_scene(g, datas, _meta(state, user_label), check["issues"])
+    cables = {c["id"]: gm.scene.resolve_cable(c, g, datas) for c in g.get("cables", [])}
+    return {"graph": g, "scene": scene, "validation": check, "cables": cables}
+
+
+def graph_new(session_id: str, user_id: int, user_label: str, tag: str, template_id: str, params: dict) -> dict:
+    gm = _gmods()
+    state = _load_state(session_id, user_id)
+    entry = _entry(session_id, state, tag)
+    datas = _datas_for(session_id, state, {"tag": tag, "nodes": []})
+    try:
+        g = gm.templates.build_template(template_id, tag, entry["loop"], datas, params)
+    except ValueError as exc:
+        raise LoopTestError(str(exc))
+    return _bundle(session_id, state, user_label, g)
+
+
+def graph_view(session_id: str, user_id: int, user_label: str, graph: dict) -> dict:
+    state = _load_state(session_id, user_id)
+    return _bundle(session_id, state, user_label, graph)
+
+
+def graph_add_node(session_id: str, user_id: int, user_label: str, graph: dict, component: str, x: float, y: float) -> dict:
+    gm = _gmods()
+    state = _load_state(session_id, user_id)
+    g = gm.graph.clean_graph(graph)
+    if component not in gm.graph.LIBRARY:
+        raise LoopTestError("Unknown component.")
+    nid = gm.graph.next_id(g, "nodes", "n")
+    g["nodes"].append(gm.graph.new_node(component, nid, x=x, y=y))
+    return {**_bundle(session_id, state, user_label, g), "node_id": nid}
+
+
+def graph_connect(session_id: str, user_id: int, user_label: str, graph: dict, a_node: str, a_port: str, b_node: str, b_port: str) -> dict:
+    gm = _gmods()
+    state = _load_state(session_id, user_id)
+    g = gm.graph.clean_graph(graph)
+    edge, reason = gm.graph.add_edge(g, a_node, a_port, b_node, b_port)
+    return {"ok": edge is not None, "reason": reason, "edge_id": edge["id"] if edge else "", **_bundle(session_id, state, user_label, g)}
+
+
+def graph_connect_blocks(session_id: str, user_id: int, user_label: str, graph: dict, a_node: str, b_node: str) -> dict:
+    gm = _gmods()
+    state = _load_state(session_id, user_id)
+    g = gm.graph.clean_graph(graph)
+    res = gm.graph.connect_blocks(g, a_node, b_node)
+    return {**res, **_bundle(session_id, state, user_label, g)}
+
+
+def graph_signals(session_id: str, user_id: int, user_label: str, graph: dict, selected: list) -> dict:
+    gm = _gmods()
+    state = _load_state(session_id, user_id)
+    g = gm.graph.clean_graph(graph)
+    gm.templates.apply_signals(g, selected)
+    return _bundle(session_id, state, user_label, g)
+
+
+def graph_set_profile(session_id: str, user_id: int, user_label: str, graph: dict, node_id: str, profile: str) -> dict:
+    """Change a field device's wiring mode (2-wire / 4-wire / RTD ...): ports are rebuilt, wires to ports that no longer
+    exist are removed, everything else (terminals, wires) stays."""
+    gm = _gmods()
+    state = _load_state(session_id, user_id)
+    g = gm.graph.clean_graph(graph)
+    n = gm.graph.find_node(g, node_id)
+    if n is None or profile not in gm.graph.FIELD_PROFILES and not profile.startswith("SYS_"):
+        raise LoopTestError("Unknown block or wiring mode.")
+    old = {p["id"]: p for p in n["ports"]}
+    new = gm.graph.ports_for(n["type"], profile)
+    for p in new:
+        if p["id"] in old:
+            p["terminal"] = old[p["id"]].get("terminal", "")
+    n["ports"] = new
+    n.setdefault("props", {})["profile"] = profile
+    live = {(x["id"], p["id"]) for x in g["nodes"] for p in x["ports"]}
+    g["edges"] = [e for e in g["edges"] if (e["from_node"], e["from_port"]) in live and (e["to_node"], e["to_port"]) in live]
+    return _bundle(session_id, state, user_label, g)
+
+
+def graph_image(session_id: str, user_id: int, user_label: str, graph: dict, fmt: str) -> tuple[bytes, str]:
+    """PNG / PDF of the drawing - rendered from the same scene as the preview and the Excel image."""
+    import io as _io
+    gm = _gmods()
+    state = _load_state(session_id, user_id)
+    b = _bundle(session_id, state, user_label, graph)
+    png = gm.scene.render_png(b["scene"], scale=2.0)
+    if fmt == "pdf":
+        from PIL import Image
+        buf = _io.BytesIO()
+        Image.open(_io.BytesIO(png)).convert("RGB").save(buf, "PDF", resolution=170)
+        return buf.getvalue(), "application/pdf"
+    return png, "image/png"
+
+
+def graph_catalog(graph: dict) -> list:
+    return _gmods().templates.signal_catalog(graph)
+
+
+def graph_duplicate(session_id: str, user_id: int, user_label: str, graph: dict, tags: list) -> dict:
+    gm = _gmods()
+    state = _load_state(session_id, user_id)
+    out = []
+    for t in tags:
+        try:
+            entry = _entry(session_id, state, t)
+        except LoopTestError as exc:
+            out.append({"tag": t, "ok": False, "reason": str(exc)})
+            continue
+        datas = _datas_for(session_id, state, {"tag": t, "nodes": []})
+        g, report = gm.templates.duplicate_for_tag(gm.graph.clean_graph(graph), t, entry["loop"], datas)
+        b = _bundle(session_id, state, user_label, g)
+        out.append({"tag": t, "ok": True, "report": report, "graph": b["graph"], "errors": b["validation"]["errors"],
+                    "warnings": b["validation"]["warnings"], "problems": [c for c in b["validation"]["checks"] if c["status"] == "ERROR"]})
+    return {"results": out}
+
+
+def iodb_tags(session_id: str, user_id: int, q: str = "", limit: int = 60) -> list:
+    state = _load_state(session_id, user_id)
+    iodb, _ = _parsed(session_id, state)
+    needle = (q or "").strip().upper()
+    out, seen = [], set()
+    for r in iodb.rows:
+        tag = r.get("TAG_NO", "")
+        if not tag or tag in seen:
+            continue
+        hay = " ".join(str(r.get(k, "")) for k in ("TAG_NO", "LOOP_NO", "INSTRUMENT_TYPE", "SIGNAL_IO_TYPE", "SIGNAL_DESCRIPTION", "JB_TAG")).upper()
+        if needle and needle not in hay:
+            continue
+        seen.add(tag)
+        out.append({"tag": tag, "loop": r.get("LOOP_NO", ""), "type": r.get("INSTRUMENT_TYPE", ""), "signal": r.get("SIGNAL_IO_TYPE", ""),
+                    "service": r.get("SIGNAL_DESCRIPTION", ""), "jb": r.get("JB_TAG", "")})
+        if len(out) >= limit:
+            break
+    return out
+
+
+def iodb_jbs(session_id: str, user_id: int, q: str = "") -> list:
+    state = _load_state(session_id, user_id)
+    iodb, _ = _parsed(session_id, state)
+    seen = sorted({r.get("JB_TAG", "") for r in iodb.rows if r.get("JB_TAG", "") and r.get("JB_TAG", "").upper() not in ("-", "TBA", "NA")})
+    n = (q or "").strip().upper()
+    return [j for j in seen if n in j.upper()][:100]
+
+
+def io_rows(session_id: str, user_id: int, tag: str) -> list:
+    state = _load_state(session_id, user_id)
+    _, data = _merged(session_id, state, {"tag_no": tag, "overrides": {}})
+    return data["signals"]
+
+
+def _generate_graph(session_id: str, state: dict, user_label: str, tag: str, raw: dict, allow_warnings: bool):
+    gm = _gmods()
+    cfg = _prepare(raw)
+    b = _bundle(session_id, state, user_label, cfg["graph"])
+    check = b["validation"]
+    if not check["can_generate"]:
+        bad = [c["label"] + (": " + c["detail"] if c["detail"] else "") for c in check["checks"] if c["status"] == "ERROR"]
+        return {"tag": tag, "status": "BLOCKED", "reason": "; ".join(bad), "errors": check["errors"]}, None
+    if check["warnings"] and not allow_warnings:
+        return {"tag": tag, "status": "BLOCKED", "reason": f"{check['warnings']} warning(s) not accepted."}, None
+    datas = _datas_for(session_id, state, b["graph"])
+    return ({"tag": tag, "status": "GENERATED", "warnings": check["warnings"]},
+            {"tag": tag, "graph": b["graph"], "datas": datas, "scene": b["scene"], "validation": check})

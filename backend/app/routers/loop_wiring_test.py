@@ -7,7 +7,7 @@ All logic lives in services/loop_test_service.py and utils/loop_test/.
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -192,3 +192,120 @@ def delete_template(template_id: int, db: Session = Depends(get_db), user: User 
     if not svc.delete_template(db, template_id):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Template not found.")
     return {"deleted": True}
+
+
+# ── graph designer ──────────────────────────────────────────────────────────
+class GraphBody(BaseModel):
+    graph: Dict[str, Any]
+
+
+class GraphNewBody(BaseModel):
+    tag: str
+    template_id: str
+    params: Dict[str, Any] = Field(default_factory=dict)
+
+
+class AddNodeBody(GraphBody):
+    component: str
+    x: float = 0
+    y: float = 0
+
+
+class ConnectBody(GraphBody):
+    from_node: str
+    from_port: str
+    to_node: str
+    to_port: str
+
+
+class ConnectBlocksBody(GraphBody):
+    a: str
+    b: str
+
+
+class SignalsBody(GraphBody):
+    selected: List[str] = Field(default_factory=list)
+
+
+class DuplicateBody(GraphBody):
+    tags: List[str]
+
+
+@router.get("/graph/library")
+def graph_library(user: User = Depends(get_current_user)):
+    return svc.graph_library()
+
+
+@router.post("/graph/catalog")
+def graph_catalog(body: GraphBody, user: User = Depends(get_current_user)):
+    return svc.graph_catalog(body.graph)
+
+
+@router.post("/sessions/{sid}/graph/new")
+def graph_new(sid: str, body: GraphNewBody, user: User = Depends(get_current_user)):
+    return _guard(svc.graph_new, sid, user.id, _label(user), body.tag, body.template_id, body.params)
+
+
+@router.post("/sessions/{sid}/graph/view")
+def graph_view(sid: str, body: GraphBody, user: User = Depends(get_current_user)):
+    return _guard(svc.graph_view, sid, user.id, _label(user), body.graph)
+
+
+@router.post("/sessions/{sid}/graph/add-node")
+def graph_add_node(sid: str, body: AddNodeBody, user: User = Depends(get_current_user)):
+    return _guard(svc.graph_add_node, sid, user.id, _label(user), body.graph, body.component, body.x, body.y)
+
+
+@router.post("/sessions/{sid}/graph/connect")
+def graph_connect(sid: str, body: ConnectBody, user: User = Depends(get_current_user)):
+    return _guard(svc.graph_connect, sid, user.id, _label(user), body.graph, body.from_node, body.from_port, body.to_node, body.to_port)
+
+
+@router.post("/sessions/{sid}/graph/connect-blocks")
+def graph_connect_blocks(sid: str, body: ConnectBlocksBody, user: User = Depends(get_current_user)):
+    return _guard(svc.graph_connect_blocks, sid, user.id, _label(user), body.graph, body.a, body.b)
+
+
+@router.post("/sessions/{sid}/graph/signals")
+def graph_signals(sid: str, body: SignalsBody, user: User = Depends(get_current_user)):
+    return _guard(svc.graph_signals, sid, user.id, _label(user), body.graph, body.selected)
+
+
+@router.post("/sessions/{sid}/graph/duplicate")
+def graph_duplicate(sid: str, body: DuplicateBody, user: User = Depends(get_current_user)):
+    return _guard(svc.graph_duplicate, sid, user.id, _label(user), body.graph, body.tags)
+
+
+@router.get("/sessions/{sid}/iodb-tags")
+def iodb_tags(sid: str, q: str = "", user: User = Depends(get_current_user)):
+    return _guard(svc.iodb_tags, sid, user.id, q)
+
+
+@router.get("/sessions/{sid}/iodb-jbs")
+def iodb_jbs(sid: str, q: str = "", user: User = Depends(get_current_user)):
+    return _guard(svc.iodb_jbs, sid, user.id, q)
+
+
+@router.get("/sessions/{sid}/io-rows/{tag:path}")
+def io_rows(sid: str, tag: str, user: User = Depends(get_current_user)):
+    return _guard(svc.io_rows, sid, user.id, tag)
+
+
+class ProfileBody(GraphBody):
+    node_id: str
+    profile: str
+
+
+@router.post("/sessions/{sid}/graph/profile")
+def graph_profile(sid: str, body: ProfileBody, user: User = Depends(get_current_user)):
+    return _guard(svc.graph_set_profile, sid, user.id, _label(user), body.graph, body.node_id, body.profile)
+
+
+class ImageBody(GraphBody):
+    fmt: str = "png"
+
+
+@router.post("/sessions/{sid}/graph/image")
+def graph_image(sid: str, body: ImageBody, user: User = Depends(get_current_user)):
+    data, mime = _guard(svc.graph_image, sid, user.id, _label(user), body.graph, body.fmt)
+    return Response(content=data, media_type=mime, headers={"Content-Disposition": f'attachment; filename="loop.{ "pdf" if body.fmt == "pdf" else "png"}"'})

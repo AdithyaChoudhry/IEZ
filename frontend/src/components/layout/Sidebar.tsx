@@ -4,7 +4,7 @@ import {
   Home, CheckCircle2, FileSpreadsheet, Network,
   FileText, Cable, GitBranch, Layers, ScanSearch,
   Sparkles, Droplets, ShieldCheck, ClipboardCheck, BarChart2,
-  Radio, FlaskConical,
+  Radio, FlaskConical, ClipboardList,
 } from 'lucide-react';
 import clsx from 'clsx';
 import api from '@/services/api';
@@ -43,6 +43,7 @@ const sections = [
       { path: '/loop-wiring',     icon: GitBranch,       label: 'Loop Wiring' },
       { path: '/loop-test',       icon: FlaskConical,    label: 'Loop Wiring (Test)' },
       { path: '/cover-sheet',     icon: Layers,          label: 'Cover Sheet' },
+      { path: '/process-data',    icon: ClipboardList,   label: 'Process Data Requisition' },
     ],
   },
   {

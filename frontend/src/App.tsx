@@ -13,6 +13,7 @@ import InstrumentListGenerator from './components/modules/InstrumentListGenerato
 import IOListGenerator from './components/modules/IOListGenerator';
 import CableScheduleGenerator from './components/modules/CableScheduleGenerator';
 import LoopWiringGenerator from './components/modules/LoopWiringGenerator';
+import ProcessDataRequisition from './components/modules/ProcessDataRequisition';
 import LoopWiringTest from './components/modules/LoopWiringTest';
 import SmartDatasheetExtractor from './components/modules/SmartDatasheetExtractor';
 import AdminManagement from './components/modules/AdminManagement';
@@ -118,6 +119,7 @@ function AppRoutes() {
         <Route path="cover-sheet" element={<CoverSheetGenerator />} />
         <Route path="cable-schedule" element={<CableScheduleGenerator />} />
         <Route path="loop-wiring" element={<LoopWiringGenerator />} />
+        <Route path="process-data" element={<ProcessDataRequisition />} />
         <Route path="loop-test" element={<LoopWiringTest />} />
         <Route path="smart-datasheet" element={<SmartDatasheetExtractor />} />
         <Route path="tbe" element={<VendorTBE />} />

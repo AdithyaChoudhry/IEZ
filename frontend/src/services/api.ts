@@ -20,6 +20,7 @@ const REGISTERED_GENERATE_URLS = [
   '/io-list/generate',
   '/cable-schedule/generate',
   '/loop-wiring/generate',
+  '/process-data/generate',
 ];
 
 // Request interceptor to add auth token

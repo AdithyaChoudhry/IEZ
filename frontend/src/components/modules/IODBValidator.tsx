@@ -16,6 +16,7 @@ import PageHeader from '../ui/PageHeader';
 import Card from '../ui/Card';
 import Button from '../ui/Button';
 import Alert from '../ui/Alert';
+import IODBComparison from './IODBComparison';
 
 interface ValidationError {
   row: number;
@@ -55,7 +56,7 @@ interface ValidationStatus {
 const POLL_INTERVAL_MS = 3000;
 const MAX_POLL_ATTEMPTS = 200; // ~10 minutes
 
-export default function IODBValidator() {
+function IODBValidation() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [autoCorrect, setAutoCorrect] = useState(false);
   const [validateEmpty, setValidateEmpty] = useState(false);
@@ -389,6 +390,35 @@ export default function IODBValidator() {
           </Card>
         </>
       )}
+    </div>
+  );
+}
+
+/** IODB Validator page: Validation (existing) and Revision Comparison (new) as two views. */
+export default function IODBValidator() {
+  const [view, setView] = useState<'validate' | 'compare'>('validate');
+  const tab = (id: 'validate' | 'compare', label: string) => (
+    <button
+      role="tab"
+      aria-selected={view === id}
+      onClick={() => setView(id)}
+      className="px-4 py-2 rounded-xl text-sm font-semibold transition-all"
+      style={{
+        background: view === id ? 'var(--s3)' : 'transparent',
+        color: view === id ? 'var(--t0)' : 'var(--t2)',
+        border: `1px solid ${view === id ? 'var(--b2)' : 'transparent'}`,
+      }}
+    >
+      {label}
+    </button>
+  );
+  return (
+    <div className="space-y-6">
+      <div className="flex gap-2" role="tablist" aria-label="IODB Validator views">
+        {tab('validate', 'Validation')}
+        {tab('compare', 'Revision Comparison')}
+      </div>
+      {view === 'validate' ? <IODBValidation /> : <IODBComparison />}
     </div>
   );
 }

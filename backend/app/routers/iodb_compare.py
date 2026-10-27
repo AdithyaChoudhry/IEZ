@@ -1,8 +1,12 @@
 """IODB Comparison & Revision Report router (part of the IODB Validator area)."""
 from typing import Optional
+import logging
 import re
+import threading
+import time
+import uuid
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, UploadFile, status
 from fastapi.responses import Response
 
 from ..deps import get_current_user
@@ -16,6 +20,12 @@ from utils.iodb_compare.categories import CATEGORY_NAMES
 KINDS = ("summary", "detailed", "complete")   # PDF engine (reportlab) is imported only when a PDF is requested
 
 router = APIRouter(prefix="/validator/compare", tags=["IODB Comparison"])
+logger = logging.getLogger(__name__)
+
+# Comparison jobs run in the background so no HTTP request is held open (Cloudflare drops requests after 120 s).
+_jobs: dict = {}
+_jobs_lock = threading.Lock()
+_JOB_TTL = 3600
 
 STATUSES = ("added", "deleted", "modified", "unchanged", "review")
 MAX_PAGE_SIZE = 200
@@ -38,28 +48,74 @@ def _light(r: dict) -> dict:
     return out
 
 
-@router.post("")
-def run_comparison(
+def _set_job(job_id: str, **kw) -> None:
+    with _jobs_lock:
+        _jobs.setdefault(job_id, {}).update(kw)
+
+
+def _run_job(job_id: str, data1: bytes, name1: str, data2: bytes, name2: str, ignore_case: bool,
+             project_id: str, username: str) -> None:
+    from utils.iodb_compare.engine import compare_tables, load_table
+    t0 = time.time()
+    try:
+        _set_job(job_id, stage="Reading IODB 1")
+        t1 = load_table(data1, "IODB 1")
+        t_load1 = time.time() - t0
+        _set_job(job_id, stage="Reading IODB 2")
+        t2 = load_table(data2, "IODB 2")
+        t_load2 = time.time() - t0 - t_load1
+        _set_job(job_id, stage="Comparing records")
+        result, full = compare_tables(t1, t2, name1, name2, ignore_case=ignore_case, project=project_id, user=username)
+        _set_job(job_id, stage="Saving result")
+        store.save(result, full)
+        logger.info("IODB compare job %s: read1 %.1fs, read2 %.1fs, compare+save %.1fs (%d/%d records)", job_id[:8],
+                    t_load1, t_load2, time.time() - t0 - t_load1 - t_load2, len(t1["rows"]), len(t2["rows"]))
+        _set_job(job_id, status="done", stage="Done", result=_light(result))
+    except CompareError as exc:
+        _set_job(job_id, status="error", error=str(exc))
+    except Exception as exc:  # never leave the page waiting
+        logger.exception("IODB compare job %s failed", job_id[:8])
+        _set_job(job_id, status="error", error=f"The IODB files could not be compared: {exc}")
+
+
+@router.post("", status_code=status.HTTP_202_ACCEPTED)
+async def run_comparison(
+    background_tasks: BackgroundTasks,
     file1: UploadFile = File(...),
     file2: UploadFile = File(...),
     ignore_case: bool = Form(True),
     project_id: Optional[str] = Form(None),
     current_user: User = Depends(get_current_user),
 ):
-    data1, data2 = file1.file.read(), file2.file.read()
+    """Starts the comparison and returns immediately; poll GET /validator/compare/job/{job_id}."""
+    data1, data2 = await file1.read(), await file2.read()
     if not data1 or not data2:
         raise HTTPException(status_code=400, detail="Both IODB files are required.")
     if len(data1) > MAX_UPLOAD_BYTES or len(data2) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="An uploaded file is too large (limit 60 MB).")
-    try:
-        result, full = compare_files(data1, file1.filename or "IODB 1", data2, file2.filename or "IODB 2",
-                                     ignore_case=ignore_case, project=project_id or "", user=current_user.username)
-    except CompareError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    except Exception as exc:  # never a bare 500 for a malformed workbook
-        raise HTTPException(status_code=400, detail=f"The IODB files could not be compared: {exc}")
-    store.save(result, full)
-    return _light(result)
+    job_id = uuid.uuid4().hex
+    now = time.time()
+    with _jobs_lock:
+        for k in [k for k, v in _jobs.items() if now - v.get("created", now) > _JOB_TTL]:
+            _jobs.pop(k, None)
+        _jobs[job_id] = {"status": "processing", "stage": "Queued", "created": now, "user": current_user.username}
+    background_tasks.add_task(_run_job, job_id, data1, file1.filename or "IODB 1", data2, file2.filename or "IODB 2",
+                              ignore_case, project_id or "", current_user.username)
+    return {"job_id": job_id, "status": "processing"}
+
+
+@router.get("/job/{job_id}")
+def job_status(job_id: str, current_user: User = Depends(get_current_user)):
+    with _jobs_lock:
+        job = dict(_jobs.get(job_id) or {})
+    if not job or job.get("user") != current_user.username:
+        raise HTTPException(status_code=404, detail="This comparison job was not found. Please run the comparison again.")
+    out = {"status": job["status"], "stage": job.get("stage", ""), "elapsed": round(time.time() - job["created"], 1)}
+    if job["status"] == "done":
+        out["result"] = job["result"]
+    if job["status"] == "error":
+        out["error"] = job.get("error", "The comparison failed")
+    return out
 
 
 @router.get("/{cid}")

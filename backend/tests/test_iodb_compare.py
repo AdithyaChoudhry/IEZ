@@ -141,6 +141,18 @@ def test_value_added_removed_types_and_missing_columns_reported():
     assert r["columns_only_in_1"] == ["POWER SUPPLY"]
 
 
+def _wait_job(c, job_id, expect="done"):
+    for _ in range(300):
+        r = c.get(f"/api/validator/compare/job/{job_id}")
+        assert r.status_code == 200, r.text
+        j = r.json()
+        if j["status"] == expect:
+            return j["result"] if expect == "done" else j["error"]
+        assert j["status"] == "processing", j
+        time.sleep(0.05)
+    raise AssertionError("job did not finish")
+
+
 def test_inputs_not_modified_and_api_roundtrip(tmp_path, monkeypatch):
     monkeypatch.setenv("IEZ_COMPARE_DIR", str(tmp_path / "cmp"))
     from types import SimpleNamespace
@@ -159,8 +171,8 @@ def test_inputs_not_modified_and_api_roundtrip(tmp_path, monkeypatch):
     h1, h2 = hash(f1), hash(f2)
     r = c.post("/api/validator/compare", files={"file1": ("Rev0.xlsx", f1), "file2": ("Rev1.xlsx", f2)},
                data={"project_id": "10P211"})
-    assert r.status_code == 200, r.text
-    j = r.json()
+    assert r.status_code == 202, r.text
+    j = _wait_job(c, r.json()["job_id"])
     assert (j["counts"]["modified"], j["counts"]["deleted"], j["status_counts"]["unchanged"]) == (1, 2, 37)
     assert hash(f1) == h1 and hash(f2) == h2
     cid = j["id"]
@@ -176,7 +188,9 @@ def test_inputs_not_modified_and_api_roundtrip(tmp_path, monkeypatch):
         pdf = c.get(f"/api/validator/compare/{cid}/pdf", params={"kind": kind})
         assert pdf.status_code == 200 and pdf.content[:5] == b"%PDF-"
     bad = c.post("/api/validator/compare", files={"file1": ("a.xlsx", xl(a.drop(columns=["TAG NO"]))), "file2": ("b.xlsx", f2)})
-    assert bad.status_code == 400 and "TAG NO" in bad.json()["detail"]
+    assert bad.status_code == 202
+    err = _wait_job(c, bad.json()["job_id"], expect="error")
+    assert "TAG NO" in err
     assert c.get("/api/validator/compare/deadbeef").status_code == 404
 
 

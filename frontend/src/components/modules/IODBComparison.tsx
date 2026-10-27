@@ -344,22 +344,35 @@ export default function IODBComparison() {
   const [comp, setComp] = useState<Comparison | null>(null);
   const [error, setError] = useState('');
   const [pdfBusy, setPdfBusy] = useState('');
+  const [stage, setStage] = useState('');
 
   const compare = async () => {
     if (!file1 || !file2) return;
-    setComparing(true); setError(''); setComp(null);
+    setComparing(true); setError(''); setComp(null); setStage('Uploading files');
     const fd = new FormData();
     fd.append('file1', file1); fd.append('file2', file2);
     fd.append('ignore_case', String(ignoreCase));
     const pid = getCurrentProject();
     if (pid) fd.append('project_id', pid);
     try {
-      const r = await api.post<Comparison>('/validator/compare', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
-      setComp(r.data);
+      // The server runs the comparison in the background; we poll so no request is held open for minutes.
+      const kick = await api.post<{ job_id: string }>('/validator/compare', fd, {
+        headers: { 'Content-Type': 'multipart/form-data' }, timeout: 120000,
+      });
+      const started = Date.now();
+      for (;;) {
+        await new Promise((r) => setTimeout(r, 1500));
+        const st = await api.get<{ status: string; stage: string; elapsed: number; result?: Comparison; error?: string }>(
+          `/validator/compare/job/${kick.data.job_id}`);
+        if (st.data.status === 'done') { setComp(st.data.result!); return; }
+        if (st.data.status === 'error') { setError(st.data.error || 'The comparison failed'); return; }
+        setStage(`${st.data.stage || 'Working'}… ${Math.round(st.data.elapsed)}s`);
+        if (Date.now() - started > 15 * 60 * 1000) { setError('The comparison is taking too long. Please try again.'); return; }
+      }
     } catch (e: any) {
       setError(errText(e, 'The comparison failed'));
     } finally {
-      setComparing(false);
+      setComparing(false); setStage('');
     }
   };
 
@@ -397,7 +410,7 @@ export default function IODBComparison() {
         </div>
         <div className="flex items-center gap-4 flex-wrap mt-4">
           <Button onClick={compare} disabled={!file1 || !file2} loading={comparing}>
-            {comparing ? 'Comparing…' : 'Compare IODB'}
+            {comparing ? (stage || 'Comparing…') : 'Compare IODB'}
           </Button>
           <label className="flex items-center gap-2 text-xs cursor-pointer" style={{ color: 'var(--t1)' }}>
             <input type="checkbox" checked={ignoreCase} onChange={(e) => setIgnoreCase(e.target.checked)} />

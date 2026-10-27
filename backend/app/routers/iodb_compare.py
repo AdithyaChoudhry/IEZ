@@ -13,7 +13,7 @@ sys.path.insert(0, '/app')
 from utils.iodb_compare import CompareError, compare_files
 from utils.iodb_compare import store
 from utils.iodb_compare.categories import CATEGORY_NAMES
-from utils.iodb_compare.pdf_report import KINDS, build_pdf
+KINDS = ("summary", "detailed", "complete")   # PDF engine (reportlab) is imported only when a PDF is requested
 
 router = APIRouter(prefix="/validator/compare", tags=["IODB Comparison"])
 
@@ -129,6 +129,10 @@ def download_pdf(cid: str, kind: str = "complete", current_user: User = Depends(
     if kind not in KINDS:
         raise HTTPException(status_code=400, detail=f"kind must be one of {', '.join(KINDS)}")
     r = _get(cid)
+    try:
+        from utils.iodb_compare.pdf_report import build_pdf
+    except ImportError:
+        raise HTTPException(status_code=503, detail="PDF generation is not available on this server yet (reportlab is not installed).")
     pdf = build_pdf(r, kind, user=current_user.username, project=r.get("project") or "")
     name = {"summary": "Summary", "detailed": "Detailed", "complete": "Complete"}[kind]
     return Response(content=pdf, media_type="application/pdf",

@@ -12,6 +12,7 @@ import Button from '../ui/Button';
 import Alert from '../ui/Alert';
 import MultiSelect from '../ui/MultiSelect';
 import FileUploadCard from '../ui/FileUploadCard';
+import SharedIodbCard from '../ui/SharedIodb';
 import ListDefaultsNotice, { filterValueOf, type ListDefaults } from '../ui/ListDefaultsNotice';
 import OutputWorkbookOptions, { type OutputMode } from '../ui/OutputWorkbookOptions';
 
@@ -170,7 +171,7 @@ export default function IOListGenerator() {
 
       {/* File Uploads */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <FileUploadCard
+        <SharedIodbCard
           title="IODB Source File"
           icon={Upload}
           file={iodbFile}
@@ -183,7 +184,7 @@ export default function IOListGenerator() {
           <Button onClick={handleAnalyze} disabled={!iodbFile} loading={analyzing} fullWidth className="mt-3 bg-blue-600 hover:bg-blue-700">
             {analyzing ? 'Analyzing...' : 'Analyze IODB'}
           </Button>
-        </FileUploadCard>
+        </SharedIodbCard>
 
         <FileUploadCard
           title="I/O List Template (optional)"

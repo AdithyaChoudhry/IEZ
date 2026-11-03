@@ -2,6 +2,7 @@
  * Authentication service - handles login, register, logout operations.
  */
 import api from './api';
+import { endSharedIodbSession } from './sharedIodb';
 import type { LoginCredentials, RegisterData, TokenResponse, User } from '@/types';
 
 export const authService = {
@@ -42,6 +43,7 @@ export const authService = {
    * Logout and clear tokens.
    */
   logout(): void {
+    endSharedIodbSession();   // clear the session's Shared IODB while the token is still available
     localStorage.removeItem('access_token');
     localStorage.removeItem('refresh_token');
     // Optionally call logout endpoint

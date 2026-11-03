@@ -11,7 +11,7 @@ import ProjectSelector from '../ui/ProjectSelector';
 import Card from '../ui/Card';
 import Button from '../ui/Button';
 import Alert from '../ui/Alert';
-import FileUploadCard from '../ui/FileUploadCard';
+import SharedIodbCard from '../ui/SharedIodb';
 
 interface InstrumentType {
   key: string;
@@ -229,7 +229,7 @@ export default function ProcessDataRequisition() {
 
       {/* Step 1: Upload IODB */}
       <Card title="Step 1 — Upload IODB" description="Upload the instrument database to source tags from.">
-        <FileUploadCard
+        <SharedIodbCard
           title="IODB Source File"
           icon={Upload}
           file={iodbFile}

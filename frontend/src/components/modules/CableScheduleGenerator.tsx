@@ -11,6 +11,7 @@ import Card from '../ui/Card';
 import Button from '../ui/Button';
 import Alert from '../ui/Alert';
 import FileUploadCard from '../ui/FileUploadCard';
+import SharedIodbCard from '../ui/SharedIodb';
 import OutputWorkbookOptions, { type OutputMode } from '../ui/OutputWorkbookOptions';
 
 interface ColumnsResponse {
@@ -161,7 +162,7 @@ export default function CableScheduleGenerator() {
 
       {/* File Uploads */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <FileUploadCard
+        <SharedIodbCard
           title="IODB Source File"
           icon={Upload}
           file={iodbFile}
@@ -175,7 +176,7 @@ export default function CableScheduleGenerator() {
           <Button onClick={handleLoadColumns} disabled={!iodbFile} loading={loadingColumns} fullWidth className="mt-3 bg-blue-600 hover:bg-blue-700">
             {loadingColumns ? 'Loading Columns...' : 'Load Columns'}
           </Button>
-        </FileUploadCard>
+        </SharedIodbCard>
 
         <FileUploadCard
           title="Cable Schedule Template"

@@ -17,6 +17,7 @@ import PageHeader from '../ui/PageHeader';
 import Button from '../ui/Button';
 import Alert from '../ui/Alert';
 import { scoreVendors, VendorScore, VendorModel } from '@/data/ltRadarVendors';
+import { SharedIodbPanel } from '../ui/SharedIodb';
 
 // ── Engineering Knowledge Base ─────────────────────────────────────────────────
 const KB: Record<string, string[]> = {
@@ -764,7 +765,7 @@ export default function DataSheetGenerator() {
             <p className="text-xs mb-3" style={{ color: 'var(--t2)' }}>
               Only records with <strong>SIGNAL I/O TYPE = AI</strong> and <strong>SUB SYSTEM containing "-"</strong> are considered.
             </p>
-            <DropZone file={iodbFile} onChange={f => { setIodbFile(f); setInstrumentTypes([]); setSelectedType(''); }} accept=".xlsx,.xls" label="Upload IODB spreadsheet (.xlsx / .xls)" />
+            <SharedIodbPanel compact file={iodbFile} onChange={f => { setIodbFile(f); setInstrumentTypes([]); setSelectedType(''); }} />
             {iodbFile && instrumentTypes.length === 0 && (
               <Button onClick={loadTypes} loading={busy} fullWidth className="mt-3">
                 <Search className="w-3.5 h-3.5" /> Analyse IODB

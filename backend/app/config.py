@@ -45,6 +45,10 @@ class Settings(BaseSettings):
     # Empty = <backend>/document_store
     DOCUMENT_STORE_DIR: str = ""
     FILE_RETENTION_HOURS: int = 1
+    # Session-scoped Shared IODB (temporary files; never a project document). Empty dir = <tmp>/iez_shared_iodb.
+    SHARED_IODB_DIR: str = ""
+    SHARED_IODB_IDLE_MINUTES: int = 480       # unused for this long -> removed
+    SHARED_IODB_MAX_BYTES: int = 60 * 1024 * 1024
     
     # AI Extraction
     GROQ_API_KEY: str = ""

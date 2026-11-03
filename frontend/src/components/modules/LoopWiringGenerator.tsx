@@ -11,6 +11,7 @@ import Card from '../ui/Card';
 import Button from '../ui/Button';
 import Alert from '../ui/Alert';
 import FileUploadCard from '../ui/FileUploadCard';
+import { SharedIodbOptionalInput } from '../ui/SharedIodb';
 
 interface PreviewResponse {
   tags: string[];
@@ -138,6 +139,9 @@ export default function LoopWiringGenerator() {
       <ProjectSelector />
 
       {error && <Alert variant="error" title="Error" onClose={() => setError(null)}>{error}</Alert>}
+
+      {/* Optional: offer the Shared IODB as the Loop Wiring input file (the existing input stays required and unchanged) */}
+      <SharedIodbOptionalInput onUse={(f) => { setInputFile(f); setPreview(null); setResult(null); }} />
 
       {/* File Uploads */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

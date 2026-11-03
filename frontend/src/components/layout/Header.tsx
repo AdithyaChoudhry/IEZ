@@ -1,3 +1,4 @@
+import { SharedIodbChip } from '../ui/SharedIodb';
 import { useAuth } from '@/context/AuthContext';
 import { useTheme } from '@/context/ThemeContext';
 import {
@@ -436,6 +437,8 @@ export default function Header({ onToggleSidebar }: HeaderProps) {
           >
             {theme === 'dark' ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
           </button>
+
+          <SharedIodbChip />
 
           {/* Bell */}
           <div className="relative" ref={bellRef}>

@@ -85,8 +85,8 @@ def test_generated_workbook_has_one_sheet_per_tag_of_the_right_type_with_row_19_
     feed = L.build_loop_input(rows, L.template_headers(tmpl))
     out = L.generate(feed, tmpl)
     wb = openpyxl.load_workbook(io.BytesIO(out))
-    assert wb.sheetnames == ["Loop_PT-001", "Loop_FT-002"]                    # template type sheets are not left behind
-    ws2, ws4 = wb["Loop_PT-001"], wb["Loop_FT-002"]
+    assert wb.sheetnames == ["Loop_L-001", "Loop_L-002"]                    # template type sheets are not left behind
+    ws2, ws4 = wb["Loop_L-001"], wb["Loop_L-002"]
     assert ws2["W19"].value == "PT-001" and ws2["AF19"].value == 5 and ws2["AG19"].value == 6 and ws2["AR19"].value == 3
     assert ws2["AH19"].value == "TBA"                                          # FTA data has no source column
     assert ws4["W19"].value == "FT-002"
@@ -148,8 +148,9 @@ def test_every_wire_in_every_sheet_touches_a_box_a_wire_or_a_cable_end(variant):
 
 
 def test_loop_name_falls_back_to_a_name_derived_from_the_tag():
-    assert L.derive_loop_name("100-PIT-10101") == "100-10101"
-    assert L.derive_loop_name("6816-LT-3003") == "6816-3003"
+    assert L.derive_loop_name("100-PIT-10101") == "100-P-10101"
+    assert L.derive_loop_name("6816-LT-3003") == "6816-L-3003"          # same style as the reference Loop_Name
+    assert L.derive_loop_name("100-YL-ML-10601A") == "ML-10601" == L.derive_loop_name("100-HS-ML-10601B")
     assert L.derive_loop_name("WEIRD") == "WEIRD"
 
 
@@ -160,7 +161,7 @@ def test_every_generated_sheet_carries_its_loop_name_at_the_top(variant):
     rows, _ = L.read_assignment(assignment([row("PT-001", **{"LOOP NO": "L-ONE"}), row("100-PIT-10102", **{"LOOP NO": None})]))
     out = L.generate(L.build_loop_input(rows, L.template_headers(tmpl)), tmpl)
     wb = openpyxl.load_workbook(io.BytesIO(out))
-    assert wb.worksheets[0]["X19"].value == "L-ONE" and wb.worksheets[1]["X19"].value == "100-10102"
+    assert wb.worksheets[0]["X19"].value == "L-ONE" and wb.worksheets[1]["X19"].value == "100-P-10102"
     assert wb.worksheets[0]["A2"].value == '="LOOP NAME: "&X19'              # template formula shows row 19's loop name at the top
 
 
@@ -172,3 +173,67 @@ def test_without_marshalling_template_has_no_marshalling_or_fta_content():
         assert "MARSHALLING" not in text.upper(), ws.title
         for addr in ("N16", "N17", "P15", "P16", "P17", "Q16", "O6"):
             assert ws[addr].value is None, (ws.title, addr)
+
+
+def mrow(tag, desc, io_type, **kw):
+    return row(tag, io_type=io_type, wire="2 WIRE", **{"SIGNAL DESCRIPTION": desc, "CHANNEL NO": kw.pop("ch", 1), **kw})
+
+
+HEAD2 = HEAD + ["SIGNAL DESCRIPTION", "SUB SYSTEM"]
+
+
+def assignment2(rows):
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "IO_ASSIGNMENT"
+    for _ in range(6):
+        ws.append([])
+    ws.append(HEAD2)
+    for r in rows:
+        ws.append([r.get(h) for h in HEAD2])
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+MOTOR_SIGNALS = [("YL-ML-11011A", "LOCAL/REMOTE FEEDBACK", "DI"), ("YL-ML-11011B", "RUN FEEDBACK", "DI"), ("YL-ML-11011C", "READY FOR START", "DI"),
+                 ("YA-ML-11011", "TRIP FEEDBACK", "DI"), ("HS-ML-11011A", "START COMMAND", "DO"), ("HS-ML-11011B", "STOP COMMAND", "DO"),
+                 ("CI-ML-11011", "CURRENT INDICATION", "AI")]
+
+
+@needs_template
+@pytest.mark.parametrize("variant", ["with", "without"])
+def test_all_signals_of_one_motor_loop_go_on_one_sheet_named_after_the_loop(variant):
+    tmpl = TEMPLATES[variant].read_bytes()
+    sigs = [mrow(f"100-{t}", d, io, ch=i + 1, **{"LOOP NO": None}) for i, (t, d, io) in enumerate(MOTOR_SIGNALS)]
+    rows, _ = L.read_assignment(assignment2(sigs))
+    feed = L.build_loop_input(rows, L.template_headers(tmpl))
+    loops = feed.loops()
+    assert list(loops) == ["ML-11011"] and loops["ML-11011"][0]["LOOP TYPE"] == L.LOOP_MOTOR and len(loops["ML-11011"]) == 7
+    wb = openpyxl.load_workbook(io.BytesIO(L.generate(feed, tmpl)))
+    assert wb.sheetnames == ["Loop_ML-11011"]
+    ws = wb.worksheets[0]
+    assert [ws.cell(19 + k, 23).value for k in range(7)] == [f"100-{t}" for t, _, _ in MOTOR_SIGNALS]      # tag per block row, template order
+    assert {ws.cell(19 + k, 24).value for k in range(7)} == {"ML-11011"}                                     # one loop name on every row
+    assert ws["A2"].value == '="LOOP NAME: "&X19' and ws.cell(19, 24).value == "ML-11011"
+
+
+@needs_template
+def test_vfd_motor_gets_the_vfd_sheet_with_speed_blocks_and_switches_get_their_own_types():
+    tmpl = TEMPLATES["with"].read_bytes()
+    sigs = [mrow(f"100-{t}", d, io, ch=i + 1) for i, (t, d, io) in enumerate(MOTOR_SIGNALS)]
+    sigs += [mrow("100-SC-ML-11011", "SPEED CONTROL", "AO", ch=1), mrow("100-SI-ML-11011", "SPEED FEEDBACK", "AI", ch=2)]
+    for s_ in sigs:
+        s_["LOOP NO"] = "ML-11011"
+    nl = {"LOOP NO": None}
+    sigs += [mrow("100-LSH-20001", "HIGH LEVEL SWITCH", "DI", ch=9, **nl), mrow("100-FSL-20002", "LOW FLOW", "DI", ch=10, **nl),
+             mrow("100-PS-20003", "X", "DI", ch=11, **nl), mrow("100-TSH-20004", "X", "DI", ch=12, **nl),
+             mrow("100-ZSO-30001", "OPEN FEEDBACK", "DI", ch=13, **nl)]
+    rows, _ = L.read_assignment(assignment2(sigs))
+    feed = L.build_loop_input(rows, L.template_headers(tmpl))
+    types = {k: v[0]["LOOP TYPE"] for k, v in feed.loops().items()}
+    assert types["ML-11011"] == L.LOOP_VFD and len(feed.loops()["ML-11011"]) == 9
+    assert sorted(t for k, t in types.items() if k != "ML-11011") == ["SWITCH - FLOW", "SWITCH - LEVEL", "SWITCH - PRESSURE", "SWITCH - TEMPERATURE"]
+    assert any("100-ZSO-30001" == t for _, t, _ in feed.skipped)                   # a valve limit switch is not a switch loop
+    out = L.generate(feed, tmpl)
+    assert len(openpyxl.load_workbook(io.BytesIO(out)).sheetnames) == 5

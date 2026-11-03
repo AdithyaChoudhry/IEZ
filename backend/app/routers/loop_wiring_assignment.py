@@ -40,8 +40,9 @@ MAX_BYTES = 60 * 1024 * 1024
 class AssignmentPreview(BaseModel):
     sheet: str
     rows_read: int
-    fed: int
-    by_type: dict
+    fed: int                 # loops (= sheets)
+    signals: int             # hardwired signals placed in those loops
+    by_type: dict            # loop type -> number of loops
     skipped: int
     skipped_reasons: list
     unfed_headers: list
@@ -93,8 +94,9 @@ async def preview(
     tmpl = _template(variant, await template_file.read() if template_file is not None else None)
     feed, sheet, n = _feed(data, tmpl)
     reasons = Counter(why for _, _, why in feed.skipped)
+    loops = feed.loops()
     return AssignmentPreview(
-        sheet=sheet, rows_read=n, fed=len(feed.rows), by_type=dict(Counter(r["LOOP TYPE"] for r in feed.rows)),
+        sheet=sheet, rows_read=n, fed=len(loops), signals=len(feed.rows), by_type=dict(Counter(v[0]["LOOP TYPE"] for v in loops.values())),
         skipped=len(feed.skipped), skipped_reasons=[{"reason": k, "count": v} for k, v in reasons.most_common()],
         unfed_headers=feed.unfed_headers,
         preview=[{k: v for k, v in r.items() if v is not None} for r in feed.rows[:20]],
@@ -105,15 +107,15 @@ def _run(job_id: str, data: bytes, filename: str, tmpl: bytes, user_id: int, use
     try:
         feed, _, _ = _feed(data, tmpl)
         if not feed.rows:
-            raise HTTPException(status_code=400, detail="No tags in this I/O Assignment match a loop type (AI with 2 WIRE or 4 WIRE).")
+            raise HTTPException(status_code=400, detail="No signals in this I/O Assignment match a loop type (AI with 2 WIRE or 4 WIRE, level/flow/pressure/temperature switches, motor loops).")
         out = LA.generate(feed, tmpl)
         loop_wiring_cache[f"{user_id}_loop_wiring"] = {"bytes": out, "filename": "Loop_Wiring.xlsx"}
         registry = register_safe("success", project_id=project_id, module="loop_wiring", user=username, source_bytes=data,
                                  source_filename=filename, output_bytes=out, output_filename="Loop_Wiring.xlsx",
-                                 sheet_count=len(feed.rows), template_bytes=tmpl, template_filename="Loop_Wiring_Template.xlsx")
+                                 sheet_count=len(feed.loops()), template_bytes=tmpl, template_filename="Loop_Wiring_Template.xlsx")
         loop_wiring_jobs[job_id] = {"status": "done", "result": LoopWiringGenerateResponse(
-            filename="Loop_Wiring.xlsx", sheet_count=len(feed.rows), registry=registry,
-            message=f"Loop Wiring generated from the I/O Assignment ({len(feed.rows)} sheet(s); {len(feed.skipped)} row(s) not mapped)")}
+            filename="Loop_Wiring.xlsx", sheet_count=len(feed.loops()), registry=registry,
+            message=f"Loop Wiring generated from the I/O Assignment ({len(feed.loops())} loop sheet(s), {len(feed.rows)} signals; {len(feed.skipped)} row(s) not mapped)")}
     except HTTPException as e:
         loop_wiring_jobs[job_id] = {"status": "error", "error": e.detail}
     except Exception as e:

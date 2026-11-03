@@ -23,6 +23,7 @@ interface AssignmentPreview {
   sheet: string;
   rows_read: number;
   fed: number;
+  signals: number;
   by_type: Record<string, number>;
   skipped: number;
   skipped_reasons: { reason: string; count: number }[];
@@ -221,7 +222,7 @@ export default function LoopWiringGenerator() {
               icon={Upload}
               file={assignFile}
               onChange={(f) => { setAssignFile(f); setAssignPreview(null); setResult(null); }}
-              hint="Rule: I/O TYPE = AI with WIRE TYPE = 2 WIRE gives a 2-wire loop, 4 WIRE gives a 4-wire loop. Other signals are listed as not mapped."
+              hint="Loops: AI + 2 WIRE = 2-wire, AI + 4 WIRE = 4-wire, level/flow/pressure/temperature switches (DI), and motor loops (all signals of one loop name, e.g. ML-11011, on one sheet). Anything else is listed as not mapped."
             >
               <Button onClick={handleAssignPreview} disabled={!assignFile} loading={loadingAssign} fullWidth className="mt-3 bg-blue-600 hover:bg-blue-700">
                 {loadingAssign ? 'Reading...' : 'Preview Loops'}
@@ -242,7 +243,7 @@ export default function LoopWiringGenerator() {
           </div>
 
           {assignPreview && (
-            <Card title={`${assignPreview.fed} loop(s) can be generated`} description={`Sheet read: ${assignPreview.sheet} (${assignPreview.rows_read} rows)`}>
+            <Card title={`${assignPreview.fed} loop(s) can be generated (${assignPreview.signals} signals)`} description={`Sheet read: ${assignPreview.sheet} (${assignPreview.rows_read} rows). One sheet per loop name; all signals of a motor loop share one sheet.`}>
               <div className="flex flex-wrap gap-2 mb-3">
                 {Object.entries(assignPreview.by_type).map(([t, n]) => (
                   <span key={t} className="text-xs px-2 py-1 rounded bg-indigo-50 text-indigo-700 border border-indigo-200">{t}: {n}</span>

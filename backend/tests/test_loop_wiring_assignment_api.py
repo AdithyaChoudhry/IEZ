@@ -51,13 +51,13 @@ def test_generate_job_then_existing_status_and_download_endpoints(client, varian
             break
         time.sleep(0.1)
     assert s["status"] == "done", s
-    assert s["result"]["sheet_count"] == 2 and "2 sheet" in s["result"]["message"]
+    assert s["result"]["sheet_count"] == 2 and "2 loop sheet" in s["result"]["message"]
     d = client.get("/api/loop-wiring/download")
     assert d.status_code == 200
     wb = openpyxl.load_workbook(io.BytesIO(d.content))
-    assert wb.sheetnames == ["Loop_PT-001", "Loop_FT-002"]
-    assert wb["Loop_PT-001"]["X19"].value == "L-001" and wb["Loop_PT-001"]["W19"].value == "PT-001"
-    assert (wb["Loop_PT-001"]["O5"].value is None) == (variant == "WITHOUT")        # marshalling title only in the WITH template
+    assert wb.sheetnames == ["Loop_L-001", "Loop_L-002"]
+    assert wb["Loop_L-001"]["X19"].value == "L-001" and wb["Loop_L-001"]["W19"].value == "PT-001"
+    assert (wb["Loop_L-001"]["O5"].value is None) == (variant == "WITHOUT")        # marshalling title only in the WITH template
 
 
 def test_uploaded_template_is_used_instead_of_the_bundled_one(client):

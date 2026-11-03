@@ -6,9 +6,12 @@ loop_from_assignment.py - feed the Loop Wiring template from the standard I/O As
         -> loop type chosen per row                                            [classify]
         -> one sheet per tag copied from the matching sheet of the loop template, row 19 filled   [generate]
 
-Loop type rule (as specified):  I/O TYPE = AI and WIRE TYPE = 2 WIRE -> "2-WIRE INSTRUMENT";
-                                I/O TYPE = AI and WIRE TYPE = 4 WIRE -> "4-WIRE INSTRUMENT".
-Every other signal is reported as "not mapped" with the reason - nothing is guessed.
+One LOOP = all hardwired signals that share a loop name = one sheet. Loop type:
+  * motor loop (any signal with an ML / MC tag token, a MOTOR description or SUB SYSTEM MCC / VFD): all its signals go
+    to ONE sheet - "MOTOR - VFD" when the loop has a VFD sub system or speed signals, else "MOTOR - STANDARD";
+  * single AI signal: WIRE TYPE 2 WIRE -> "2-WIRE INSTRUMENT", 4 WIRE -> "4-WIRE INSTRUMENT";
+  * single DI signal that is a level / flow / pressure / temperature switch -> "SWITCH - LEVEL|FLOW|PRESSURE|TEMPERATURE".
+Everything else is reported as "not mapped" with the reason - nothing is guessed.
 """
 from __future__ import annotations
 
@@ -32,11 +35,18 @@ def _norm(v: Any) -> str:
     return re.sub(r"\s+", " ", str(v if v is not None else "")).strip().upper()
 
 
+LOOP_MOTOR, LOOP_VFD = "MOTOR - STANDARD", "MOTOR - VFD"
+SWITCH_TYPES = {"LEVEL": "SWITCH - LEVEL", "FLOW": "SWITCH - FLOW", "PRESSURE": "SWITCH - PRESSURE", "TEMPERATURE": "SWITCH - TEMPERATURE"}
+SWITCH_LETTER = {"L": "LEVEL", "F": "FLOW", "P": "PRESSURE", "T": "TEMPERATURE"}
+MOTOR_BLOCKS = ["LOCAL/REMOTE", "RUN", "READY", "TRIP", "START", "STOP", "CURRENT", "SPEED CONTROL", "SPEED FEEDBACK"]   # template order
+MOTOR_STD_BLOCKS = MOTOR_BLOCKS[:7]
+
+
 def classify(io_type: Any, wire_type: Any) -> tuple[Optional[str], str]:
-    """(loop type, reason). reason is empty when mapped."""
+    """Single AI signal -> (loop type, '') or (None, reason)."""
     io, wire = _norm(io_type), _norm(wire_type)
     if io != "AI":
-        return None, f"I/O TYPE '{io or '-'}' has no loop template yet (only AI is mapped)"
+        return None, f"I/O TYPE '{io or '-'}' has no loop template yet"
     if wire == "2 WIRE":
         return LOOP_2W, ""
     if wire == "4 WIRE":
@@ -44,13 +54,85 @@ def classify(io_type: Any, wire_type: Any) -> tuple[Optional[str], str]:
     return None, f"AI with WIRE TYPE '{wire or '-'}' (expected 2 WIRE or 4 WIRE)"
 
 
+def _tokens(tag: Any) -> list[str]:
+    return [t for t in re.split(r"[-\s]+", str(tag or "").upper()) if t]
+
+
+def _desc(r: dict) -> str:
+    return _norm(r.get("SIGNAL DESCRIPTION"))
+
+
+def is_motor_signal(r: dict) -> bool:
+    d = _desc(r)
+    toks = _tokens(r.get("TAG NO"))
+    return ("ML" in toks or "MC" in toks or (d.startswith("MOTOR") and not d.startswith("MOTORIZED"))
+            or _norm(r.get("SUB SYSTEM")) in ("MCC", "VFD"))
+
+
+def motor_block(r: dict) -> Optional[str]:
+    """Which block of the motor sheet this signal belongs to (from its description / I/O type)."""
+    d, io = _desc(r), _norm(r.get("I/O TYPE"))
+    if "SPEED" in d and ("FEEDBACK" in d or " FB" in d or d.endswith("FB") or io == "AI"):
+        return "SPEED FEEDBACK"
+    if "SPEED" in d or ("SPD" in d):
+        return "SPEED CONTROL"
+    if "LOCAL" in d or "REMOTE" in d:
+        return "LOCAL/REMOTE"
+    if "READY" in d:
+        return "READY"
+    if "TRIP" in d:
+        return "TRIP"
+    if "CURRENT" in d:
+        return "CURRENT"
+    if "RUN" in d.split() or "RUNNING" in d or d.startswith("RUN"):
+        return "RUN"
+    if "START" in d:
+        return "START"                                    # also 'START/STOP COMMAND' (one signal)
+    if "STOP" in d:
+        return "STOP"
+    return None
+
+
+def switch_kind(r: dict) -> Optional[str]:
+    """Level / flow / pressure / temperature switch: ISA function (LS, LSH, LSL, FS, PS, TS ...) or the description."""
+    if _norm(r.get("I/O TYPE")) != "DI":
+        return None
+    for t in _tokens(r.get("TAG NO")):
+        m = re.fullmatch(r"([LFPT])S(H|L|HH|LL)?", t)
+        if m:
+            return SWITCH_LETTER[m.group(1)]
+    d = _desc(r)
+    for k in SWITCH_TYPES:
+        if f"{k} SWITCH" in d:
+            return k
+    return None
+
+
+def loop_name_of(r: dict) -> str:
+    """LOOP NO when the assignment has one. Otherwise derived from the tag (MODEL INFERENCE): motor tags -> 'ML-<number>'
+    (all signals of one motor share it, e.g. ML-11011), others -> '<area>-<first function letter>-<number>'."""
+    given = r.get("LOOP NO")
+    if given not in (None, "", "-"):
+        return str(given).strip()
+    return derive_loop_name(r.get("TAG NO"))
+
+
 # loop-template header (normalised) -> how to obtain it from an IO_ASSIGNMENT row (dict keyed by assignment header)
 def derive_loop_name(tag: Any) -> str:
-    """Loop name when the assignment has no LOOP NO (e.g. NEW WWTP): area + loop number of the tag, function letters dropped
-    ('100-PIT-10101' -> '100-10101'). MODEL INFERENCE - used so every loop sheet carries a loop name; falls back to the tag."""
+    """'100-YL-ML-10601A' -> 'ML-10601' (motor: all its signals); '100-PIT-10101' -> '100-P-10101'; '6816-LT-3003' -> '6816-L-3003'.
+    MODEL INFERENCE - used only when the assignment has no LOOP NO; falls back to the tag."""
     parts = [p for p in re.split(r"-", str(tag).strip()) if p]
-    m = re.match(r"^(\d{3,})", parts[-1]) if len(parts) >= 2 else None
-    return f"{parts[0]}-{m.group(1)}" if m and parts[0].isdigit() else str(tag).strip()
+    if len(parts) < 2:
+        return str(tag).strip()
+    m = re.match(r"^(\d{3,})", parts[-1])
+    if not m:
+        return str(tag).strip()
+    toks = [p.upper() for p in parts[:-1]]
+    for motor_token in ("ML", "MC"):
+        if motor_token in toks:
+            return f"{motor_token}-{m.group(1)}"
+    letters = next((p for p in parts[1:-1] if re.fullmatch(r"[A-Za-z]{1,5}", p)), "")
+    return f"{parts[0]}-{letters[0].upper()}-{m.group(1)}" if parts[0].isdigit() and letters else str(tag).strip()
 
 
 def _f(name: str) -> Callable[[dict], Any]:
@@ -89,9 +171,15 @@ FEED_MAP: dict[str, tuple[Callable[[dict], Any], str]] = {
 @dataclass
 class LoopFeed:
     headers: list[str] = field(default_factory=list)          # loop-template headers, template order (W18:AR18)
-    rows: list[dict] = field(default_factory=list)            # {header: value, "LOOP TYPE": ..., "SOURCE ROW": n}
+    rows: list[dict] = field(default_factory=list)            # one per placed signal: {header: value, "LOOP", "LOOP TYPE", "BLOCK", "SOURCE ROW"}
     skipped: list[tuple[int, str, str]] = field(default_factory=list)   # (assignment row, tag, reason)
     unfed_headers: list[str] = field(default_factory=list)    # loop headers with no source column
+
+    def loops(self) -> dict[str, list[dict]]:
+        out: dict[str, list[dict]] = {}
+        for r in self.rows:
+            out.setdefault(r["LOOP"], []).append(r)
+        return out
 
 
 def template_headers(template_bytes: bytes) -> list[str]:
@@ -123,6 +211,7 @@ def read_assignment(data: bytes) -> tuple[list[dict], str]:
 def build_loop_input(assignment_rows: list[dict], headers: list[str]) -> LoopFeed:
     feed = LoopFeed(headers=list(headers))
     feed.unfed_headers = [h for h in headers if h.strip().upper() not in FEED_MAP]
+    groups: dict[str, list[dict]] = {}
     for r in assignment_rows:
         tag = r.get("TAG NO")
         if tag in (None, "") or _norm(tag) == "SPARE":
@@ -132,26 +221,54 @@ def build_loop_input(assignment_rows: list[dict], headers: list[str]) -> LoopFee
         if _norm(r.get("INTERFACE")) not in ("HARDWIRED", ""):
             feed.skipped.append((r["_row"], str(tag), f"INTERFACE '{r.get('INTERFACE')}' has no field wiring"))
             continue
-        loop_type, why = classify(r.get("I/O TYPE"), r.get("WIRE TYPE"))
-        if loop_type is None:
-            feed.skipped.append((r["_row"], str(tag), why))
-            continue
+        groups.setdefault(loop_name_of(r), []).append(r)
+
+    def values(r: dict, loop: str, loop_type: str, block: str) -> dict:
         row = {}
         for h in headers:
             src = FEED_MAP.get(h.strip().upper())
             v = src[0](r) if src else None
             row[h] = None if v in ("", "-") else v
-        if row.get("Loop_Name") in (None, ""):
-            row["Loop_Name"] = derive_loop_name(tag)                  # every loop gets a name; shown at the top of the sheet
-        row["LOOP TYPE"] = loop_type
-        row["SOURCE ROW"] = r["_row"]
-        feed.rows.append(row)
+        row["Loop_Name"] = loop
+        row.update({"LOOP": loop, "LOOP TYPE": loop_type, "BLOCK": block, "SOURCE ROW": r["_row"]})
+        return row
+
+    for loop, rs in groups.items():
+        if any(is_motor_signal(r) for r in rs):
+            blocks = {r["_row"]: motor_block(r) for r in rs}
+            vfd = (any(_norm(r.get("SUB SYSTEM")) == "VFD" for r in rs) or any(b in ("SPEED CONTROL", "SPEED FEEDBACK") for b in blocks.values())
+                   or any("VFD" in _desc(r) for r in rs))
+            loop_type, allowed, taken = (LOOP_VFD, MOTOR_BLOCKS, set()) if vfd else (LOOP_MOTOR, MOTOR_STD_BLOCKS, set())
+            for r in rs:
+                b = blocks[r["_row"]]
+                if b not in allowed:
+                    feed.skipped.append((r["_row"], str(r["TAG NO"]), f"motor loop {loop}: signal '{r.get('SIGNAL DESCRIPTION')}' has no place on the {loop_type} sheet"))
+                elif b in taken:
+                    feed.skipped.append((r["_row"], str(r["TAG NO"]), f"motor loop {loop}: second '{b}' signal (one per block)"))
+                else:
+                    taken.add(b)
+                    feed.rows.append(values(r, loop, loop_type, b))
+            continue
+        if len(rs) > 1:
+            for r in rs:
+                feed.skipped.append((r["_row"], str(r["TAG NO"]), f"loop {loop} has {len(rs)} hardwired signals and is not a motor loop (no template yet)"))
+            continue
+        r = rs[0]
+        kind = switch_kind(r)
+        if kind:
+            feed.rows.append(values(r, loop, SWITCH_TYPES[kind], ""))
+            continue
+        loop_type, why = classify(r.get("I/O TYPE"), r.get("WIRE TYPE"))
+        if loop_type is None:
+            feed.skipped.append((r["_row"], str(r["TAG NO"]), why))
+        else:
+            feed.rows.append(values(r, loop, loop_type, ""))
     return feed
 
 
 def feed_to_xlsx(feed: LoopFeed) -> bytes:
     """The loop-template data columns laid side by side (header row, then one row per tag) + LOOP TYPE."""
-    df = pd.DataFrame(feed.rows, columns=feed.headers + ["LOOP TYPE", "SOURCE ROW"])
+    df = pd.DataFrame(feed.rows, columns=feed.headers + ["LOOP TYPE", "BLOCK", "SOURCE ROW"])
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as w:
         df.to_excel(w, index=False, sheet_name="LOOP WIRING INPUT")
@@ -182,21 +299,27 @@ def generate(feed: LoopFeed, template_bytes: bytes) -> bytes:
         raise ValueError(f"The loop template has no sheet for: {', '.join(sorted(missing))}")
     used: set = set()
     made: list[tuple[str, str]] = []                                 # (new sheet title, template sheet title)
-    for r in feed.rows:
-        src = type_sheets[r["LOOP TYPE"]]
+    for loop, rs in feed.loops().items():
+        loop_type = rs[0]["LOOP TYPE"]
+        src = type_sheets[loop_type]
         ws = wb.copy_worksheet(src)
-        ws.title = _safe_title(str(r[feed.headers[0]]), used)
+        ws.title = _safe_title(loop, used)
         if src.print_area:
             ws.print_area = src.print_area.split("!")[-1].replace("$", "")
-        for c in range(COL_START, COL_END + 1):
-            head = src.cell(HEADER_ROW, c).value
-            if head is None:
-                continue
-            cell = ws.cell(DATA_ROW, c)
-            if isinstance(cell.value, str) and cell.value.startswith("="):
-                continue
-            v = r.get(str(head).strip())
-            cell.value = "TBA" if v in (None, "") else v
+        by_block = {r["BLOCK"]: r for r in rs} if loop_type in (LOOP_MOTOR, LOOP_VFD) else {}
+        order = (MOTOR_BLOCKS if loop_type == LOOP_VFD else MOTOR_STD_BLOCKS) if by_block else [""]
+        for k, blk in enumerate(order):                              # motors: one data row per block, in template order
+            r = by_block.get(blk) if by_block else rs[0]
+            for c in range(COL_START, COL_END + 1):
+                head = src.cell(HEADER_ROW, c).value
+                if head is None:
+                    continue
+                cell = ws.cell(DATA_ROW + k, c)
+                if isinstance(cell.value, str) and cell.value.startswith("="):
+                    continue
+                name = str(head).strip()
+                v = (r or {}).get(name) if r else (loop if name == "Loop_Name" else None)
+                cell.value = "TBA" if v in (None, "") else v
         made.append((ws.title, src.title))
     for name in list(type_sheets):
         del wb[name]

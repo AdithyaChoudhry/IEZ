@@ -19,6 +19,17 @@ interface PreviewResponse {
   preview: Record<string, any>[];
 }
 
+interface AssignmentPreview {
+  sheet: string;
+  rows_read: number;
+  fed: number;
+  by_type: Record<string, number>;
+  skipped: number;
+  skipped_reasons: { reason: string; count: number }[];
+  unfed_headers: string[];
+  preview: Record<string, any>[];
+}
+
 interface GenerateResponse {
   filename: string;
   message: string;
@@ -46,6 +57,13 @@ export default function LoopWiringGenerator() {
   const [preview, setPreview] = useState<PreviewResponse | null>(null);
   const [result, setResult] = useState<GenerateResponse | null>(null);
 
+  // Optional second input: build the loops from the standard I/O Assignment (the existing input-file flow stays the default)
+  const [source, setSource] = useState<'input' | 'assignment'>('input');
+  const [assignFile, setAssignFile] = useState<File | null>(null);
+  const [variant, setVariant] = useState<'WITH' | 'WITHOUT'>('WITH');
+  const [assignTemplate, setAssignTemplate] = useState<File | null>(null);
+  const [assignPreview, setAssignPreview] = useState<AssignmentPreview | null>(null);
+  const [loadingAssign, setLoadingAssign] = useState(false);
   const [loadingPreview, setLoadingPreview] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -111,6 +129,51 @@ export default function LoopWiringGenerator() {
     }
   };
 
+  const assignForm = () => {
+    const fd = new FormData();
+    fd.append('assignment_file', assignFile as File);
+    fd.append('variant', variant);
+    if (assignTemplate) fd.append('template_file', assignTemplate);
+    return fd;
+  };
+
+  const handleAssignPreview = async () => {
+    if (!assignFile) return;
+    setLoadingAssign(true);
+    setError(null);
+    setResult(null);
+    try {
+      const r = await api.post<AssignmentPreview>('/loop-wiring/assignment/preview', assignForm(), { headers: { 'Content-Type': 'multipart/form-data' } });
+      setAssignPreview(r.data);
+    } catch (err: any) {
+      setAssignPreview(null);
+      setError(err.response?.data?.detail || 'Failed to read the I/O Assignment');
+    } finally {
+      setLoadingAssign(false);
+    }
+  };
+
+  const handleAssignGenerate = async () => {
+    if (!assignFile) return;
+    setGenerating(true);
+    setError(null);
+    setResult(null);
+    try {
+      const kickoff = await api.post<GenerateJob>('/loop-wiring/assignment/generate', assignForm(), { headers: { 'Content-Type': 'multipart/form-data' } });
+      for (let attempt = 0; attempt < MAX_POLL_ATTEMPTS; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+        const st = await api.get<GenerateStatus>(`/loop-wiring/generate/status/${kickoff.data.job_id}`);
+        if (st.data.status === 'done') { setResult(st.data.result!); return; }
+        if (st.data.status === 'error') { setError(st.data.error || 'Generation failed'); return; }
+      }
+      setError('Generation is taking longer than expected. Please try again later.');
+    } catch (err: any) {
+      setError(err.response?.data?.detail || 'Generation failed');
+    } finally {
+      setGenerating(false);
+    }
+  };
+
   const handleDownload = async () => {
     try {
       const response = await api.get('/loop-wiring/download', { responseType: 'blob' });
@@ -140,6 +203,70 @@ export default function LoopWiringGenerator() {
 
       {error && <Alert variant="error" title="Error" onClose={() => setError(null)}>{error}</Alert>}
 
+      <div className="flex gap-2">
+        {([['input', 'Loop Wiring input file'], ['assignment', 'I/O Assignment']] as const).map(([k, label]) => (
+          <button key={k} onClick={() => { setSource(k); setResult(null); setError(null); }}
+            className="px-3 py-1.5 rounded-lg text-xs font-semibold"
+            style={{ background: source === k ? 'var(--em)' : 'var(--s3)', color: source === k ? '#fff' : 'var(--t0)', border: '1px solid var(--b1)' }}>
+            Source: {label}
+          </button>
+        ))}
+      </div>
+
+      {source === 'assignment' && (
+        <>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <FileUploadCard
+              title="I/O Assignment (standard template)"
+              icon={Upload}
+              file={assignFile}
+              onChange={(f) => { setAssignFile(f); setAssignPreview(null); setResult(null); }}
+              hint="Rule: I/O TYPE = AI with WIRE TYPE = 2 WIRE gives a 2-wire loop, 4 WIRE gives a 4-wire loop. Other signals are listed as not mapped."
+            >
+              <Button onClick={handleAssignPreview} disabled={!assignFile} loading={loadingAssign} fullWidth className="mt-3 bg-blue-600 hover:bg-blue-700">
+                {loadingAssign ? 'Reading...' : 'Preview Loops'}
+              </Button>
+            </FileUploadCard>
+            <div className="rounded-2xl p-5" style={{ background: 'var(--s2)', border: '1px solid var(--b1)' }}>
+              <h3 className="text-sm font-bold mb-3" style={{ color: 'var(--t0)' }}>Loop template</h3>
+              {([['WITH', 'With marshalling cabinet (JB -> marshalling -> system cabinet)'], ['WITHOUT', 'Without marshalling cabinet (JB -> system cabinet)']] as const).map(([v, label]) => (
+                <label key={v} className="flex items-center gap-2 text-xs mb-2 cursor-pointer" style={{ color: 'var(--t0)' }}>
+                  <input type="radio" name="lw-variant" checked={variant === v} onChange={() => { setVariant(v); setAssignPreview(null); setResult(null); }} />
+                  {label}
+                </label>
+              ))}
+              <FileUploadCard title="Or use your own template (optional)" icon={FileText} file={assignTemplate}
+                onChange={(f) => { setAssignTemplate(f); setAssignPreview(null); setResult(null); }}
+                hint="Leave empty to use the built-in template selected above." />
+            </div>
+          </div>
+
+          {assignPreview && (
+            <Card title={`${assignPreview.fed} loop(s) can be generated`} description={`Sheet read: ${assignPreview.sheet} (${assignPreview.rows_read} rows)`}>
+              <div className="flex flex-wrap gap-2 mb-3">
+                {Object.entries(assignPreview.by_type).map(([t, n]) => (
+                  <span key={t} className="text-xs px-2 py-1 rounded bg-indigo-50 text-indigo-700 border border-indigo-200">{t}: {n}</span>
+                ))}
+              </div>
+              {assignPreview.skipped > 0 && (
+                <div className="text-xs mb-3" style={{ color: 'var(--t1)' }}>
+                  <p className="font-semibold mb-1">{assignPreview.skipped} row(s) not mapped:</p>
+                  {assignPreview.skipped_reasons.map((r) => <p key={r.reason}>{r.count} x {r.reason}</p>)}
+                </div>
+              )}
+              {assignPreview.unfed_headers.length > 0 && (
+                <p className="text-xs mb-3" style={{ color: 'var(--t2)' }}>No source column in the I/O Assignment (written as TBA): {assignPreview.unfed_headers.join(', ')}</p>
+              )}
+              <Button onClick={handleAssignGenerate} disabled={assignPreview.fed === 0} loading={generating} size="lg" fullWidth className="text-lg py-4 mt-2">
+                <GitBranch className="w-6 h-6" />
+                {generating ? `Generating ${assignPreview.fed} Sheets...` : `Generate Loop Wiring (${assignPreview.fed} loops)`}
+              </Button>
+            </Card>
+          )}
+        </>
+      )}
+
+      {source === 'input' && (<>
       {/* Optional: offer the Shared IODB as the Loop Wiring input file (the existing input stays required and unchanged) */}
       <SharedIodbOptionalInput onUse={(f) => { setInputFile(f); setPreview(null); setResult(null); }} />
 
@@ -220,6 +347,8 @@ export default function LoopWiringGenerator() {
           )}
         </Card>
       )}
+
+      </>)}
 
       {/* Result */}
       {result && (

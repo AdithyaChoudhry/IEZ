@@ -18,3 +18,16 @@ class CableScheduleGenerateResponse(BaseModel):
     message: str
     # Set when a project_id was supplied: result of registering the output.
     registry: Optional[Dict[str, Any]] = None
+    output_mode: Optional[str] = None
+    sheets: Optional[List[str]] = None
+
+
+class CompositionSheet(BaseModel):
+    name: str
+    hidden: bool = False
+    kind: str                      # "template" | "generated" | "summary"
+
+
+class CompositionResponse(BaseModel):
+    output_mode: str
+    sheets: List[CompositionSheet]

@@ -11,6 +11,7 @@ import Card from '../ui/Card';
 import Button from '../ui/Button';
 import Alert from '../ui/Alert';
 import FileUploadCard from '../ui/FileUploadCard';
+import OutputWorkbookOptions, { type OutputMode } from '../ui/OutputWorkbookOptions';
 
 interface ColumnsResponse {
   columns: string[];
@@ -28,11 +29,15 @@ interface JBSummaryResponse {
 interface GenerateResponse {
   filename: string;
   message: string;
+  output_mode?: OutputMode;
+  sheets?: string[];   // sheets of the generated workbook, read from the output file
 }
 
 export default function CableScheduleGenerator() {
   const [iodbFile, setIodbFile] = useState<File | null>(null);
-  const [templateFile, setTemplateFile] = useState<File | null>(null);
+  const [templateFile, setTemplateFileState] = useState<File | null>(null);
+  // Explicit output state - drives the preview, the generated workbook and the download (default = behaviour before the option existed).
+  const [cableOutputMode, setCableOutputMode] = useState<OutputMode>('WITH_SUMMARY');
   const [columns, setColumns] = useState<string[]>([]);
   const [jbColumn, setJbColumn] = useState('');
   const [tagColumn, setTagColumn] = useState('');
@@ -84,6 +89,7 @@ export default function CableScheduleGenerator() {
     formData.append('file', iodbFile);
     formData.append('jb_column', jbColumn);
     formData.append('tag_column', tagColumn);
+    formData.append('output_mode', cableOutputMode);
 
     try {
       const response = await api.post<JBSummaryResponse>('/cable-schedule/preview', formData, {
@@ -96,6 +102,10 @@ export default function CableScheduleGenerator() {
       setLoadingPreview(false);
     }
   };
+
+  // A result belongs to one template + one mode: changing either clears it so the download always matches the preview.
+  const setTemplateFile = (f: File | null) => { setTemplateFileState(f); setResult(null); };
+  const changeOutputMode = (m: OutputMode) => { setCableOutputMode(m); setResult(null); };
 
   const handleGenerate = async () => {
     if (!iodbFile || !templateFile || !jbColumn || !tagColumn) return;
@@ -175,6 +185,17 @@ export default function CableScheduleGenerator() {
           hint="Required: provide the Cable Schedule Excel template to generate into."
         />
       </div>
+
+      {templateFile && (
+        <OutputWorkbookOptions
+          endpoint="/cable-schedule/composition"
+          templateFile={templateFile}
+          mode={cableOutputMode}
+          onModeChange={changeOutputMode}
+          summaryLabel="Cable Summary"
+          listLabel="Cable Schedule"
+        />
+      )}
 
       {/* JB/Tag Column mapping */}
       {columns.length > 0 && (
@@ -266,7 +287,12 @@ export default function CableScheduleGenerator() {
             <CheckCircle2 className="w-12 h-12 text-green-500 flex-shrink-0" />
             <div className="flex-1">
               <h3 className="text-xl font-bold text-green-800 mb-2">Cable Schedule Generated!</h3>
-              <p className="text-green-700 mb-4">{result.message}</p>
+              <p className="text-green-700 mb-2">{result.message}</p>
+              {result.sheets && (
+                <p className="text-sm text-green-800 mb-4">
+                  Workbook sheets: {result.sheets.join(' · ')}
+                </p>
+              )}
               <Button onClick={handleDownload} className="bg-green-600 hover:bg-green-700">
                 <Download className="w-5 h-5" />
                 Download {result.filename}

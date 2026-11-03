@@ -64,9 +64,11 @@ def process_io_list(
     selected_columns: list[str],
     filters: dict | None = None,
     template_file=None,
+    output_mode: str = "WITHOUT_SUMMARY",
 ) -> tuple[bytes | None, str | None, str | None]:
     """
     Full pipeline: read IODB → (optionally filter) → generate I/O list.
+    `output_mode`: "WITHOUT_SUMMARY" (template sheets + IO List) or "WITH_SUMMARY" (+ IO Summary).
     If `template_file` is provided, output is appended as a new sheet to that workbook.
 
     Returns (bytes, filename, error)
@@ -76,12 +78,28 @@ def process_io_list(
         return None, None, f"Failed to read IODB: {err}"
 
     template_wb = None
+    template_bytes = None
     if template_file is not None:
+        try:
+            template_file.seek(0)
+            template_bytes = template_file.read()
+            template_file.seek(0)
+        except Exception:
+            template_bytes = None
         template_wb, _, err = load_workbook_from_upload(template_file)
         if err:
             return None, None, f"Failed to load template: {err}"
 
-    return generate_io_list(df, selected_columns, filters=filters, template_wb=template_wb)
+    out_bytes, filename, err = generate_io_list(df, selected_columns, filters=filters, template_wb=template_wb,
+                                                output_mode=output_mode)
+    if out_bytes and template_bytes:
+        # put back template drawings (logos, grouped pictures) that openpyxl cannot round-trip;
+        # the generated sheets are rebuilt by iEZ and are not touched
+        from utils import workbook_assembly as wa
+        generated = {wa._key("IO List"), wa._key(wa.IO_SUMMARY_SHEET)}
+        keep = [n for n in wa.composition_of(out_bytes) if wa._key(n) not in generated]
+        out_bytes = wa.restore_template_fidelity(out_bytes, template_bytes, keep)
+    return out_bytes, filename, err
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -184,9 +202,11 @@ def process_cable_schedule(
     jb_column: str = "JUNCTION BOX",
     tag_column: str = "TAG NO",
     progress_callback=None,
+    output_mode: str = "WITH_SUMMARY",
 ) -> tuple[bytes | None, str | None, str | None]:
     """
     Full pipeline: read IODB + template → generate cable schedule.
+    `output_mode`: "WITHOUT_SUMMARY" (template sheets + Cable Schedule) or "WITH_SUMMARY" (+ Cable Summary).
 
     The template is loaded twice:
       - In read-only mode for safe structure/prototype reading.
@@ -225,7 +245,7 @@ def process_cable_schedule(
 
     return generate_cable_schedule(
         df, wb, jb_column, tag_column, progress_callback,
-        template_bytes=tmpl_bytes, iodb_bytes=iodb_raw,
+        template_bytes=tmpl_bytes, iodb_bytes=iodb_raw, output_mode=output_mode,
     )
 
 

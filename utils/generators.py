@@ -89,24 +89,46 @@ def generate_io_list(
     selected_columns: list[str],
     filters: dict | None = None,
     template_wb: openpyxl.Workbook | None = None,
+    output_mode: str = "WITHOUT_SUMMARY",
 ) -> tuple[bytes | None, str | None, str | None]:
     """
     Same logic as Instrument List but outputs IO_List.xlsx.
     Optional `filters` dict: {column_name: [allowed_values]} applied before output.
     Optional `template_wb`: if provided, the filtered data is appended as a new sheet
-    named 'IO List' at the end of the template workbook.
+    named 'IO List' at the end of the template workbook; every template sheet is kept.
+
+    `output_mode` (utils.workbook_assembly): "WITHOUT_SUMMARY" -> template sheets + IO List;
+    "WITH_SUMMARY" -> template sheets + IO List + IO Summary (counts of the same filtered rows).
+    A stale 'IO Summary' sheet inside the template is never carried into a WITHOUT_SUMMARY output.
     """
+    from utils.workbook_assembly import WITH_SUMMARY, IO_SUMMARY_SHEET, normalize_mode, drop_sheet
     try:
+        mode = normalize_mode(output_mode)
         available = [c for c in selected_columns if c in df.columns]
         if not available:
             return None, None, "None of the selected columns were found in the IODB file."
-        result = _apply_column_filters(df, filters)[available].copy()
+        filtered = _apply_column_filters(df, filters)
+        result = filtered[available].copy()
         if result.empty:
             return None, None, "No rows remain after applying filters."
+
+        def _summary_step(wb):
+            if mode == WITH_SUMMARY:
+                from utils.io_summary import build_io_summary, append_io_summary_sheet
+                append_io_summary_sheet(wb, build_io_summary(filtered))
+            else:
+                drop_sheet(wb, IO_SUMMARY_SHEET)
+
         if template_wb is not None:
-            out_bytes = _append_sheet_to_workbook(result, template_wb, "IO List")
+            out_bytes = _append_sheet_to_workbook(result, template_wb, "IO List", before_save=_summary_step)
         else:
             out_bytes = _build_formatted_list(result, "Sheet1")
+            if mode == WITH_SUMMARY:
+                wb = openpyxl.load_workbook(io.BytesIO(out_bytes))
+                _summary_step(wb)
+                buf = io.BytesIO()
+                wb.save(buf)
+                out_bytes = buf.getvalue()
         return out_bytes, "IO_List.xlsx", None
     except Exception as e:
         return None, None, f"I/O List generation failed: {e}"
@@ -116,6 +138,7 @@ def _append_sheet_to_workbook(
     df: pd.DataFrame,
     wb: openpyxl.Workbook,
     sheet_name: str,
+    before_save=None,
 ) -> bytes:
     """
     Append `df` as a formatted sheet at the end of an existing openpyxl Workbook.
@@ -153,6 +176,9 @@ def _append_sheet_to_workbook(
     # Auto-fit column widths
     for col_idx, width in col_widths.items():
         ws.column_dimensions[get_column_letter(col_idx)].width = min(max(width + 4, 10), 60)
+
+    if before_save is not None:
+        before_save(wb)          # optional last step (e.g. the I/O Summary sheet) before serialising
 
     buf = io.BytesIO()
     wb.save(buf)
@@ -489,9 +515,15 @@ def generate_cable_schedule(
     progress_callback=None,
     template_bytes: bytes = None,
     iodb_bytes: bytes = None,
+    output_mode: str = "WITH_SUMMARY",
 ) -> tuple[bytes | None, str | None, str | None]:
     """
     Generate a Cable Schedule from IODB data using the uploaded template.
+
+    `output_mode` (utils.workbook_assembly): "WITHOUT_SUMMARY" -> every template sheet + the populated
+    Cable Schedule; "WITH_SUMMARY" -> the same + CABLE SUMMARY as the last sheet. (Default WITH_SUMMARY keeps
+    the behaviour before this option existed.) A CABLE SUMMARY sheet inside the template is the designated
+    optional sheet: it is removed in WITHOUT_SUMMARY mode so no stale summary reaches the output.
 
     Logic:
     - Filters IODB rows where JUNCTION BOX has a non-blank value other than "-".
@@ -838,10 +870,11 @@ def generate_cable_schedule(
             # non-fatal
             pass
 
-        # ── Apply full-cell borders to the output workbook's sheets ───────
+        # ── Apply full-cell borders to the generated schedule sheet ONLY ───
+        # (the template's other sheets - cover, document control, ... - stay exactly as supplied)
         thin = Side(border_style="thin", color="000000")
         full_border = Border(left=thin, right=thin, top=thin, bottom=thin)
-        for sheet in out_wb.worksheets:
+        for sheet in (out_ws,):
             max_r = sheet.max_row or 1
             max_c = sheet.max_column or 1
             for r in range(1, max_r + 1):
@@ -853,27 +886,35 @@ def generate_cable_schedule(
                     except Exception:
                         continue
 
-        # ── CABLE SUMMARY: quantities per cable type, appended as the LAST sheet ──
+        # ── CABLE SUMMARY: optional last sheet (only in WITH_SUMMARY mode) ──
         # Separate from the schedule logic above; a failure here never blocks the schedule.
-        try:
-            from utils.cable_summary import (build_cable_summary, append_cable_summary_sheet,
-                                             locate_cable_source, formula_hint_for)
-            _src_df, _info = locate_cable_source(df, iodb_bytes, tag_column)
-            _summary = build_cable_summary(_src_df, tag_column)
-            if _info:
-                _summary.source = {"sheet": _info["sheet"], "header_row": _info["header_row"],
-                                   "columns": _info["columns"]}
-                if not _summary.rows and iodb_bytes:
-                    _summary.formula_hint = formula_hint_for(iodb_bytes, _info)
-            append_cable_summary_sheet(out_wb, _summary)
-            import sys
-            for _line in _summary.log_lines():
-                print(_line, file=sys.stderr)
-        except Exception as _exc:
-            import sys
-            print(f"[Cable Summary] not added: {_exc}", file=sys.stderr)
+        from utils.workbook_assembly import WITH_SUMMARY, normalize_mode, drop_sheet
+        from utils.cable_summary import CABLE_SUMMARY_SHEET
+        if normalize_mode(output_mode) == WITH_SUMMARY:
+            try:
+                from utils.cable_summary import (build_cable_summary, append_cable_summary_sheet,
+                                                 locate_cable_source, formula_hint_for)
+                _src_df, _info = locate_cable_source(df, iodb_bytes, tag_column)
+                _summary = build_cable_summary(_src_df, tag_column)
+                if _info:
+                    _summary.source = {"sheet": _info["sheet"], "header_row": _info["header_row"],
+                                       "columns": _info["columns"]}
+                    if not _summary.rows and iodb_bytes:
+                        _summary.formula_hint = formula_hint_for(iodb_bytes, _info)
+                append_cable_summary_sheet(out_wb, _summary)
+                import sys
+                for _line in _summary.log_lines():
+                    print(_line, file=sys.stderr)
+            except Exception as _exc:
+                import sys
+                print(f"[Cable Summary] not added: {_exc}", file=sys.stderr)
+        else:
+            drop_sheet(out_wb, CABLE_SUMMARY_SHEET)        # no stale / template summary in the output
 
         out_bytes = workbook_to_bytes(out_wb)
+        if template_bytes:      # put back drawings (logos, grouped pictures) that openpyxl cannot round-trip
+            from utils.workbook_assembly import restore_template_fidelity
+            out_bytes = restore_template_fidelity(out_bytes, template_bytes, list(out_wb.sheetnames))
         if tag_warnings:
             import sys
             for w in tag_warnings:

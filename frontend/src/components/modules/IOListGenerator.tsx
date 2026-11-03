@@ -13,6 +13,7 @@ import Alert from '../ui/Alert';
 import MultiSelect from '../ui/MultiSelect';
 import FileUploadCard from '../ui/FileUploadCard';
 import ListDefaultsNotice, { filterValueOf, type ListDefaults } from '../ui/ListDefaultsNotice';
+import OutputWorkbookOptions, { type OutputMode } from '../ui/OutputWorkbookOptions';
 
 interface AnalyzeResponse {
   columns: string[];
@@ -25,11 +26,15 @@ interface AnalyzeResponse {
 interface GenerateResponse {
   filename: string;
   message: string;
+  output_mode?: OutputMode;
+  sheets?: string[];   // sheets of the generated workbook, read from the output file
 }
 
 export default function IOListGenerator() {
   const [iodbFile, setIodbFile] = useState<File | null>(null);
-  const [templateFile, setTemplateFile] = useState<File | null>(null);
+  const [templateFile, setTemplateFileState] = useState<File | null>(null);
+  // Explicit output state - drives the preview, the generated workbook and the download.
+  const [ioListOutputMode, setIoListOutputMode] = useState<OutputMode>('WITHOUT_SUMMARY');
   const [analysis, setAnalysis] = useState<AnalyzeResponse | null>(null);
   const [selectedColumns, setSelectedColumns] = useState<string[]>([]);
   const [filters, setFilters] = useState<Record<string, string[]>>({});
@@ -42,6 +47,10 @@ export default function IOListGenerator() {
   const [generating, setGenerating] = useState(false);
   const [result, setResult] = useState<GenerateResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // A result belongs to one template + one mode: changing either clears it so the download always matches the preview.
+  const setTemplateFile = (f: File | null) => { setTemplateFileState(f); setResult(null); };
+  const changeOutputMode = (m: OutputMode) => { setIoListOutputMode(m); setResult(null); };
 
   const handleAnalyze = async () => {
     if (!iodbFile) return;
@@ -80,6 +89,7 @@ export default function IOListGenerator() {
     if (templateFile) formData.append('template_file', templateFile);
     formData.append('selected_columns', JSON.stringify(selectedColumns));
     formData.append('filters', JSON.stringify(filters));
+    formData.append('output_mode', ioListOutputMode);
 
     try {
       const response = await api.post<GenerateResponse>('/io-list/generate', formData, {
@@ -183,6 +193,16 @@ export default function IOListGenerator() {
           hint="If omitted, a default formatted I/O list will be generated."
         />
       </div>
+
+      <OutputWorkbookOptions
+        endpoint="/io-list/composition"
+        templateFile={templateFile}
+        mode={ioListOutputMode}
+        onModeChange={changeOutputMode}
+        summaryLabel="I/O Summary"
+        listLabel="I/O List"
+        noTemplateNote="default formatted sheet"
+      />
 
       {/* Column Selection & Filters */}
       {analysis && (
@@ -332,7 +352,12 @@ export default function IOListGenerator() {
             <CheckCircle2 className="w-12 h-12 text-green-500 flex-shrink-0" />
             <div className="flex-1">
               <h3 className="text-xl font-bold text-green-800 mb-2">I/O List Generated!</h3>
-              <p className="text-green-700 mb-4">{result.message}</p>
+              <p className="text-green-700 mb-2">{result.message}</p>
+              {result.sheets && (
+                <p className="text-sm text-green-800 mb-4">
+                  Workbook sheets: {result.sheets.join(' · ')}
+                </p>
+              )}
               <Button onClick={handleDownload} className="bg-green-600 hover:bg-green-700">
                 <Download className="w-5 h-5" />
                 Download {result.filename}

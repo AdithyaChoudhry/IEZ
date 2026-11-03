@@ -33,6 +33,7 @@ from .routers.idc import router as idc_router
 from .routers.idc_ws import router as idc_ws_router
 from .routers.projects import router as projects_router
 from .routers.coversheet_mdl import router as coversheet_mdl_router
+from .routers.coversheet_template import router as coversheet_template_router
 from .routers.loop_wiring_test import router as loop_wiring_test_router
 from .routers.shared_iodb import router as shared_iodb_router
 from .routers.loop_wiring_assignment import router as loop_wiring_assignment_router
@@ -108,6 +109,7 @@ app.include_router(idc_router, prefix="/api")
 app.include_router(idc_ws_router, prefix="/api")
 app.include_router(projects_router, prefix="/api")
 app.include_router(coversheet_mdl_router, prefix="/api")
+app.include_router(coversheet_template_router, prefix="/api")
 app.include_router(loop_wiring_test_router, prefix="/api")
 app.include_router(shared_iodb_router, prefix="/api")
 app.include_router(loop_wiring_assignment_router, prefix="/api")

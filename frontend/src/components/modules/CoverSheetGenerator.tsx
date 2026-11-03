@@ -23,6 +23,7 @@ import type {
 import PageHeader from '../ui/PageHeader';
 import ConnectedDocuments, { type DocInfo } from './coversheet/ConnectedDocuments';
 import MdlSelector, { type MdlSelection, type MdlSummary } from './coversheet/MdlSelector';
+import TemplateCoverSheet from './coversheet/TemplateCoverSheet';
 import { getCurrentProject } from '@/services/projectContext';
 import Button from '../ui/Button';
 import Alert from '../ui/Alert';
@@ -317,6 +318,8 @@ function CSRaiseRequestModal({
 
 // ── Main Component ─────────────────────────────────────────────────────────────
 export default function CoverSheetGenerator() {
+  // 'existing' = the standard iEZ workflow (default, unchanged); 'template' = use an uploaded Excel coversheet.
+  const [mode, setMode] = useState<'existing' | 'template'>('existing');
   const [projectInfo, setProjectInfo] = useState<ProjectInfo>(emptyProjectInfo);
   const [revisions, setRevisions] = useState<RevisionEntry[]>([emptyRevision()]);
   const setPI = (k: keyof ProjectInfo, v: string) => setProjectInfo(p => ({ ...p, [k]: v }));
@@ -547,7 +550,7 @@ export default function CoverSheetGenerator() {
   const handleAuthSuccess = (ai: AuthInfo) => {
     setAuthInfo(ai);
     setShowAuthModal(false);
-    doGenerate(ai);
+    if (mode === 'existing') doGenerate(ai);      // the uploaded-template workflow generates itself once authorised
   };
 
   const doGenerate = async (ai: AuthInfo) => {
@@ -572,6 +575,38 @@ export default function CoverSheetGenerator() {
     } catch { setError('Download failed'); }
   };
 
+  const modeSelector = (
+    <div className="flex flex-wrap gap-2" role="radiogroup" aria-label="Coversheet workflow">
+      {([['existing', 'Existing iEZ Coversheet Workflow'], ['template', 'Use Uploaded Excel Coversheet Template']] as const).map(([k, label]) => (
+        <button key={k} role="radio" aria-checked={mode === k} onClick={() => setMode(k)}
+          className="px-4 py-2 rounded-xl text-sm font-semibold"
+          style={mode === k
+            ? { background: 'var(--em-dim)', color: 'var(--em-lt)', border: '1px solid rgba(59,130,246,0.35)' }
+            : { background: 'var(--s2)', color: 'var(--t2)', border: '1px solid var(--b1)' }}>
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+
+  if (mode === 'template') {
+    return (
+      <div className="p-6 max-w-6xl mx-auto space-y-5">
+        <PageHeader icon={FileSpreadsheet} title="Cover Sheet Generator"
+          description="Your Excel coversheet defines how it looks · the MDL defines which document · you supply revision, date and sign-off" />
+        {modeSelector}
+        <Section title="Master Document List"
+          subtitle="Upload the project MDL - documents are selected from it below"
+          defaultOpen={!mdlActive}
+          badge={mdlInvalid ? 'Invalid MDL' : mdlActive ? `${mdlSummary?.document_count ?? ''} documents` : 'Not uploaded'}>
+          <MdlSelector selected={mdlSelection} onSelect={setMdlSelection} onSummary={setMdlSummary} onInvalid={setMdlInvalid} />
+        </Section>
+        <TemplateCoverSheet authorized={!!authInfo} requestAuth={() => setShowAuthModal(true)} mdlActive={!!mdlActive && !mdlInvalid} />
+        {showAuthModal && <AdminVerifyModal onSuccess={handleAuthSuccess} onClose={() => setShowAuthModal(false)} />}
+      </div>
+    );
+  }
+
   return (
     <div className="p-6 max-w-6xl mx-auto space-y-5">
       {/* ── Top bar with header + Upload MDL ── */}
@@ -583,6 +618,8 @@ export default function CoverSheetGenerator() {
         </div>
 
       </div>
+
+      {modeSelector}
 
       {error && <Alert variant="error" onClose={() => setError(null)}>{error}</Alert>}
 

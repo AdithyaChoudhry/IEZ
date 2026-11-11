@@ -203,9 +203,13 @@ def process_cable_schedule(
     tag_column: str = "TAG NO",
     progress_callback=None,
     output_mode: str = "WITH_SUMMARY",
+    extra_sheets: list | None = None,
+    extra_report: dict | None = None,
+    include_schedule: bool = True,
 ) -> tuple[bytes | None, str | None, str | None]:
     """
     Full pipeline: read IODB + template → generate cable schedule.
+    `extra_sheets`: optional MCC DI / MCC DO / VFD / MOV / LCP sheet keys (see utils.cable_schedule_extra).
     `output_mode`: "WITHOUT_SUMMARY" (template sheets + Cable Schedule) or "WITH_SUMMARY" (+ Cable Summary).
 
     The template is loaded twice:
@@ -246,6 +250,7 @@ def process_cable_schedule(
     return generate_cable_schedule(
         df, wb, jb_column, tag_column, progress_callback,
         template_bytes=tmpl_bytes, iodb_bytes=iodb_raw, output_mode=output_mode,
+        extra_sheets=extra_sheets, extra_report=extra_report, include_schedule=include_schedule,
     )
 
 

@@ -516,9 +516,18 @@ def generate_cable_schedule(
     template_bytes: bytes = None,
     iodb_bytes: bytes = None,
     output_mode: str = "WITH_SUMMARY",
+    extra_sheets: list | None = None,
+    extra_report: dict | None = None,
+    include_schedule: bool = True,
 ) -> tuple[bytes | None, str | None, str | None]:
     """
     Generate a Cable Schedule from IODB data using the uploaded template.
+
+    `extra_sheets` (optional, default None = exactly the behaviour before it existed): keys of the additional
+    MCC DI / MCC DO / VFD / MOV / LCP sheets (utils.cable_schedule_extra) added after the schedule sheet.
+    `extra_report` is filled with their statistics and warnings.
+    `include_schedule=False` (only with extra sheets): the Instrument Cable Schedule itself is not generated and
+    its sheet is left out of the output.
 
     `output_mode` (utils.workbook_assembly): "WITHOUT_SUMMARY" -> every template sheet + the populated
     Cable Schedule; "WITH_SUMMARY" -> the same + CABLE SUMMARY as the last sheet. (Default WITH_SUMMARY keeps
@@ -553,6 +562,9 @@ def generate_cable_schedule(
         (None, None, error_string) on failure
     """
     try:
+        if extra_sheets and not include_schedule:
+            # extra sheets only: the schedule is not built, so its JB / tag columns are not needed
+            df = df.assign(**{c: None for c in (jb_column, tag_column) if c and c not in df.columns})
         # ── Locate cable schedule sheet ──────────────────────────────────────
         target_sheet = _find_cs_sheet(template_wb)
         if target_sheet is None:
@@ -652,7 +664,7 @@ def generate_cable_schedule(
         # ── Filter IODB: keep rows where JB has a real value (not "" or "-") ─
         jb_str  = df[jb_column].astype(str).str.strip()
         valid   = df[jb_column].notna() & (jb_str != "") & (jb_str != "-")
-        if not valid.any():
+        if not valid.any() and not (extra_sheets and not include_schedule):
             return None, None, (
                 f"No rows found in IODB where '{jb_column}' has a "
                 f"value other than blank or '-'."
@@ -886,6 +898,17 @@ def generate_cable_schedule(
                     except Exception:
                         continue
 
+        # ── optional MCC DI / MCC DO / VFD / MOV / LCP sheets (additive; nothing above is changed) ──
+        redundant_rows: set = set()
+        if extra_sheets:
+            from utils.cable_schedule_extra import add_extra_sheets, redundant_main_cable_rows
+            _report = add_extra_sheets(out_wb, df, list(extra_sheets), target_sheet, list(template_wb.sheetnames))
+            redundant_rows = redundant_main_cable_rows(df, list(extra_sheets))
+            if extra_report is not None:
+                extra_report.update(_report)
+        if extra_sheets and not include_schedule:
+            del out_wb[target_sheet]
+
         # ── CABLE SUMMARY: optional last sheet (only in WITH_SUMMARY mode) ──
         # Separate from the schedule logic above; a failure here never blocks the schedule.
         from utils.workbook_assembly import WITH_SUMMARY, normalize_mode, drop_sheet
@@ -895,6 +918,12 @@ def generate_cable_schedule(
                 from utils.cable_summary import (build_cable_summary, append_cable_summary_sheet,
                                                  locate_cable_source, formula_hint_for)
                 _src_df, _info = locate_cable_source(df, iodb_bytes, tag_column)
+                if redundant_rows:      # a main cable shared by several signal rows is one physical cable
+                    from utils.cable_summary import resolve_cable_fields
+                    _mt = resolve_cable_fields(_src_df.columns)["MAIN_CABLE_TYPE"]
+                    if _mt:
+                        _src_df = _src_df.copy()
+                        _src_df.loc[[int(i) + 2 in redundant_rows for i in _src_df.index], _mt] = None
                 _summary = build_cable_summary(_src_df, tag_column)
                 if _info:
                     _summary.source = {"sheet": _info["sheet"], "header_row": _info["header_row"],
@@ -914,7 +943,9 @@ def generate_cable_schedule(
         out_bytes = workbook_to_bytes(out_wb)
         if template_bytes:      # put back drawings (logos, grouped pictures) that openpyxl cannot round-trip
             from utils.workbook_assembly import restore_template_fidelity
-            out_bytes = restore_template_fidelity(out_bytes, template_bytes, list(out_wb.sheetnames))
+            _added = set((extra_report or {}).get("sheets", []))
+            out_bytes = restore_template_fidelity(out_bytes, template_bytes,
+                                                  [n for n in out_wb.sheetnames if n not in _added])
         if tag_warnings:
             import sys
             for w in tag_warnings:
@@ -922,6 +953,9 @@ def generate_cable_schedule(
         return out_bytes, "Cable_Schedule.xlsx", None
 
     except Exception as e:
+        from utils.cable_schedule_extra import ExtraSheetError
+        if isinstance(e, ExtraSheetError):
+            return None, None, str(e)
         return None, None, f"Cable Schedule generation failed: {e}"
 
 

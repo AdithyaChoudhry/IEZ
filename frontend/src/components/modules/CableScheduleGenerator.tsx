@@ -13,6 +13,7 @@ import Alert from '../ui/Alert';
 import FileUploadCard from '../ui/FileUploadCard';
 import SharedIodbCard from '../ui/SharedIodb';
 import OutputWorkbookOptions, { type OutputMode } from '../ui/OutputWorkbookOptions';
+import ExtraCableSheets from './cableschedule/ExtraCableSheets';
 
 interface ColumnsResponse {
   columns: string[];
@@ -32,6 +33,8 @@ interface GenerateResponse {
   message: string;
   output_mode?: OutputMode;
   sheets?: string[];   // sheets of the generated workbook, read from the output file
+  extra_sheets?: string[] | null;
+  extra_warnings?: string[] | null;
 }
 
 export default function CableScheduleGenerator() {
@@ -44,6 +47,9 @@ export default function CableScheduleGenerator() {
   const [tagColumn, setTagColumn] = useState('');
   const [jbSummary, setJbSummary] = useState<JBSummaryRow[] | null>(null);
   const [result, setResult] = useState<GenerateResponse | null>(null);
+  // Instrument Cable Schedule group: the schedule (default on) + optional MCC DI / MCC DO / VFD / MOV / LCP sheets
+  const [includeSchedule, setIncludeSchedule] = useState(true);
+  const [extraSheets, setExtraSheets] = useState<string[]>([]);
 
   const [loadingColumns, setLoadingColumns] = useState(false);
   const [loadingPreview, setLoadingPreview] = useState(false);
@@ -107,9 +113,14 @@ export default function CableScheduleGenerator() {
   // A result belongs to one template + one mode: changing either clears it so the download always matches the preview.
   const setTemplateFile = (f: File | null) => { setTemplateFileState(f); setResult(null); };
   const changeOutputMode = (m: OutputMode) => { setCableOutputMode(m); setResult(null); };
+  const changeExtraSheets = (labels: string[]) => { setExtraSheets(labels); setResult(null); };
+  const changeIncludeSchedule = (v: boolean) => { setIncludeSchedule(v); setResult(null); };
+  const extraOnly = !includeSchedule && extraSheets.length > 0;
 
   const handleGenerate = async () => {
-    if (!iodbFile || !templateFile || !jbColumn || !tagColumn) return;
+    if (!iodbFile || !templateFile) return;
+    if (includeSchedule && (!jbColumn || !tagColumn)) return;
+    if (!includeSchedule && extraSheets.length === 0) return;
     setGenerating(true);
     setError(null);
 
@@ -118,6 +129,9 @@ export default function CableScheduleGenerator() {
     formData.append('template_file', templateFile);
     formData.append('jb_column', jbColumn);
     formData.append('tag_column', tagColumn);
+    formData.append('output_mode', cableOutputMode);
+    formData.append('extra_sheets', extraSheets.join(','));
+    formData.append('include_schedule', String(includeSchedule));
 
     try {
       const response = await api.post<GenerateResponse>('/cable-schedule/generate', formData, {
@@ -187,6 +201,14 @@ export default function CableScheduleGenerator() {
         />
       </div>
 
+      <ExtraCableSheets
+        iodbFile={iodbFile}
+        includeSchedule={includeSchedule}
+        onIncludeScheduleChange={changeIncludeSchedule}
+        selected={extraSheets}
+        onSelectedChange={changeExtraSheets}
+      />
+
       {templateFile && (
         <OutputWorkbookOptions
           endpoint="/cable-schedule/composition"
@@ -195,11 +217,22 @@ export default function CableScheduleGenerator() {
           onModeChange={changeOutputMode}
           summaryLabel="Cable Summary"
           listLabel="Cable Schedule"
+          extraFields={{ extra_sheets: extraSheets.join(','), include_schedule: String(includeSchedule) }}
         />
       )}
 
+      {extraOnly && (
+        <Card title="Generate">
+          <Button onClick={handleGenerate} disabled={!templateFile || !iodbFile} loading={generating} size="lg" fullWidth className="text-lg py-4">
+            <Cable className="w-6 h-6" />
+            {generating ? 'Generating...' : `Generate ${extraSheets.join(' + ')}`}
+          </Button>
+          {!templateFile && <p className="text-sm text-gray-500 mt-2 text-center">Upload a Cable Schedule template above to enable generation.</p>}
+        </Card>
+      )}
+
       {/* JB/Tag Column mapping */}
-      {columns.length > 0 && (
+      {includeSchedule && columns.length > 0 && (
         <Card title="Junction Box & Tag Column Mapping">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
@@ -242,7 +275,7 @@ export default function CableScheduleGenerator() {
       )}
 
       {/* JB Summary */}
-      {jbSummary && (
+      {includeSchedule && jbSummary && (
         <Card title={`Junction Box Summary (${jbSummary.length} JBs, ${totalTags} tags)`}>
           <div className="border border-gray-200 rounded-lg overflow-auto max-h-96">
             <table className="w-full text-sm">
@@ -293,6 +326,11 @@ export default function CableScheduleGenerator() {
                 <p className="text-sm text-green-800 mb-4">
                   Workbook sheets: {result.sheets.join(' · ')}
                 </p>
+              )}
+              {result.extra_warnings && result.extra_warnings.length > 0 && (
+                <ul className="text-sm text-amber-700 mb-4 list-disc ml-5">
+                  {result.extra_warnings.map((w, i) => <li key={i}>{w}</li>)}
+                </ul>
               )}
               <Button onClick={handleDownload} className="bg-green-600 hover:bg-green-700">
                 <Download className="w-5 h-5" />

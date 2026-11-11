@@ -20,12 +20,16 @@ class CableScheduleGenerateResponse(BaseModel):
     registry: Optional[Dict[str, Any]] = None
     output_mode: Optional[str] = None
     sheets: Optional[List[str]] = None
+    # MCC DI / MCC DO / VFD / MOV / LCP sheets added to the workbook (empty when none were selected)
+    extra_sheets: Optional[List[str]] = None
+    extra_stats: Optional[List[Dict[str, Any]]] = None
+    extra_warnings: Optional[List[str]] = None
 
 
 class CompositionSheet(BaseModel):
     name: str
     hidden: bool = False
-    kind: str                      # "template" | "generated" | "summary"
+    kind: str                      # "template" | "generated" | "summary" | "extra"
 
 
 class CompositionResponse(BaseModel):

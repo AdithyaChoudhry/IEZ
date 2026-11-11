@@ -15,7 +15,7 @@ export type OutputMode = 'WITHOUT_SUMMARY' | 'WITH_SUMMARY';
 interface CompositionSheet {
   name: string;
   hidden: boolean;
-  kind: 'template' | 'generated' | 'summary';
+  kind: 'template' | 'generated' | 'summary' | 'extra';
 }
 
 interface Props {
@@ -30,9 +30,11 @@ interface Props {
   listLabel: string;
   /** Shown when no template is uploaded (I/O List only). */
   noTemplateNote?: string;
+  /** Extra form fields sent to the composition endpoint (Cable Schedule: selected extra sheets). */
+  extraFields?: Record<string, string>;
 }
 
-export default function OutputWorkbookOptions({ endpoint, templateFile, mode, onModeChange, summaryLabel, listLabel, noTemplateNote }: Props) {
+export default function OutputWorkbookOptions({ endpoint, templateFile, mode, onModeChange, summaryLabel, listLabel, noTemplateNote, extraFields }: Props) {
   const [sheets, setSheets] = useState<CompositionSheet[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -44,13 +46,14 @@ export default function OutputWorkbookOptions({ endpoint, templateFile, mode, on
     const form = new FormData();
     if (templateFile) form.append('template_file', templateFile);
     form.append('output_mode', mode);
+    Object.entries(extraFields || {}).forEach(([k, v]) => form.append(k, v));
     api
       .post<{ sheets: CompositionSheet[] }>(endpoint, form, { headers: { 'Content-Type': 'multipart/form-data' } })
       .then((r) => { if (!cancelled) setSheets(r.data.sheets); })
       .catch((e) => { if (!cancelled) { setSheets(null); setError(e.response?.data?.detail || 'Could not read the template sheets'); } })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [endpoint, templateFile, mode]);
+  }, [endpoint, templateFile, mode, JSON.stringify(extraFields || {})]);
 
   const option = (value: OutputMode, title: string, text: string) => (
     <label
@@ -88,6 +91,7 @@ export default function OutputWorkbookOptions({ endpoint, templateFile, mode, on
                 {s.kind === 'template' && <span className="text-xs" style={{ color: 'var(--t2)' }}>template sheet</span>}
                 {s.kind === 'generated' && <span className="text-xs text-blue-500">generated</span>}
                 {s.kind === 'summary' && <span className="text-xs text-blue-500">generated</span>}
+                {s.kind === 'extra' && <span className="text-xs text-blue-500">generated</span>}
                 {s.hidden && <span className="flex items-center gap-1 text-xs" style={{ color: 'var(--t2)' }}><EyeOff className="w-3 h-3" />hidden in template</span>}
               </li>
             ))}

@@ -19,6 +19,7 @@ from .routers.io_list import router as io_list_router
 from .routers.process_data import router as process_data_router
 from .routers.cable_schedule import router as cable_schedule_router
 from .routers.drum_schedule import router as drum_schedule_router
+from .routers.gland_quantity import router as gland_quantity_router
 from .routers.loop_wiring import router as loop_wiring_router
 from .routers.sdie import router as sdie_router
 from .routers.sop_datasheet import router as sop_datasheet_router
@@ -96,6 +97,7 @@ app.include_router(io_list_router, prefix="/api")
 app.include_router(process_data_router, prefix="/api")
 app.include_router(cable_schedule_router, prefix="/api")
 app.include_router(drum_schedule_router, prefix="/api")
+app.include_router(gland_quantity_router, prefix="/api")
 app.include_router(loop_wiring_router, prefix="/api")
 app.include_router(sdie_router, prefix="/api")
 app.include_router(sop_datasheet_router, prefix="/api")

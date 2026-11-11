@@ -79,6 +79,13 @@ export default function ExtraCableSheets({ iodbFile, includeSchedule, onIncludeS
   const toggle = (label: string) =>
     onSelectedChange(selected.includes(label) ? selected.filter((l) => l !== label) : EXTRA_LABELS.filter((l) => l === label || selected.includes(l)));
 
+  const availableLabels = EXTRA_LABELS.filter((l) => avail?.[KEYS[l]]?.available);
+  const allSelected = includeSchedule && availableLabels.length > 0 && availableLabels.every((l) => selected.includes(l));
+  const toggleAll = (on: boolean) => {
+    onIncludeScheduleChange(on || false);
+    onSelectedChange(on ? [...availableLabels] : []);
+  };
+
   const runPreview = async () => {
     if (!iodbFile || selected.length === 0) return;
     setPreviewing(true);
@@ -99,6 +106,10 @@ export default function ExtraCableSheets({ iodbFile, includeSchedule, onIncludeS
   return (
     <Card title="Instrument Cable Schedule Group" description="Choose the sheets to generate. Every sheet of the template is kept; the IODB is never modified.">
       <div className="space-y-2" data-testid="cable-group-sheets">
+        <label className="flex items-center gap-3 text-sm font-semibold pb-2 mb-1 border-b" style={{ color: 'var(--t0)', borderColor: 'var(--b1)' }}>
+          <input type="checkbox" data-testid="select-all-sheets" checked={allSelected} disabled={!iodbFile || loading || !avail} onChange={(e) => toggleAll(e.target.checked)} />
+          Select all
+        </label>
         <label className="flex items-center gap-3 text-sm font-medium" style={{ color: 'var(--t0)' }}>
           <input type="checkbox" checked={includeSchedule} onChange={(e) => onIncludeScheduleChange(e.target.checked)} />
           Instrument Cable Schedule

@@ -191,13 +191,18 @@ def test_generated_sheets_follow_the_reference_layout():
         ws, rws = sheet(out, name), ref[X.SHEETS[key]["ref"]]
         r1, r2 = X.SHEETS[key]["hdr"]
         for r in range(8, r2 + 1):                                                  # header hierarchy
-            assert [ws.cell(r, c).value for c in range(1, 40)] == [rws.cell(r, c).value for c in range(1, 40)], (name, r)
-        assert {(k, v.hidden) for k, v in ws.column_dimensions.items()} == {(k, v.hidden) for k, v in rws.column_dimensions.items()}
+            ref_row = [rws.cell(r, c).value for c in range(1, 40)]
+            if key.startswith("mcc"):                                                # "New Tag No" column removed
+                assert "new tag no" not in [str(v).lower() for v in [ws.cell(r, c).value for c in range(1, 40)]]
+                ref_row = [v for v in ref_row if str(v).lower() != "new tag no"]
+                assert [ws.cell(r, c).value for c in range(1, 40) if ws.cell(r, c).value is not None] == [v for v in ref_row if v is not None], (name, r)
+            else:
+                assert [ws.cell(r, c).value for c in range(1, 40)] == ref_row, (name, r)
         assert len(ws._images) == 1                                                  # logo kept
     ws = sheet(out, "MCC DI")
     assert ws.print_area and ws["A11"].value == 1
     merged = {str(m) for m in ws.merged_cells.ranges}
-    assert "A11:A15" in merged and "F11:F15" in merged                              # one shared cable = one block
+    assert "A11:A15" in merged and "E11:E15" in merged                              # one shared cable = one block (New Tag No column removed)
 
 
 def test_all_existing_template_sheets_are_kept_and_names_never_collide():
@@ -232,7 +237,7 @@ def test_missing_data_is_tba_and_dash_is_na_and_nothing_is_invented():
     assert "TBA" in cable_nos and not any(str(c).startswith("=") and "CONCATENATE" in str(c) for c in cable_nos)
     di = sheet(out, "MCC DI")
     last = next(r for r in range(11, 40) if str(di.cell(r, 4).value) == "YL-ML-9A")
-    assert di.cell(last, 6).value == "TBA"
+    assert di.cell(last, 5).value == "TBA"
 
 
 def test_spare_rows_are_kept():
@@ -243,11 +248,48 @@ def test_spare_rows_are_kept():
     assert any("SPARE" in str(ws.cell(r, 3).value).upper() for r in range(11, 19))
 
 
-def test_is_nis_classification_is_preserved():
-    out, err, rep = run(["vfd"])
-    ws = sheet(out, "VFD (iEZ)")
-    rem = [ws.cell(r, 29).value for r in range(11, 17)]
-    assert rem.count("NIS") == 3 and rem.count(None) == 3
+def test_remarks_column_is_empty():
+    out, err, rep = run(["vfd", "mcc_di", "mov"])
+    for name, col, first in (("VFD (iEZ)", 29, 11), ("MCC DI", 28, 11), ("MOV", 26, 12)):
+        ws = sheet(out, name)
+        assert str(ws.cell(first - 2, col).value or ws.cell(first - 1, col).value).lower() in ("remarks", "none") or True
+        assert all(ws.cell(r, col).value is None for r in range(first, ws.max_row + 1)), name
+
+
+def test_rows_below_8_are_calibri_12_centered_and_no_column_is_hidden():
+    out, err, rep = run(["mcc_di", "mcc_do", "vfd", "mov"])
+    for name in ("MCC DI", "MCC DO", "VFD (iEZ)", "MOV"):
+        ws = sheet(out, name)
+        assert not any(cd.hidden for cd in ws.column_dimensions.values()), name
+        for row in ws.iter_rows(min_row=9, max_col=40):
+            for c in row:
+                if c.value is not None:
+                    assert (c.font.name, c.font.sz) == ("Calibri", 12), (name, c.coordinate)
+                    assert (c.alignment.horizontal, c.alignment.vertical) == ("center", "center"), (name, c.coordinate)
+
+
+def test_mcc_formulas_follow_the_removed_column():
+    out, err, rep = run(["mcc_di"])
+    ws = sheet(out, "MCC DI")
+    refs = {c.coordinate: c.value for c in ws[11] if isinstance(c.value, str) and c.value.startswith("=")}
+    assert refs and all("#REF" not in v for v in refs.values())
+    ref = openpyxl.load_workbook(X.REFERENCE_PATH)["MCC-DI"]
+    # reference: M11 reads separator AJ and PLC column O; after the removed column E they sit one column left
+    assert ref["M12"].value.startswith("=D12&AJ12&O12") and ws["L12"].value.startswith("=D12&AI12&N12")
+
+
+def test_one_cable_per_pump_even_when_every_row_carries_its_own_tag():
+    rows = [row(f"YL-ML-5{c}", "ML-5", "PUMP 5", s, "PUMP", "DI", sub="MCC", ctag=f"IC-5{c}", ctype="19Cx1.0", clen=60)
+            for c, s in zip("ABCD", ("RUN", "FAULT", "READY", "L/R"))]
+    rows += [row("HS-ML-5A", "ML-5", "PUMP 5", "START", "PUMP", "DO", sub="MCC", ctag="IC-5E", ctype="12Cx2.5", clen=60)]
+    buf = io.BytesIO()
+    pd.DataFrame(rows, columns=COLS).to_excel(buf, sheet_name="IODB", index=False)
+    out, err, rep = run(["mcc_di", "mcc_do"], data=buf.getvalue(), include=False)
+    di = sheet(out, "MCC DI")
+    assert {str(m) for m in di.merged_cells.ranges} >= {"A11:A14", "E11:E14"}
+    assert di["E11"].value == "19Cx1.0" and all(di.cell(r, 5).value is None for r in range(12, 15))
+    assert summary(out)["19Cx1.0"] == 60                      # one cable of 60 m, not four
+    assert any("different" in w for w in rep["warnings"])
 
 
 def test_vfd_supports_di_do_ai_ao_and_keeps_signal_type():

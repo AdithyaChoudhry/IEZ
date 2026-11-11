@@ -28,8 +28,8 @@ from typing import Any, Optional
 
 import openpyxl
 from openpyxl.drawing.image import Image as XlImage
-from openpyxl.styles import Border, Side
-from openpyxl.utils import get_column_letter
+from openpyxl.styles import Alignment, Border, Font, Side
+from openpyxl.utils import column_index_from_string, get_column_letter
 
 from .cable_summary import _norm_col, parse_length, resolve_cable_fields
 
@@ -309,9 +309,8 @@ def plan_blocks(key: str, recs: list[Rec]) -> list[Block]:
     for i, r in enumerate(recs):
         tag = None if is_missing(r.main_cable_tag) else r.main_cable_tag.upper()
         if tag:
-            union(i, by_tag.setdefault(tag, i))
-        if spec["by_device"] or not tag:
-            union(i, by_dev.setdefault(device_key(r), i))
+            union(i, by_tag.setdefault(tag, i))          # a cable shared by several devices keeps them in one block
+        union(i, by_dev.setdefault(device_key(r), i))    # all signals of one pump / drive / MOV are one block
     comp: "OrderedDict[int, list[int]]" = OrderedDict()
     for i in range(n):
         comp.setdefault(find(i), []).append(i)
@@ -321,7 +320,11 @@ def plan_blocks(key: str, recs: list[Rec]) -> list[Block]:
         rs = [recs[i] for i in members]
         groups: "OrderedDict[str, list[Rec]]" = OrderedDict()
         for r in rs:
-            if not is_missing(r.main_cable_tag):
+            # rows of the same cable type in one block are ONE cable laid to the equipment (Digha reference), whatever
+            # their individual tag cells say; the cable is shown once and the cells are merged
+            if not is_missing(r.main_cable_type):
+                gk = "Y:" + re.sub(r"\s+", "", r.main_cable_type.upper())
+            elif not is_missing(r.main_cable_tag):
                 gk = "T:" + r.main_cable_tag.upper()
             elif spec["classes"]:
                 gk = "C:" + device_key(r) + "|" + spec["classes"].get(r.io, r.io)
@@ -512,7 +515,7 @@ def _row_values(key: str, rec: Rec, group: CableGroup) -> dict[str, Any]:
         "cd_panel": show(rec.panel), "cd_drop": show(rec.drop), "cd_rack": show(rec.rack), "cd_slot": show(rec.slot),
         "cd_main_tb": show(rec.terminal_strip), "cd_tb": sig, "cd_card": show(rec.card_no or rec.slot),
         "cd_pos": sig, "cd_neg": show(common),
-        "sigtype": rec.io or "TBA", "remarks": _remarks(rec),
+        "sigtype": rec.io or "TBA", "remarks": None,
         "cd_tb2": show(common),
     }
     return v
@@ -676,6 +679,7 @@ def build_sheet(ref_wb, key: str, recs: list[Rec], info: dict) -> tuple[Any, dic
             ws.cell(rr, c).value = None
     ws.print_area = f"A1:{get_column_letter(_print_last_col(ws, spec))}{last}"
     stats["rows"] = r - first
+    stats["drop_col"] = col("new_tag") if key in ("mcc_di", "mcc_do") else None
     return ws, stats
 
 
@@ -713,27 +717,61 @@ def _fill_title(ws, spec, info: dict):
 
 
 # ── copying the finished sheet into the output workbook ──────────────────────
-def copy_sheet(src, dst_wb, title: str, index: Optional[int] = None):
+UNIFORM_FROM_ROW = 9
+_CENTER = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+
+def _shift_formula(f: str, drop: int) -> str:
+    def sub(m):
+        c = column_index_from_string(m.group(2))
+        return m.group(0) if c <= drop else f"{m.group(1)}{get_column_letter(c - 1)}{m.group(3)}{m.group(4)}"
+    return re.sub(r"(\$?)([A-Z]{1,3})(\$?)(\d+)", sub, f)
+
+
+def copy_sheet(src, dst_wb, title: str, index: Optional[int] = None, drop_col: Optional[int] = None):
+    """Copy `src` into `dst_wb`. drop_col: a column removed from the copy (cells, merges, widths, formulas, picture and
+    print area move left). Rows from UNIFORM_FROM_ROW down are Calibri 12, centred horizontally and vertically; no
+    column is hidden."""
+    def mc(c):                                    # source column -> copy column
+        return c - 1 if drop_col and c > drop_col else c
+
     dst = dst_wb.create_sheet(title=title, index=index)
     for row in src.iter_rows():
         for c in row:
-            if type(c).__name__ == "MergedCell":
+            if type(c).__name__ == "MergedCell" or (drop_col and c.column == drop_col):
                 continue
-            d = dst.cell(c.row, c.column)
-            d.value = c.value
+            d = dst.cell(c.row, mc(c.column))
+            v = c.value
+            d.value = _shift_formula(v, drop_col) if drop_col and isinstance(v, str) and v.startswith("=") else v
             if c.has_style:
                 d.font, d.fill, d.border = copy(c.font), copy(c.fill), copy(c.border)
                 d.alignment, d.number_format, d.protection = copy(c.alignment), c.number_format, copy(c.protection)
+            if c.row >= UNIFORM_FROM_ROW:
+                f = c.font
+                d.font = Font(name="Calibri", size=12, bold=f.b, italic=f.i, color=copy(f.color) if f.color else None)
+                d.alignment = _CENTER
     for rng in src.merged_cells.ranges:
-        dst.merge_cells(str(rng))
+        c1, c2 = rng.min_col, rng.max_col
+        if drop_col:
+            if c1 == c2 == drop_col:
+                continue
+            n1, n2 = (c1 - 1 if c1 > drop_col else c1), (c2 - 1 if c2 >= drop_col else c2)
+            if n1 == n2 and rng.min_row == rng.max_row:
+                continue
+        else:
+            n1, n2 = c1, c2
+        dst.merge_cells(start_row=rng.min_row, start_column=n1, end_row=rng.max_row, end_column=n2)
     for k, cd in src.column_dimensions.items():
-        d = dst.column_dimensions[k]
-        d.min, d.max, d.width, d.hidden = cd.min, cd.max, cd.width, cd.hidden
+        lo, hi = cd.min or column_index_from_string(k), cd.max or column_index_from_string(k)
+        if drop_col:
+            if lo == hi == drop_col:
+                continue
+            lo, hi = (lo - 1 if lo > drop_col else lo), (hi - 1 if hi >= drop_col else hi)
+        d = dst.column_dimensions[get_column_letter(lo)]
+        d.min, d.max, d.width, d.hidden = lo, hi, cd.width, False          # nothing stays hidden
     for r, rd in src.row_dimensions.items():
         if rd.height is not None:
             dst.row_dimensions[r].height = rd.height
-        if rd.hidden:
-            dst.row_dimensions[r].hidden = True
     dst.sheet_view.zoomScale = src.sheet_view.zoomScale
     dst.sheet_view.showGridLines = src.sheet_view.showGridLines
     ps, pd_ = src.page_setup, dst.page_setup
@@ -746,7 +784,14 @@ def copy_sheet(src, dst_wb, title: str, index: Optional[int] = None):
     if src.print_title_rows:
         dst.print_title_rows = src.print_title_rows
     if src.print_area:
-        dst.print_area = src.print_area
+        pa = src.print_area if isinstance(src.print_area, str) else str(src.print_area)
+        if drop_col:
+            m = re.match(r"^(.*!)?\$?([A-Z]+)\$?(\d+):\$?([A-Z]+)\$?(\d+)$", pa)
+            if m:
+                end = column_index_from_string(m.group(4))
+                end = end - 1 if end >= drop_col else end
+                pa = f"A1:{get_column_letter(end)}{m.group(5)}"
+        dst.print_area = pa.split("!")[-1].replace("$", "")
     try:
         dst.oddHeader, dst.oddFooter = copy(src.oddHeader), copy(src.oddFooter)
     except Exception:
@@ -757,6 +802,11 @@ def copy_sheet(src, dst_wb, title: str, index: Optional[int] = None):
             new = XlImage(io.BytesIO(data))
             new.width, new.height = img.width, img.height
             new.anchor = deepcopy(img.anchor)
+            if drop_col:
+                a = new.anchor
+                for pt in (getattr(a, "_from", None), getattr(a, "to", None)):
+                    if pt is not None and pt.col >= drop_col:
+                        pt.col -= 1
             dst.add_image(new)
         except Exception:
             continue
@@ -836,7 +886,7 @@ def add_extra_sheets(out_wb, df, selected: list[str], schedule_sheet: Optional[s
             raise ExtraSheetError(avail[key]["reason"])
         ref_wb = openpyxl.load_workbook(REFERENCE_PATH)
         ws, st = build_sheet(ref_wb, key, parts[key], info)
-        copy_sheet(ws, out_wb, titles[key], index=at)
+        copy_sheet(ws, out_wb, titles[key], index=at, drop_col=st.pop("drop_col", None))
         at += 1
         names.append(titles[key])
         st["sheet"] = titles[key]
@@ -871,18 +921,19 @@ def preview(df, selected: list[str], max_rows: int = 40) -> dict:
 
 
 def redundant_main_cable_rows(df, selected: list[str]) -> set[int]:
-    """IODB (Excel) rows that repeat a main cable already carried by an earlier row of the selected sheets.
+    """IODB (Excel) rows that repeat a cable already carried by an earlier row of the same physical cable group.
     The cable summary counts a physical cable once: it drops the cable type/length of these rows."""
     recs, _ = normalize(df)
     parts = split_records(recs)
-    seen: set[str] = set()
     redundant: set[int] = set()
     for key in selected:
-        for r in parts[key]:
-            if is_missing(r.main_cable_tag):
-                continue
-            tag = r.main_cable_tag.upper()
-            if tag in seen:
-                redundant.add(r.row)
-            seen.add(tag)
+        for block in plan_blocks(key, parts[key]):
+            for g in block.groups:
+                counted = False
+                for r in g.recs:
+                    if is_missing(r.main_cable_type):
+                        continue
+                    if counted:
+                        redundant.add(r.row)
+                    counted = True
     return redundant

@@ -173,6 +173,9 @@ def resolve_columns(columns) -> dict[str, Optional[str]]:
         out[name] = next((norm[_norm_col(a)] for a in aliases if _norm_col(a) in norm), None)
     for cname, actual in resolve_cable_fields(columns).items():
         out[_CABLE_FIELDS[cname]] = actual
+    # two-row headers ("INSTRUMENT TO JB CABLE" over "TYPE") leave the first row's text as the only header
+    if not out.get("branch_cable_type"):
+        out["branch_cable_type"] = norm.get(_norm_col("INSTRUMENT TO JB CABLE"))
     # a terminal pair is written as two columns "JB TERMINAL +" / "JB TERMINAL -": '+' and '-' are stripped by
     # _norm_col, so look at the raw header too
     for c in columns:

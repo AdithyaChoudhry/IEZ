@@ -14,6 +14,7 @@ import FileUploadCard from '../ui/FileUploadCard';
 import SharedIodbCard from '../ui/SharedIodb';
 import OutputWorkbookOptions, { type OutputMode } from '../ui/OutputWorkbookOptions';
 import ExtraCableSheets from './cableschedule/ExtraCableSheets';
+import DrumScheduleGenerator from './cableschedule/DrumScheduleGenerator';
 
 interface ColumnsResponse {
   columns: string[];
@@ -48,6 +49,7 @@ export default function CableScheduleGenerator() {
   const [jbSummary, setJbSummary] = useState<JBSummaryRow[] | null>(null);
   const [result, setResult] = useState<GenerateResponse | null>(null);
   // Instrument Cable Schedule group: the schedule (default on) + optional MCC DI / MCC DO / VFD / MOV / LCP sheets
+  const [view, setView] = useState<'schedule' | 'drum'>('schedule');
   const [includeSchedule, setIncludeSchedule] = useState(true);
   const [extraSheets, setExtraSheets] = useState<string[]>([]);
 
@@ -162,6 +164,32 @@ export default function CableScheduleGenerator() {
 
   const totalTags = jbSummary?.reduce((sum, r) => sum + r.tag_count, 0) || 0;
 
+  const viewTabs = (
+    <div className="flex gap-2" data-testid="cable-views">
+      {([['schedule', 'Cable Schedule'], ['drum', 'Drum Schedule Generator']] as const).map(([k, label]) => (
+        <button key={k} onClick={() => setView(k)} className="px-4 py-2 rounded-xl text-sm font-semibold"
+                style={{ background: view === k ? 'var(--em)' : 'var(--s3)', color: view === k ? '#fff' : 'var(--t0)', border: '1px solid var(--b1)' }}>
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+
+  if (view === 'drum') {
+    return (
+      <div className="space-y-6">
+        <PageHeader
+          icon={Cable}
+          iconClassName="text-red-500"
+          title="Drum Schedule Generator"
+          description="Allocate the cable lengths of the IODB against the drums of a Drum Master, drum by drum, with a running balance."
+        />
+        {viewTabs}
+        <DrumScheduleGenerator />
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       <PageHeader
@@ -170,6 +198,7 @@ export default function CableScheduleGenerator() {
         title="Cable Schedule Generator"
         description="Generate a cable schedule grouped by junction box from your IODB and Cable Schedule template."
       />
+      {viewTabs}
       <ProjectSelector />
 
       {error && <Alert variant="error" title="Error" onClose={() => setError(null)}>{error}</Alert>}

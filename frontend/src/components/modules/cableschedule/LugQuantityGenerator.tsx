@@ -1,14 +1,16 @@
 /**
  * Cable Lug Quantity Generator (sub-module of the Cable Schedule Generator).
  *
- * Upload a cable schedule -> Analyze -> Preview (summary / cable-wise / cable types / procurement / review) -> Download Excel.
- * All quantities come from the backend engine. Boundaries shown to the engineer:
- *   - physical cable quantity = unique cable tag (a tag repeated on signal rows is one cable);
- *   - cable length is shown but never used to calculate lugs;
- *   - ferrule / terminal-block terminations give 0 lugs; unknown arrangements are REVIEW, never guessed.
+ * Upload -> live extraction (the table and the errors panel update sheet by sheet while the engine reads the schedule)
+ * -> preview tabs -> Excel report. All numbers come from the backend engine.
+ *
+ * Boundaries shown to the engineer:
+ *   - Excel row != physical cable (tag + role + cable block; headers and section rows are ignored);
+ *   - core count and lugged conductors are separate (14C with 12 lugged at each end = 24 lugs, core count stays 14);
+ *   - cable length is shown but never used for lugs; gland size comes from the cable OD and a manufacturer table, not the cable type.
  */
-import { useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, Download, Info, Upload } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { AlertTriangle, Download, Info, Loader2, Upload } from 'lucide-react';
 import api from '@/services/api';
 import Card from '../../ui/Card';
 import Button from '../../ui/Button';
@@ -19,13 +21,13 @@ type Row = Record<string, any>;
 const mp = { headers: { 'Content-Type': 'multipart/form-data' } };
 const field = 'w-full border rounded-lg px-2 py-1.5 text-sm';
 const fieldStyle = { borderColor: 'var(--b1)', background: 'var(--s1)', color: 'var(--t0)' };
-const VIEWS = ['Summary', 'Cable-wise', 'Cable Type Summary', 'Lug Procurement', 'Review / Exceptions'] as const;
+const VIEWS = ['Summary', 'Extraction', 'Cable Type Summary', 'Gland Recommendation', 'Reconciliation', 'Lug Procurement', 'Errors / Review'] as const;
 type View = (typeof VIEWS)[number];
 
-function Table({ columns, rows, empty, cls }: { columns: [string, string][]; rows: Row[]; empty: string; cls?: (r: Row) => string }) {
+function Table({ columns, rows, empty, cls, max = 'max-h-[26rem]' }: { columns: [string, string][]; rows: Row[]; empty: string; cls?: (r: Row) => string; max?: string }) {
   if (!rows.length) return <p className="text-sm py-3" style={{ color: 'var(--t1)' }}>{empty}</p>;
   return (
-    <div className="overflow-auto max-h-[28rem] border rounded-lg" style={{ borderColor: 'var(--b1)' }}>
+    <div className={`overflow-auto ${max} border rounded-lg`} style={{ borderColor: 'var(--b1)' }}>
       <table className="w-full text-xs">
         <thead className="sticky top-0" style={{ background: 'var(--s2)' }}>
           <tr>{columns.map(([, h]) => <th key={h} className="px-2 py-1.5 text-left font-medium whitespace-nowrap" style={{ color: 'var(--t1)' }}>{h}</th>)}</tr>
@@ -42,30 +44,43 @@ function Table({ columns, rows, empty, cls }: { columns: [string, string][]; row
   );
 }
 
-const statusCls = (r: Row) => (r.status === 'ERROR' || r.severity === 'ERROR' ? 'text-red-500' : r.status === 'REVIEW' || r.severity === 'REVIEW' ? 'text-amber-600' : r.source === 'USER OVERRIDE' ? 'text-blue-500' : '');
+const statusCls = (r: Row) => (r.status === 'ERROR' || r.severity === 'ERROR' ? 'text-red-500' : r.status === 'REVIEW' || r.severity === 'REVIEW' ? 'text-amber-600' : r.source === 'USER OVERRIDE' || r.status === 'USER OVERRIDE' ? 'text-blue-500' : '');
+
+const Kpi = ({ label, value, warn, bad }: { label: string; value: any; warn?: boolean; bad?: boolean }) => (
+  <div className="rounded-xl p-3" style={{ background: 'var(--s1)', border: '1px solid var(--b1)' }}>
+    <p className="text-xs" style={{ color: 'var(--t1)' }}>{label}</p>
+    <p className={`text-xl font-bold ${bad ? 'text-red-500' : warn ? 'text-amber-600' : ''}`} style={bad || warn ? undefined : { color: 'var(--t0)' }}>{value ?? '-'}</p>
+  </div>
+);
 
 export default function LugQuantityGenerator() {
   const [file, setFile] = useState<File | null>(null);
   const [sheets, setSheets] = useState<Row[]>([]);
   const [picked, setPicked] = useState<string[]>([]);
-  const [rules, setRules] = useState<Row>({ count_duplicates_once: true, instrumentation_use_lugs: false, control_use_lugs: false, power_use_lugs: true,
+  const [rules, setRules] = useState<Row>({ count_duplicates_once: true, ferrule_evidence: true, instrumentation_use_lugs: false, control_use_lugs: false, power_use_lugs: true,
     lugged_ends: 'both', earth_lugged: true, allow_override: true, power_min_mm2: 4, control_max_mm2: 2.5 });
+  const [gland, setGland] = useState<Row>({ manufacturer: '', series: '', ip: '', hazardous: false });
   const [overrides, setOverrides] = useState<Record<string, Row>>({});
+  const [odData, setOdData] = useState<Record<string, Row>>({});
   const [res, setRes] = useState<any>(null);
+  const [live, setLive] = useState<any>(null);
+  const [stage, setStage] = useState('');
   const [view, setView] = useState<View>('Summary');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [edit, setEdit] = useState<{ tag: string; form: Row } | null>(null);
-  const [f, setF] = useState<Row>({ search: '', type: '', category: '', lug: '', size: '', material: '', status: '' });
+  const [f, setF] = useState<Row>({ search: '', type: '', category: '', lug: '', status: '' });
+  const timer = useRef<number | null>(null);
 
   const post = (url: string, fields: Record<string, any>) => {
     const fd = new FormData();
     Object.entries(fields).forEach(([k, v]) => { if (v !== null && v !== undefined) fd.append(k, v); });
     return api.post(url, fd, mp);
   };
+  useEffect(() => () => { if (timer.current) window.clearTimeout(timer.current); }, []);
 
   useEffect(() => {
-    setRes(null); setSheets([]); setPicked([]); setOverrides({});
+    setRes(null); setLive(null); setSheets([]); setPicked([]); setOverrides({}); setOdData({});
     if (!file) return;
     let off = false;
     post('/cable-schedule/lug/detect', { file })
@@ -74,13 +89,24 @@ export default function LugQuantityGenerator() {
     return () => { off = true; };
   }, [file]);
 
-  const run = async (ov: Record<string, Row> = overrides) => {
+  const run = async (ov: Record<string, Row> = overrides, od: Record<string, Row> = odData) => {
     if (!file) return;
-    setBusy(true); setError(null);
+    setBusy(true); setError(null); setRes(null); setLive(null); setStage('Starting');
     try {
-      const r = await post('/cable-schedule/lug/analyze', { file, rules: JSON.stringify({ ...rules, sheets: picked }), overrides: JSON.stringify(ov) });
-      setRes(r.data);
-    } catch (e: any) { setError(e.response?.data?.detail || 'Analysis failed'); } finally { setBusy(false); }
+      const start = await post('/cable-schedule/lug/start', { file, rules: JSON.stringify({ ...rules, sheets: picked }), overrides: JSON.stringify(ov),
+        od_data: JSON.stringify(od), gland: JSON.stringify({ ...gland, hazardous: gland.hazardous || null }) });
+      const poll = async () => {
+        try {
+          const r = await api.get(`/cable-schedule/lug/job/${start.data.job_id}`);
+          if (r.data.live) setLive(r.data.live);
+          setStage(r.data.stage || '');
+          if (r.data.status === 'done') { setRes(r.data.result); setView('Summary'); setBusy(false); return; }
+          if (r.data.status === 'error') { setError(r.data.error); setBusy(false); return; }
+          timer.current = window.setTimeout(poll, 700);
+        } catch (e: any) { setError(e.response?.data?.detail || 'Lost contact with the analysis job'); setBusy(false); }
+      };
+      poll();
+    } catch (e: any) { setError(e.response?.data?.detail || 'Analysis could not be started'); setBusy(false); }
   };
   const download = async () => {
     try {
@@ -94,29 +120,32 @@ export default function LugQuantityGenerator() {
     if (form) next[`tag:${tag}`] = form; else delete next[`tag:${tag}`];
     setOverrides(next); setEdit(null); run(next);
   };
+  const setOd = (key: string, patch: Row) => setOdData({ ...odData, [key]: { ...(odData[key] || {}), ...patch } });
 
-  const k = res?.kpis;
-  const cables: Row[] = res?.cable_wise || [];
+  const k = res?.kpis || live?.kpis;
+  const cables: Row[] = res ? res.cable_wise : [];
+  const liveRows: Row[] = !res && live ? live.rows : [];
+  const errors: Row[] = res ? res.exceptions.filter((e: Row) => e.severity !== 'INFO') : (live?.errors || []);
   const filtered = useMemo(() => cables.filter((c) => {
     const q = f.search.toLowerCase();
-    return (!q || c.cable_tag.toLowerCase().includes(q) || c.cable_type.toLowerCase().includes(q))
-      && (!f.type || c.cable_type === f.type) && (!f.category || c.category === f.category)
-      && (!f.lug || (f.lug === 'REVIEW' ? c.status !== 'OK' : c.lug_required === f.lug))
-      && (!f.size || c.lug_size === f.size) && (!f.material || c.material === f.material) && (!f.status || c.status === f.status);
+    return (!q || c.cable_tag.toLowerCase().includes(q) || c.cable_type.toLowerCase().includes(q) || c.normalized_type.toLowerCase().includes(q))
+      && (!f.type || c.normalized_type === f.type) && (!f.category || c.category === f.category)
+      && (!f.lug || (f.lug === 'REVIEW' ? c.status !== 'OK' : c.lug_required === f.lug)) && (!f.status || c.status === f.status);
   }), [cables, f]);
   const opts = (key: string) => Array.from(new Set(cables.map((c) => c[key]).filter(Boolean))).sort() as string[];
   const reviewCables = cables.filter((c) => c.status !== 'OK');
-
   const toggle = (label: string, key: string) => (
     <label className="flex items-center gap-2 text-sm" style={{ color: 'var(--t0)' }}>
       <input type="checkbox" checked={!!rules[key]} onChange={(e) => { setRules({ ...rules, [key]: e.target.checked }); setRes(null); }} />{label}</label>);
+  const extractionCols: [string, string][] = [['sheets', 'Source'], ['cable_tag', 'Cable'], ['cable_type', 'Original type'], ['normalized_type', 'Normalized type'], ['core_count', 'Core count'],
+    ['lugged_from', 'Lugged from'], ['lugged_to', 'Lugged to'], ['lugs_per_cable', 'Lugs / cable'], ['cable_qty', 'Qty'], ['total', 'Total lugs'], ['status', 'Status']];
 
   return (
     <div className="space-y-6" data-testid="lug-quantity">
       {error && <Alert variant="error" title="Error" onClose={() => setError(null)}>{error}</Alert>}
       <div className="rounded-xl p-3 text-xs space-y-1" style={{ background: 'var(--s1)', border: '1px solid var(--b1)', color: 'var(--t0)' }}>
-        <p className="flex gap-2"><Info className="w-4 h-4 flex-shrink-0" style={{ color: 'var(--em)' }} /><span><b>Cable quantity</b> = unique cable tags (a tag repeated on several signal rows is one physical cable). <b>Cable length</b> is shown but never used for lugs: one cable = one termination set, whatever its length.</span></p>
-        <p className="pl-6">Ferrule / terminal-block terminations give <b>0 lugs</b>. Where the arrangement cannot be established the cable is <b>REVIEW</b> and no quantity is invented. Lug type, material and part number are only taken from the schedule or your override.</p>
+        <p className="flex gap-2"><Info className="w-4 h-4 flex-shrink-0" style={{ color: 'var(--em)' }} /><span><b>Excel row ≠ physical cable.</b> A cable is identified by tag + role + cable block; repeated signal rows, header rows and section labels never create cables. Cable length is shown but never used for lugs.</span></p>
+        <p className="pl-6"><b>Core count</b> (14C = 14) and <b>lugged conductors</b> are separate: lugs per cable = lugged From + lugged To (14C all lugged both ends = 28; 12 lugged each end = 24, core count stays 14). <b>Gland size</b> comes from the cable OD and a manufacturer table, never from the cable type.</p>
       </div>
 
       <FileUploadCard title="Step 1 - Cable Schedule (Excel)" icon={Upload} file={file} onChange={setFile}
@@ -128,7 +157,7 @@ export default function LugQuantityGenerator() {
               <label key={s.sheet} className="flex items-center gap-2">
                 <input type="checkbox" checked={picked.includes(s.sheet)} onChange={(e) => { setPicked(e.target.checked ? [...picked, s.sheet] : picked.filter((x) => x !== s.sheet)); setRes(null); }} />
                 {s.sheet} {s.hidden && <span style={{ color: 'var(--t2)' }}>(hidden in the workbook)</span>}
-                {s.has_lug_columns && <span className="text-blue-500">lug columns</span>}
+                {s.has_ferrule && <span style={{ color: 'var(--t2)' }}>ferrule columns</span>}{s.has_lug_columns && <span className="text-blue-500">lug columns</span>}
               </label>))}
           </div>)}
       </FileUploadCard>
@@ -136,6 +165,7 @@ export default function LugQuantityGenerator() {
       <Card title="Step 2 - Project rules" description="Used only when the schedule does not state the lug requirement or termination itself.">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           {toggle('Count duplicate cable tags once', 'count_duplicates_once')}
+          {toggle('Ferrule / terminal-block columns mean terminal-block termination (0 lugs)', 'ferrule_evidence')}
           {toggle('Instrumentation (pair/triad) cables use cable lugs', 'instrumentation_use_lugs')}
           {toggle('Small control cables use cable lugs', 'control_use_lugs')}
           {toggle('Power cables use cable lugs', 'power_use_lugs')}
@@ -148,6 +178,9 @@ export default function LugQuantityGenerator() {
             <input className={field} style={fieldStyle} value={rules.control_max_mm2} onChange={(e) => { setRules({ ...rules, control_max_mm2: e.target.value }); setRes(null); }} /></label>
           <label className="text-sm" style={{ color: 'var(--t0)' }}><span className="block mb-1">Power cable: core size from (mm²)</span>
             <input className={field} style={fieldStyle} value={rules.power_min_mm2} onChange={(e) => { setRules({ ...rules, power_min_mm2: e.target.value }); setRes(null); }} /></label>
+          {([['manufacturer', 'Preferred gland manufacturer'], ['series', 'Preferred gland series'], ['ip', 'Required IP (e.g. IP66)']] as const).map(([key, label]) => (
+            <label key={key} className="text-sm" style={{ color: 'var(--t0)' }}><span className="block mb-1">{label}</span>
+              <input className={field} style={fieldStyle} value={gland[key]} onChange={(e) => { setGland({ ...gland, [key]: e.target.value }); setRes(null); }} /></label>))}
         </div>
         <Button onClick={() => run()} loading={busy} disabled={!file || picked.length === 0} size="lg" fullWidth className="mt-5 text-lg py-4">
           {busy ? 'Analysing...' : 'ANALYZE CABLE SCHEDULE'}
@@ -155,55 +188,96 @@ export default function LugQuantityGenerator() {
         {Object.keys(overrides).length > 0 && <p className="text-xs mt-2 text-blue-500">{Object.keys(overrides).length} user override(s) applied.</p>}
       </Card>
 
+      {(busy || live) && !res && (
+        <Card title="Live cable / lug extraction">
+          <p className="text-sm flex items-center gap-2 mb-3" style={{ color: 'var(--t0)' }}>{busy && <Loader2 className="w-4 h-4 animate-spin" style={{ color: 'var(--em)' }} />}{stage || 'Working'}
+            {live && <span className="text-xs" style={{ color: 'var(--t1)' }}>sheet {live.sheets_done} of {live.sheets_total}</span>}</p>
+          {k && <div className="grid grid-cols-2 md:grid-cols-7 gap-3 mb-4">
+            <Kpi label="Physical cables identified" value={k.cables} /><Kpi label="Cable types identified" value={k.cable_types} /><Kpi label="Recognized types" value={k.recognized_types} />
+            <Kpi label="Unrecognized types" value={k.unrecognized_types} bad={k.unrecognized_types > 0} /><Kpi label="Total lugs calculated" value={k.total_lugs} />
+            <Kpi label="Errors" value={k.errors} bad={k.errors > 0} /><Kpi label="Review items" value={k.review} warn={k.review > 0} /></div>}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+            <div className="lg:col-span-2"><Table empty="Waiting for the first sheet…" rows={liveRows} cls={statusCls} columns={extractionCols} max="max-h-80" /></div>
+            <div><p className="text-sm font-semibold mb-1" style={{ color: 'var(--t0)' }}>Errors / review (live)</p>
+              <div className="space-y-1 max-h-80 overflow-auto">
+                {errors.length === 0 ? <p className="text-xs" style={{ color: 'var(--t1)' }}>None so far.</p> : errors.map((e, i) => (
+                  <p key={i} className={`text-xs ${e.severity === 'ERROR' ? 'text-red-500' : 'text-amber-600'}`}>{i + 1}. [{e.severity}] {e.kind}: {e.message} <span style={{ color: 'var(--t2)' }}>({e.sheet} row {e.row})</span></p>))}</div></div>
+          </div>
+        </Card>
+      )}
+
       {res && k && (
         <Card title="Cable Lug Quantity Report">
           <div className="rounded-2xl p-5 mb-4 text-center" style={{ background: 'var(--s1)', border: '1px solid var(--em)' }}>
             <p className="text-xs uppercase tracking-wide" style={{ color: 'var(--t1)' }}>Total lugs required</p>
             <p className="text-5xl font-bold" style={{ color: 'var(--t0)' }} data-testid="total-lugs">{k.total_lugs}</p>
           </div>
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4 text-sm" style={{ color: 'var(--t0)' }}>
-            {([['Physical cables analysed', k.cables], ['Cable types', k.cable_types], ['Cables requiring lugs', k.with_lugs], ['Cables not requiring lugs', k.without_lugs], ['Cables requiring review', k.review]] as [string, number][]).map(([a, v]) => (
-              <div key={a} className="rounded-xl p-3" style={{ background: 'var(--s1)', border: '1px solid var(--b1)' }}><p className="text-xs" style={{ color: 'var(--t1)' }}>{a}</p>
-                <p className={`text-lg font-bold ${a.includes('review') && v > 0 ? 'text-amber-600' : ''}`}>{v}</p></div>))}
+          <div className="grid grid-cols-2 md:grid-cols-7 gap-3 mb-4">
+            <Kpi label="Physical cables" value={k.cables} /><Kpi label="Cable types" value={k.cable_types} /><Kpi label="Recognized types" value={k.recognized_types} />
+            <Kpi label="Unrecognized types" value={k.unrecognized_types} bad={k.unrecognized_types > 0} /><Kpi label="Cables with lugs" value={k.with_lugs} />
+            <Kpi label="Errors" value={k.error_items} bad={k.error_items > 0} /><Kpi label="Review" value={k.review_items} warn={k.review_items > 0} />
           </div>
           <div className="flex flex-wrap gap-2 mb-3">
             {VIEWS.map((n) => <button key={n} onClick={() => setView(n)} className="px-3 py-1.5 rounded-lg text-xs font-semibold"
               style={{ background: view === n ? 'var(--em)' : 'var(--s3)', color: view === n ? '#fff' : 'var(--t0)', border: '1px solid var(--b1)' }}>
-              {n}{n.startsWith('Review') && ` (${res.exceptions.length})`}</button>)}
+              {n}{n.startsWith('Errors') && ` (${errors.length})`}</button>)}
           </div>
 
           {view === 'Summary' && (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div><p className="text-sm font-semibold mb-1" style={{ color: 'var(--t0)' }}>Lugs by size</p><Table empty="No lugs required." rows={res.by_size} columns={[['size', 'Conductor size'], ['qty', 'Lugs']]} /></div>
+              <div><p className="text-sm font-semibold mb-1" style={{ color: 'var(--t0)' }}>Lugs by conductor size</p><Table empty="No lugs required." rows={res.by_size} columns={[['size', 'Conductor size'], ['qty', 'Lugs']]} /></div>
               <div><p className="text-sm font-semibold mb-1" style={{ color: 'var(--t0)' }}>Lugs by material</p><Table empty="No lugs required." rows={res.by_material} columns={[['material', 'Material'], ['qty', 'Lugs']]} /></div>
-              <div className="md:col-span-2 text-xs" style={{ color: 'var(--t1)' }}>Sheets analysed: {res.used_sheets.join(', ')} · {k.overrides} user override(s) · {k.errors} cable(s) with errors</div>
+              <div className="md:col-span-2 text-xs" style={{ color: 'var(--t1)' }}>Sheets analysed: {res.used_sheets.join(', ')} · {k.overrides} user override(s)</div>
             </div>)}
 
-          {view === 'Cable-wise' && (<>
+          {view === 'Extraction' && (<>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3 text-xs">
               <input className={field} style={fieldStyle} placeholder="Search cable tag / type" value={f.search} onChange={(e) => setF({ ...f, search: e.target.value })} />
-              <select className={field} style={fieldStyle} value={f.type} onChange={(e) => setF({ ...f, type: e.target.value })}><option value="">All cable types</option>{opts('cable_type').map((o) => <option key={o}>{o}</option>)}</select>
+              <select className={field} style={fieldStyle} value={f.type} onChange={(e) => setF({ ...f, type: e.target.value })}><option value="">All cable types</option>{opts('normalized_type').map((o) => <option key={o}>{o}</option>)}</select>
               <select className={field} style={fieldStyle} value={f.category} onChange={(e) => setF({ ...f, category: e.target.value })}><option value="">All categories</option>{opts('category').map((o) => <option key={o}>{o}</option>)}</select>
               <select className={field} style={fieldStyle} value={f.lug} onChange={(e) => setF({ ...f, lug: e.target.value })}><option value="">Lug: all</option><option value="YES">Lug required</option><option value="NO">No lug</option><option value="REVIEW">Review</option></select>
-              <select className={field} style={fieldStyle} value={f.size} onChange={(e) => setF({ ...f, size: e.target.value })}><option value="">All lug sizes</option>{opts('lug_size').map((o) => <option key={o}>{o}</option>)}</select>
-              <select className={field} style={fieldStyle} value={f.material} onChange={(e) => setF({ ...f, material: e.target.value })}><option value="">All materials</option>{opts('material').map((o) => <option key={o}>{o}</option>)}</select>
               <select className={field} style={fieldStyle} value={f.status} onChange={(e) => setF({ ...f, status: e.target.value })}><option value="">All status</option><option>OK</option><option>REVIEW</option><option>ERROR</option></select>
               <span className="self-center" style={{ color: 'var(--t1)' }}>{filtered.length} of {cables.length} cables</span>
             </div>
-            <Table empty="No cable matches the filters." rows={filtered} cls={statusCls} columns={[['cable_tag', 'Cable tag'], ['cable_type', 'Cable type'], ['category', 'Category'], ['cores', 'Cores'], ['from', 'From'], ['to', 'To'], ['length', 'Length (info)'],
-              ['lug_required', 'Lug'], ['termination', 'Termination'], ['lug_from', 'Lug from'], ['lug_to', 'Lug to'], ['total', 'Total lugs'], ['lug_size', 'Size'], ['material', 'Material'], ['status', 'Status'], ['source', 'Source'], ['sheets', 'Sheet'], ['rows', 'Row'], ['reason', 'Basis']]} />
+            <Table empty="No cable matches the filters." rows={filtered} cls={statusCls} columns={[...extractionCols.slice(0, 5), ['role', 'Role'], ...extractionCols.slice(5), ['source', 'Source status'], ['termination', 'Termination'], ['length', 'Length (info)'], ['rows', 'Row(s)'], ['reason', 'Basis']]} />
           </>)}
 
-          {view === 'Cable Type Summary' && <Table empty="-" rows={res.types} cls={statusCls} columns={[['cable_type', 'Cable type'], ['is_nis', 'IS/NIS'], ['cable_qty', 'Cable qty'], ['cores', 'Cores'], ['lug_required', 'Lug required'],
-            ['lug_from', 'Lug from / cable'], ['lug_to', 'Lug to / cable'], ['per_cable', 'Lugs / cable'], ['total', 'Total lugs'], ['lug_size', 'Size'], ['lug_type', 'Lug type'], ['material', 'Material'], ['source', 'Source'], ['reason', 'Reason']]} />}
+          {view === 'Cable Type Summary' && <Table empty="-" rows={res.types.map((t: Row) => ({ ...t, ...(res.gland.find((g: Row) => g.type_key === t.type_key) || {}), cable_type: t.cable_type, status: t.status, od: (res.gland.find((g: Row) => g.type_key === t.type_key) || {}).od || 'OD Required' }))}
+            cls={statusCls} columns={[['cable_type', 'Cable type'], ['cable_qty', 'Physical qty'], ['core_count', 'Core count'], ['lugged_from', 'Lugged from'], ['lugged_to', 'Lugged to'], ['per_cable', 'Lugs / cable'], ['total', 'Total lugs'],
+              ['od', 'Cable OD'], ['metric', 'Metric gland'], ['npt', 'NPT gland'], ['et', 'ET gland'], ['lug_required', 'Lug'], ['termination', 'Termination'], ['status', 'Status']]} />}
+
+          {view === 'Gland Recommendation' && (<div className="space-y-3">
+            <p className="text-xs" style={{ color: 'var(--t1)' }}>Gland size is determined from the <b>cable OD</b> and a manufacturer table - not from the core count or cable type. Enter the OD per cable type and re-run. ET is shown only where the reference data supports it.</p>
+            <div className="overflow-auto max-h-[26rem] border rounded-lg" style={{ borderColor: 'var(--b1)' }}>
+              <table className="w-full text-xs"><thead className="sticky top-0" style={{ background: 'var(--s2)' }}><tr>{['Cable type', 'Qty', 'Construction', 'Cable OD (mm)', 'Bedding (mm)', 'Metric', 'NPT', 'ET', 'Basis / source', 'Status', 'Override metric', 'NPT', 'ET'].map((h) => <th key={h} className="px-2 py-1.5 text-left font-medium whitespace-nowrap" style={{ color: 'var(--t1)' }}>{h}</th>)}</tr></thead>
+                <tbody>{res.gland.map((g: Row) => {
+                  const v = odData[g.type_key] || {};
+                  return (<tr key={g.type_key} className={`border-t ${statusCls(g)}`} style={{ borderColor: 'var(--b1)', color: 'var(--t0)' }}>
+                    <td className="px-2 py-1 whitespace-nowrap">{g.cable_type}</td><td className="px-2 py-1">{g.cable_qty}</td>
+                    <td className="px-2 py-1"><select className={field} style={{ ...fieldStyle, width: '7.5rem' }} value={v.construction || g.construction} onChange={(e) => setOd(g.type_key, { construction: e.target.value })}>{['UNARMOURED', 'ARMOURED', 'BRAIDED'].map((c) => <option key={c}>{c}</option>)}</select></td>
+                    <td className="px-2 py-1"><input className={field} style={{ ...fieldStyle, width: '5rem' }} placeholder={g.od ? String(g.od) : 'mm'} value={v.od ?? ''} onChange={(e) => setOd(g.type_key, { od: e.target.value })} /></td>
+                    <td className="px-2 py-1"><input className={field} style={{ ...fieldStyle, width: '4.5rem' }} value={v.bedding ?? ''} disabled={(v.construction || g.construction) !== 'ARMOURED'} onChange={(e) => setOd(g.type_key, { bedding: e.target.value })} /></td>
+                    <td className="px-2 py-1 whitespace-nowrap">{g.metric}</td><td className="px-2 py-1 whitespace-nowrap">{g.npt}</td><td className="px-2 py-1 whitespace-nowrap">{g.et}</td>
+                    <td className="px-2 py-1" style={{ maxWidth: '22rem' }}>{g.basis || g.advice}{g.source && <span style={{ color: 'var(--t2)' }}> · {g.source}</span>}{g.flags?.length > 0 && <span className="text-amber-600"> · {g.flags.join(' · ')}</span>}</td>
+                    <td className="px-2 py-1 whitespace-nowrap">{g.status}{g.auto && <span style={{ color: 'var(--t2)' }}> (auto: {g.auto.metric} / {g.auto.npt} / {g.auto.et})</span>}</td>
+                    {(['metric_gland', 'npt_gland', 'et_gland'] as const).map((kk) => <td key={kk} className="px-2 py-1"><input className={field} style={{ ...fieldStyle, width: '5rem' }} value={v[kk] ?? ''} onChange={(e) => setOd(g.type_key, { [kk]: e.target.value })} /></td>)}
+                  </tr>);
+                })}</tbody></table>
+            </div>
+            <Button onClick={() => run()} className="bg-blue-600 hover:bg-blue-700">Re-run with these OD values</Button>
+            <p className="text-xs" style={{ color: 'var(--t1)' }}>Gland recommendations are advisory - confirm against the manufacturer datasheet. A manual gland entry is marked USER OVERRIDE and the automatic value is kept beside it.</p>
+          </div>)}
+
+          {view === 'Reconciliation' && <div className="space-y-2"><p className="text-xs" style={{ color: 'var(--t1)' }}>Every source row mapped to its physical cable - different roles / blocks are not merged.</p>
+            <Table empty="-" rows={res.reconciliation} cls={statusCls} columns={[['sheet', 'Original sheet'], ['row', 'Original row'], ['pid', 'Physical cable ID'], ['role', 'Cable role'], ['original_type', 'Original type'], ['normalized_type', 'Normalized type'], ['status', 'Status']]} /></div>}
 
           {view === 'Lug Procurement' && <Table empty="No lugs required by the analysed cables." rows={res.procurement} columns={[['lug_type', 'Lug type'], ['conductor_size', 'Conductor size'], ['material', 'Material'], ['spec', 'Specification / part no.'],
             ['use', 'Use'], ['from_qty', 'From-end qty'], ['to_qty', 'To-end qty'], ['qty', 'Total qty'], ['cables', 'Cables']]} />}
 
-          {view === 'Review / Exceptions' && (<div className="space-y-4">
-            <Table empty="No exceptions." rows={res.exceptions} cls={statusCls} columns={[['severity', 'Severity'], ['kind', 'Kind'], ['ref', 'Cable / reference'], ['sheet', 'Sheet'], ['row', 'Row'], ['message', 'Message']]} />
+          {view === 'Errors / Review' && (<div className="space-y-4">
+            <Table empty="No exceptions." rows={res.exceptions} cls={statusCls} columns={[['severity', 'Severity'], ['kind', 'Kind'], ['ref', 'Cable / reference'], ['sheet', 'Sheet'], ['row', 'Row'], ['original', 'Original value'], ['message', 'Message']]} />
             {rules.allow_override && reviewCables.length > 0 && (
-              <div><p className="text-sm font-semibold mb-1 flex gap-1" style={{ color: 'var(--t0)' }}><AlertTriangle className="w-4 h-4 text-amber-600" /> Cables needing a decision - manual override (marked USER OVERRIDE, never silent)</p>
+              <div><p className="text-sm font-semibold mb-1 flex gap-1" style={{ color: 'var(--t0)' }}><AlertTriangle className="w-4 h-4 text-amber-600" /> Cables needing a decision - manual override (marked USER OVERRIDE; the automatic value stays visible)</p>
                 <div className="space-y-1 max-h-72 overflow-auto">
                   {reviewCables.slice(0, 200).map((c) => (
                     <div key={c.cable_tag} className="flex items-center gap-2 text-xs rounded-lg px-2 py-1" style={{ background: 'var(--s1)', border: '1px solid var(--b1)', color: 'var(--t0)' }}>
@@ -216,10 +290,11 @@ export default function LugQuantityGenerator() {
           {edit && (
             <div className="mt-4 rounded-xl p-4 space-y-2" style={{ background: 'var(--s1)', border: '1px solid var(--em)' }} data-testid="override-form">
               <p className="text-sm font-semibold" style={{ color: 'var(--t0)' }}>USER OVERRIDE - {edit.tag}</p>
+              <p className="text-xs" style={{ color: 'var(--t1)' }}>Lugged conductors are entered separately from the core count (core count is never changed).</p>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs" style={{ color: 'var(--t0)' }}>
                 <label>Lug required<select className={field} style={fieldStyle} value={edit.form.lug_required || ''} onChange={(e) => setEdit({ ...edit, form: { ...edit.form, lug_required: e.target.value } })}>
                   <option>YES</option><option>NO</option><option>REVIEW</option></select></label>
-                {([['lug_from', 'Lug from qty'], ['lug_to', 'Lug to qty'], ['lug_type', 'Lug type'], ['lug_size', 'Lug size'], ['lug_material', 'Material'], ['remarks', 'Remarks']] as const).map(([key, label]) => (
+                {([['lugged_from', 'Lugged conductors From'], ['lugged_to', 'Lugged conductors To'], ['lug_type', 'Lug type'], ['lug_size', 'Lug size'], ['lug_material', 'Material'], ['remarks', 'Remarks / reason']] as const).map(([key, label]) => (
                   <label key={key}>{label}<input className={field} style={fieldStyle} value={edit.form[key] ?? ''} onChange={(e) => setEdit({ ...edit, form: { ...edit.form, [key]: e.target.value } })} /></label>))}
               </div>
               <div className="flex gap-2">

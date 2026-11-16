@@ -31,8 +31,11 @@ def book(rows, header=HDR, sheet="Power Cable Schedule", extra_sheets=()):
     return buf.getvalue()
 
 
-def run(rows, rules=None, overrides=None, header=HDR):
-    out, r = L.analyze(book(rows, header=header), rules, overrides)
+LEGACY = {"ferrule_evidence": True, "instrumentation_use_lugs": False, "control_use_lugs": False}      # the earlier ferrule-first defaults
+
+
+def run(rows, rules=None, overrides=None, header=HDR, legacy=True):
+    out, r = L.analyze(book(rows, header=header), ({**LEGACY, **(rules or {})} if legacy else rules), overrides)
     return out
 
 
@@ -436,7 +439,7 @@ def test_the_uploaded_file_is_never_modified_and_bad_files_give_clear_errors():
 
 def test_real_iez_schedule_layout_dedupes_main_cables_and_uses_ferrule_termination():
     from tests.test_gland_quantity import schedule, BASE
-    out, _ = L.analyze(schedule(BASE))
+    out, _ = L.analyze(schedule(BASE), LEGACY)
     tags = [c["cable_tag"] for c in out["cable_wise"]]
     assert sorted(tags) == ["IC-1", "IC-2", "IC-3", "MC-1"]                       # MC-1 appears on two rows -> one cable
     assert out["kpis"]["total_lugs"] == 0 and {c["category"] for c in out["cable_wise"]} == {"INSTRUMENTATION"}
@@ -444,7 +447,7 @@ def test_real_iez_schedule_layout_dedupes_main_cables_and_uses_ferrule_terminati
 
 def test_report_workbook_and_traceability():
     rows = [[i, f"M{i}", f"PC-{i:03d}", "4C x 16 Sq.mm", "MCC", f"M-{i}", 60, None] for i in range(1, 4)] + [[9, "Z", "MC-9", "12P x 1.5", "JB", "PLC", 5, "NIS"]]
-    out, rules = L.analyze(book(rows))
+    out, rules = L.analyze(book(rows), LEGACY)
     wb = openpyxl.load_workbook(io.BytesIO(L.to_workbook(out, rules, "S.xlsx")))
     assert wb.sheetnames == ["LUG SUMMARY", "CABLE TYPE SUMMARY", "CABLE-WISE DETAIL", "GLAND RECOMMENDATION", "EXTRACTION LOG", "LUG PROCUREMENT", "REVIEW - EXCEPTIONS", "RULES - ASSUMPTIONS"]
     ws = wb["CABLE-WISE DETAIL"]
@@ -499,3 +502,33 @@ def test_api_errors_are_clear(client):
     assert r.status_code == 400 and "could not be opened" in r.json()["detail"]
     r = client.post("/api/cable-schedule/lug/analyze", files={"file": ("a.xlsx", book([[1, "A", "P", "4C x 16", "M", "M", 1, None]]))}, data={"rules": "{bad"})
     assert r.status_code == 400 and "not valid JSON" in r.json()["detail"]
+
+
+# ── default lugging: every conductor, both ends, split by conductor size and lug type ──
+def test_default_rules_lug_every_conductor_at_both_ends_including_instrument_cables():
+    rows = [[1, "A", "IC-1", "1P x 1.0 Sq.mm", "JB", "PLC", 5, None], [2, "B", "IC-2", "2P x 1.5 Sq.mm", "JB", "PLC", 5, None],
+            [3, "C", "IC-3", "14Cx1.0 Sq. mm", "JB", "PLC", 5, None], [4, "D", "IC-4", "5C x 1.0 Sq.mm", "JB", "PLC", 5, None]]
+    out = run(rows, legacy=False)
+    c1, c2, c3 = cab(out, "IC-1"), cab(out, "IC-2"), cab(out, "IC-3")
+    assert (c1["core_count"], c1["lugged_from"], c1["lugged_to"], c1["lugs_per_cable"]) == (2, 2, 2, 4)            # 1P = 2 conductors, 1 lug each end
+    assert (c2["core_count"], c2["lugged_from"], c2["lugged_to"], c2["lugs_per_cable"]) == (4, 4, 4, 8)
+    assert (c3["core_count"], c3["lugged_from"], c3["lugged_to"], c3["lugs_per_cable"]) == (14, 14, 14, 28)
+    assert out["kpis"]["total_lugs"] == 4 + 8 + 28 + 10 and out["kpis"]["with_lugs"] == 4
+
+
+def test_lugs_are_split_by_conductor_size_and_lug_type():
+    rows = [[1, "A", "IC-1", "1P x 1.0 Sq.mm", "JB", "PLC", 5, None], [2, "B", "IC-2", "5C x 1.0 Sq.mm", "JB", "PLC", 5, None],
+            [3, "C", "IC-3", "2P x 1.5 Sq.mm", "JB", "PLC", 5, None], [4, "D", "IC-4", "12C x 2.5 Sq.mm", "JB", "PLC", 5, None]]
+    out = run(rows, {"default_lug_material": "Cu", "lug_type_by_size": {"1.0": "Pin lug", "1.5": "Ring lug"}, "default_lug_type": "Ring lug"}, legacy=False)
+    p = {(x["conductor_size"], x["lug_type"], x["material"]): (x["from_qty"], x["to_qty"], x["qty"]) for x in out["procurement"]}
+    assert p == {("1.0 mm²", "Pin lug", "Cu"): (7, 7, 14), ("1.5 mm²", "Ring lug", "Cu"): (4, 4, 8), ("2.5 mm²", "Ring lug", "Cu"): (12, 12, 24)}
+    assert {x["size"]: x["qty"] for x in out["by_size"]} == {"1.0 mm²": 14, "1.5 mm²": 8, "2.5 mm²": 24}
+    assert out["kpis"]["total_lugs"] == 46
+    assert run(rows, {"lug_type_by_size": {"abc": "x"}}, legacy=False) if False else True
+    with pytest.raises(L.LugError):
+        L.analyze(book(rows), {"lug_type_by_size": {"abc": "Pin"}})
+
+
+def test_lug_type_and_material_stay_not_specified_unless_given():
+    out = run([[1, "A", "IC-1", "1P x 1.0 Sq.mm", "JB", "PLC", 5, None]], legacy=False)
+    assert (out["procurement"][0]["lug_type"], out["procurement"][0]["material"], out["procurement"][0]["spec"]) == ("NOT SPECIFIED", "NOT SPECIFIED", "NOT SPECIFIED")

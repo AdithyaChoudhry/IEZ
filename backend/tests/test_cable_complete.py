@@ -169,7 +169,7 @@ def test_gland_and_lug_sheets_use_the_formats_of_their_own_modules():
 def test_no_meaningless_empty_sheets():
     res, _ = run()
     wb = openpyxl.load_workbook(io.BytesIO(res["workbook"]))
-    assert "LUG PROCUREMENT" not in wb.sheetnames                     # instrumentation cables only: no lugs, nothing to procure
+    assert "LUG PROCUREMENT" in wb.sheetnames                         # every conductor is lugged by default, so there is something to procure
     for n in wb.sheetnames:
         if n.startswith(("GLAND", "CABLE LUG", "LUG")):
             assert wb[n].max_row > 3, n

@@ -57,7 +57,7 @@ export default function LugQuantityGenerator() {
   const [file, setFile] = useState<File | null>(null);
   const [sheets, setSheets] = useState<Row[]>([]);
   const [picked, setPicked] = useState<string[]>([]);
-  const [rules, setRules] = useState<Row>({ count_duplicates_once: true, ferrule_evidence: true, instrumentation_use_lugs: false, control_use_lugs: false, power_use_lugs: true,
+  const [rules, setRules] = useState<Row>({ count_duplicates_once: true, ferrule_evidence: false, instrumentation_use_lugs: true, control_use_lugs: true, power_use_lugs: true, default_lug_type: '', default_lug_material: '', lug_type_by_size_text: '',
     lugged_ends: 'both', earth_lugged: true, allow_override: true, power_min_mm2: 4, control_max_mm2: 2.5 });
   const [gland, setGland] = useState<Row>({ manufacturer: '', series: '', ip: '', hazardous: false });
   const [overrides, setOverrides] = useState<Record<string, Row>>({});
@@ -71,6 +71,11 @@ export default function LugQuantityGenerator() {
   const [edit, setEdit] = useState<{ tag: string; form: Row } | null>(null);
   const [f, setF] = useState<Row>({ search: '', type: '', category: '', lug: '', status: '' });
   const timer = useRef<number | null>(null);
+  const sizeMap = useMemo(() => {
+    const m: Record<string, string> = {};
+    String(rules.lug_type_by_size_text || '').split('\n').forEach((l) => { const [a, b] = l.split('='); if (a && b) m[a.replace(/mm²?|sq\.?\s*mm/gi, '').trim()] = b.trim(); });
+    return m;
+  }, [rules.lug_type_by_size_text]);
 
   const post = (url: string, fields: Record<string, any>) => {
     const fd = new FormData();
@@ -93,7 +98,7 @@ export default function LugQuantityGenerator() {
     if (!file) return;
     setBusy(true); setError(null); setRes(null); setLive(null); setStage('Starting');
     try {
-      const start = await post('/cable-schedule/lug/start', { file, rules: JSON.stringify({ ...rules, sheets: picked }), overrides: JSON.stringify(ov),
+      const start = await post('/cable-schedule/lug/start', { file, rules: JSON.stringify({ ...rules, lug_type_by_size: sizeMap, sheets: picked }), overrides: JSON.stringify(ov),
         od_data: JSON.stringify(od), gland: JSON.stringify({ ...gland, hazardous: gland.hazardous || null }) });
       const poll = async () => {
         try {
@@ -166,7 +171,7 @@ export default function LugQuantityGenerator() {
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           {toggle('Count duplicate cable tags once', 'count_duplicates_once')}
           {toggle('Ferrule / terminal-block columns mean terminal-block termination (0 lugs)', 'ferrule_evidence')}
-          {toggle('Instrumentation (pair/triad) cables use cable lugs', 'instrumentation_use_lugs')}
+          {toggle('Instrumentation (pair/triad) cables use cable lugs (1 lug per conductor per end)', 'instrumentation_use_lugs')}
           {toggle('Small control cables use cable lugs', 'control_use_lugs')}
           {toggle('Power cables use cable lugs', 'power_use_lugs')}
           {toggle('Earth conductor of "nC + E" is lugged (own line)', 'earth_lugged')}
@@ -178,6 +183,12 @@ export default function LugQuantityGenerator() {
             <input className={field} style={fieldStyle} value={rules.control_max_mm2} onChange={(e) => { setRules({ ...rules, control_max_mm2: e.target.value }); setRes(null); }} /></label>
           <label className="text-sm" style={{ color: 'var(--t0)' }}><span className="block mb-1">Power cable: core size from (mm²)</span>
             <input className={field} style={fieldStyle} value={rules.power_min_mm2} onChange={(e) => { setRules({ ...rules, power_min_mm2: e.target.value }); setRes(null); }} /></label>
+          <label className="text-sm" style={{ color: 'var(--t0)' }}><span className="block mb-1">Default lug type (empty = NOT SPECIFIED)</span>
+            <input className={field} style={fieldStyle} value={rules.default_lug_type} onChange={(e) => { setRules({ ...rules, default_lug_type: e.target.value }); setRes(null); }} /></label>
+          <label className="text-sm" style={{ color: 'var(--t0)' }}><span className="block mb-1">Default lug material (e.g. Cu)</span>
+            <input className={field} style={fieldStyle} value={rules.default_lug_material} onChange={(e) => { setRules({ ...rules, default_lug_material: e.target.value }); setRes(null); }} /></label>
+          <label className="text-sm md:col-span-3" style={{ color: 'var(--t0)' }}><span className="block mb-1">Lug type by conductor size (one per line, e.g. <code>1.0 = Pin lug</code>, <code>1.5 = Ring lug</code>)</span>
+            <textarea className={field} style={fieldStyle} rows={2} value={rules.lug_type_by_size_text} onChange={(e) => { setRules({ ...rules, lug_type_by_size_text: e.target.value }); setRes(null); }} /></label>
           {([['manufacturer', 'Preferred gland manufacturer'], ['series', 'Preferred gland series'], ['ip', 'Required IP (e.g. IP66)']] as const).map(([key, label]) => (
             <label key={key} className="text-sm" style={{ color: 'var(--t0)' }}><span className="block mb-1">{label}</span>
               <input className={field} style={fieldStyle} value={gland[key]} onChange={(e) => { setGland({ ...gland, [key]: e.target.value }); setRes(null); }} /></label>))}
@@ -225,6 +236,8 @@ export default function LugQuantityGenerator() {
 
           {view === 'Summary' && (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="md:col-span-2"><p className="text-sm font-semibold mb-1" style={{ color: 'var(--t0)' }}>Lugs by conductor size and lug type (procurement split-up)</p>
+                <Table empty="No lugs required." rows={res.procurement} columns={[['conductor_size', 'Conductor size'], ['lug_type', 'Lug type'], ['material', 'Material'], ['use', 'Use'], ['from_qty', 'From-end lugs'], ['to_qty', 'To-end lugs'], ['qty', 'Total lugs'], ['cables', 'Cables']]} /></div>
               <div><p className="text-sm font-semibold mb-1" style={{ color: 'var(--t0)' }}>Lugs by conductor size</p><Table empty="No lugs required." rows={res.by_size} columns={[['size', 'Conductor size'], ['qty', 'Lugs']]} /></div>
               <div><p className="text-sm font-semibold mb-1" style={{ color: 'var(--t0)' }}>Lugs by material</p><Table empty="No lugs required." rows={res.by_material} columns={[['material', 'Material'], ['qty', 'Lugs']]} /></div>
               <div className="md:col-span-2 text-xs" style={{ color: 'var(--t1)' }}>Sheets analysed: {res.used_sheets.join(', ')} · {k.overrides} user override(s)</div>

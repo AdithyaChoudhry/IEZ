@@ -117,10 +117,13 @@ def normalize_type_key(text: Any) -> str:
 @dataclass
 class Rules:
     count_duplicates_once: bool = True
-    ferrule_evidence: bool = True                  # ferrule / terminal-block columns with values = terminal-block termination (0 lugs)
-    instrumentation_use_lugs: bool = False         # pair / triad instrumentation cables
-    control_use_lugs: bool = False                 # core cables up to control_max_mm2
+    ferrule_evidence: bool = False                 # ferrule / terminal-block columns with values = terminal-block termination (0 lugs)
+    instrumentation_use_lugs: bool = True          # pair / triad instrumentation cables: one lug per conductor at each lugged end
+    control_use_lugs: bool = True                  # core cables up to control_max_mm2
     power_use_lugs: bool = True
+    default_lug_type: str = ""                     # carried to the lug report when the schedule gives none (empty = NOT SPECIFIED)
+    default_lug_material: str = ""
+    lug_type_by_size: dict = field(default_factory=dict)   # conductor size (mm2) -> lug type, e.g. {"1.0": "Pin lug"}
     lugged_ends: str = "both"                      # both | from | to
     earth_lugged: bool = True
     power_min_mm2: float = 4.0
@@ -147,6 +150,15 @@ class Rules:
                     raise LugError(f"{k.replace('_', ' ')} must be a number.")
         if r.control_max_mm2 > r.power_min_mm2:
             raise LugError("The control cable maximum size cannot exceed the power cable minimum size.")
+        r.default_lug_type = _clean_text(d.get("default_lug_type"))
+        r.default_lug_material = _clean_text(d.get("default_lug_material"))
+        by = d.get("lug_type_by_size") or {}
+        if isinstance(by, dict):
+            for k_, v_ in by.items():
+                try:
+                    r.lug_type_by_size[f"{float(str(k_).replace('mm2', '').replace('mm²', '').strip()):g}"] = _clean_text(v_)
+                except ValueError:
+                    raise LugError(f"Lug type by size: '{k_}' is not a conductor size (use e.g. 1.5 = Pin lug).")
         r.sheets = d.get("sheets")
         return r
 
@@ -641,7 +653,7 @@ def _category(con: dict, rules: Rules) -> str:
 
 
 def _fmt_size(s: Optional[float]) -> str:
-    return NS if s is None else (f"{s:g} mm²")
+    return NS if s is None else f"{_size_txt(s)} mm²"
 
 
 def decide(cb: Cable, rules: Rules, override: Optional[dict] = None) -> Result:
@@ -650,6 +662,12 @@ def decide(cb: Cable, rules: Rules, override: Optional[dict] = None) -> Result:
     res.category = _category(con, rules)
     res.lug_size = _fmt_size(con["size"])
     res.earth_size = _fmt_size(con["earth_size"]) if con["earth"] else NS
+    if rules.default_lug_material:
+        res.material = rules.default_lug_material
+    if con["size"] is not None and rules.lug_type_by_size.get(f"{con['size']:g}"):
+        res.lug_type = rules.lug_type_by_size[f"{con['size']:g}"]
+    elif rules.default_lug_type:
+        res.lug_type = rules.default_lug_type
     if con["kind"] == "UNKNOWN":
         res.issues.append(("ERROR", "UNRECOGNIZED CABLE TYPE", f"Cable {cb.pid} has cable type '{cb.cable_type}', which does not match a recognised cable construction "
                            "(nC x size, nP x size, nT x size, nC + E). CORE COUNT = REVIEW REQUIRED."))
@@ -908,6 +926,8 @@ RULE_TEXT = [
     ("Cable length", "Reported for information only. It is never used to calculate lugs."),
     ("Core count vs lugged conductors", "Core count (e.g. 14C = 14) is a property of the cable. Lugged conductors at the From / To end are separate: lugs per cable = lugged From + lugged To; "
                                         "total = physical cables x lugs per cable. 14C with all conductors lugged at both ends = 28 lugs; with 12 lugged at each end = 24, core count stays 14."),
+    ("Default lugging", "Each conductor of a lugged cable carries one lug at the From end and one at the To end (2 lugs per conductor): 14C = 14 From + 14 To = 28 lugs. "
+                        "Instrumentation, control and power cables are lugged by default; switch a class off, or tick 'ferrule columns mean terminal block', to change that."),
     ("Priority", "1 explicit lug data in the schedule; 2 explicit termination data (ferrule / terminal / lug); 3 the project rule table; 4 REVIEW - no quantity is generated when the arrangement is unknown."),
     ("Pairs", "A pair is two conductors (12P = 24 conductors, never 12 cores)."),
     ("Earth conductor", "A separate earth conductor ('+ E') is counted on its own line with its own size; it is not assumed identical to the other conductors."),
@@ -1061,6 +1081,8 @@ def to_workbook(res: dict, rules: Rules, source_name: str = "uploaded cable sche
     rule_rows = [["Rule", a, b] for a, b in RULE_TEXT] + [
         ["Setting", "Count duplicate cable tags once", "YES" if rules.count_duplicates_once else "NO"],
         ["Setting", "Ferrule / terminal-block columns mean terminal-block termination (0 lugs)", "YES" if rules.ferrule_evidence else "NO"],
+        ["Setting", "Default lug type / material (when the schedule gives none)", f"{rules.default_lug_type or NS} / {rules.default_lug_material or NS}"],
+        ["Setting", "Lug type by conductor size", "; ".join(f"{k_} mm² = {v_}" for k_, v_ in rules.lug_type_by_size.items()) or NS],
         ["Setting", "Instrumentation (pair/triad) cables use cable lugs", "YES" if rules.instrumentation_use_lugs else "NO"],
         ["Setting", f"Control cables (core size <= {rules.control_max_mm2:g} mm²) use cable lugs", "YES" if rules.control_use_lugs else "NO"],
         ["Setting", f"Power cables (core size >= {rules.power_min_mm2:g} mm²) use cable lugs", "YES" if rules.power_use_lugs else "NO"],

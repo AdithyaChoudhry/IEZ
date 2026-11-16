@@ -21,6 +21,7 @@ from ..deps import get_current_user
 import sys
 sys.path.insert(0, '/app')
 from utils import lug_quantity as lq  # noqa: E402
+from utils import cable_complete as cc  # noqa: E402
 
 router = APIRouter(prefix="/cable-schedule/lug", tags=["Cable Lug Quantity"])
 lug_cache: dict = {}
@@ -92,19 +93,33 @@ async def analyze(
     return out
 
 
-def _job_run(job_id: str, user_key: str, data: bytes, name: str, rules, overrides, od_data, gland_cfg):
+def _job_run(job_id: str, user_key: str, data, name: str, rules, overrides, od_data, gland_cfg, iodb=None, template=None, reuse=False):
     def progress(p):
         with _lock:
             _jobs.setdefault(job_id, {}).update(stage=p["stage"], live=p)
-    try:
+
+    def stage(text):
         with _lock:
-            _jobs[job_id]["stage"] = "Reading the cable schedule"
+            _jobs[job_id]["stage"] = text
+    try:
+        source = None
+        if iodb is not None or reuse:
+            if reuse and user_key in cc.SCHEDULE_CACHE:
+                data, source = cc.SCHEDULE_CACHE[user_key]["bytes"], cc.SCHEDULE_CACHE[user_key]["info"]
+                name = cc.SCHEDULE_CACHE[user_key]["name"]
+            else:
+                stage("Generating the Cable Schedule from the IODB (existing Cable Schedule generator)")
+                data, source = cc.schedule_from_iodb(iodb, template)
+                cc.SCHEDULE_CACHE[user_key] = {"bytes": data, "info": source, "name": name}
+        stage("Reading the cable schedule")
         out, xlsx = _run(data, name, rules, overrides, od_data, gland_cfg, progress)
+        if source:
+            out["source"] = {"type": "IODB", "name": name, **source}
         lug_cache[user_key] = {"bytes": xlsx, "filename": "Cable_Lug_Quantity_Report.xlsx"}
         out["filename"] = "Cable_Lug_Quantity_Report.xlsx"
         with _lock:
             _jobs[job_id].update(status="done", stage="Done", result=out)
-    except lq.GlandError as e:
+    except (lq.GlandError, cc.CompleteError) as e:
         with _lock:
             _jobs[job_id].update(status="error", error=str(e))
     except Exception as e:                                          # never leave the page waiting
@@ -116,15 +131,30 @@ def _job_run(job_id: str, user_key: str, data: bytes, name: str, rules, override
 @router.post("/start", status_code=status.HTTP_202_ACCEPTED)
 async def start(
     background_tasks: BackgroundTasks,
-    file: UploadFile = File(...),
+    file: Optional[UploadFile] = File(None),
+    iodb_file: Optional[UploadFile] = File(None),
+    template_file: Optional[UploadFile] = File(None),
+    reuse: bool = Form(False),
     rules: Optional[str] = Form(None),
     overrides: Optional[str] = Form(None),
     od_data: Optional[str] = Form(None),
     gland: Optional[str] = Form(None),
     current_user: User = Depends(get_current_user),
 ):
-    """Starts the analysis and returns at once; poll /job/{id} for the live extraction table, live errors and the final result."""
-    data = await _read(file)
+    """
+    Starts the analysis and returns at once; poll /job/{id} for the live extraction table, live errors and the final result.
+    Input: a cable schedule (`file`) OR an IODB (`iodb_file`: the cable schedule is generated from it first, with the optional
+    `template_file` when the server has none) OR `reuse=true` (the schedule last generated from an IODB, for re-runs with new settings).
+    """
+    key = f"{current_user.id}_lug"
+    sources = sum(1 for x in (file, iodb_file) if x is not None)
+    if sources > 1 or (sources == 0 and not (reuse and key in cc.SCHEDULE_CACHE)):
+        _bad("Upload either a Cable Schedule or an IODB.")
+    data = await _read(file) if file is not None else None
+    iodb = await _read(iodb_file) if iodb_file is not None else None
+    template = await _read(template_file) if template_file is not None else None
+    if iodb is not None and template is None and cc.builtin_template() is None:
+        _bad("No Cable Schedule template is installed on the server. Upload the project's Cable Schedule template.")
     parsed = (_json(rules, "rules"), _json(overrides, "overrides"), _json(od_data, "cable OD data"), _json(gland, "gland settings"))
     try:
         lq.Rules.from_dict(parsed[0])
@@ -136,7 +166,8 @@ async def start(
         for k in [k for k, v in _jobs.items() if now - v.get("created", now) > _TTL]:
             _jobs.pop(k, None)
         _jobs[job_id] = {"status": "processing", "created": now, "stage": "Queued", "user": current_user.username}
-    background_tasks.add_task(_job_run, job_id, f"{current_user.id}_lug", data, file.filename or "uploaded cable schedule", *parsed)
+    name = (file or iodb_file).filename if (file or iodb_file) else "IODB"
+    background_tasks.add_task(_job_run, job_id, key, data, name or "uploaded file", *parsed, iodb, template, reuse and iodb is None and data is None)
     return {"job_id": job_id, "status": "processing"}
 
 

@@ -223,6 +223,35 @@ def _consistency(v: dict, sched: dict, gl: Optional[dict], lg: Optional[dict], s
     return checks
 
 
+# ── IODB -> generated Cable Schedule (for the Gland and Lug modules' "upload an IODB" input) ──
+SCHEDULE_CACHE: dict[str, dict] = {}          # per user: the last cable schedule generated from an IODB (reused for re-runs)
+
+
+def schedule_from_iodb(iodb: bytes, template: Optional[bytes] = None) -> tuple[bytes, dict]:
+    """
+    IODB -> Cable Schedule workbook, with exactly the generation Cable Schedule Complete uses (existing generator + MCC / VFD / MOV / LCP sheets).
+    The Gland / Lug engines then read this workbook like an uploaded schedule. Returns (workbook bytes, info). Raises CompleteError.
+    """
+    template = template or builtin_template()
+    if template is None:
+        raise CompleteError("No Cable Schedule template is installed on the server. Upload the project's Cable Schedule template (the one the Cable Schedule Generator uses).")
+    v = validate(iodb)
+    if not v["ok"]:
+        raise CompleteError("IODB validation failed: " + " ".join(v["errors"]))
+    df, cols = v["df"], v["cols"]
+    avail = cse.availability(df)
+    extras = [k for k in cse.SHEETS if avail[k]["available"]]
+    include_schedule = v["stats"]["jb_rows"] > 0
+    if not include_schedule and not extras:
+        raise CompleteError("Cable Schedule generation failed: the IODB has no junction box rows and no MCC / VFD / MOV / LCP signals.")
+    report: dict = {}
+    sched, _fname, err = process_cable_schedule(io.BytesIO(iodb), io.BytesIO(template), cols.get("jb_tag") or "", cols.get("tag_no") or "TAG NO", output_mode=wa.WITH_SUMMARY,
+                                                extra_sheets=extras or None, extra_report=report, include_schedule=include_schedule)
+    if err:
+        raise CompleteError(f"Cable Schedule generation failed: {err}")
+    return sched, {"validation": _public_validation(v), "extra_sheets": report.get("sheets", []), "instrument_schedule": include_schedule, "warnings": report.get("warnings", [])}
+
+
 # ── the orchestrator ─────────────────────────────────────────────────────────
 Progress = Callable[[str, str, str], None]
 

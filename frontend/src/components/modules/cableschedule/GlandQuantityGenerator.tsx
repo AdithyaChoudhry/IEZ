@@ -7,13 +7,14 @@
  *
  * Every number and recommendation comes from the backend. The result is an ENGINEERING RECOMMENDATION, never a final selection.
  */
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, CheckCircle2, Download, FileText, Info, Upload } from 'lucide-react';
 import api from '@/services/api';
 import Card from '../../ui/Card';
 import Button from '../../ui/Button';
 import Alert from '../../ui/Alert';
 import FileUploadCard from '../../ui/FileUploadCard';
+import IodbQuantitySource, { IodbSourceHandle } from './IodbQuantitySource';
 
 type Row = Record<string, any>;
 const CONSTRUCTIONS = ['UNARMOURED', 'ARMOURED', 'BRAIDED', 'FLEXIBLE', 'FLAT', 'OTHER'];
@@ -125,6 +126,8 @@ function TabA({ project, refFile, setError }: { project: string; refFile: File |
   const [res, setRes] = useState<any>(null);
   const [view, setView] = useState('Gland Summary');
   const [busy, setBusy] = useState(false);
+  const [source, setSource] = useState<'schedule' | 'iodb'>('schedule');
+  const iodbRef = useRef<IodbSourceHandle>(null);
 
   useEffect(() => {
     setDetect(null); setRes(null); setSheets([]); setCd({});
@@ -163,7 +166,41 @@ function TabA({ project, refFile, setError }: { project: string; refFile: File |
 
   return (
     <div className="space-y-6">
-      <FileUploadCard title="Step 1 - Cable Schedule (Excel)" icon={Upload} file={file} onChange={setFile}
+      <div className="flex flex-wrap gap-2" data-testid="gland-source">
+        {([['schedule', 'Upload Cable Schedule (Excel)'], ['iodb', 'Upload IODB (generate the Cable Schedule first)']] as const).map(([k2, label]) => (
+          <button key={k2} onClick={() => { setSource(k2); setRes(null); }} className="px-4 py-2 rounded-xl text-sm font-semibold"
+                  style={{ background: source === k2 ? 'var(--em)' : 'var(--s3)', color: source === k2 ? '#fff' : 'var(--t0)', border: '1px solid var(--b1)' }}>{label}</button>))}
+      </div>
+
+      {source === 'iodb' && (
+        <Card title="Gland quantity from an IODB" description="Upload only the IODB: the Cable Schedule is generated from it automatically, then the gland quantities are extracted from that schedule.">
+          <IodbQuantitySource ref={iodbRef} title="Upload IODB" buttonLabel="GENERATE GLAND QUANTITY FROM IODB" startUrl="/cable-schedule/gland/iodb/start"
+            jobUrl={(id) => `/cable-schedule/gland/iodb/job/${id}`} setError={setError} onReset={() => setRes(null)}
+            onResult={(r) => { setRes(r); setView('Gland Summary'); }}
+            fields={() => ({ project, settings: JSON.stringify({ default_qty: defaultQty, repeated_rows: repeated }), cable_data: JSON.stringify(cd) })} />
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4 text-sm" style={{ color: 'var(--t0)' }}>
+            <label><span className="block mb-1 font-medium">Default gland quantity when a size has none (project rule)</span>
+              <input className={field} style={fieldStyle} placeholder="empty = flag MISSING GLAND QUANTITY" value={defaultQty} onChange={(e) => setDefaultQty(e.target.value)} /></label>
+            <label><span className="block mb-1 font-medium">Identical termination rows of one cable</span>
+              <select className={field} style={fieldStyle} value={repeated} onChange={(e) => setRepeated(e.target.value)}>
+                <option value="once">Count once (shared cable - default)</option><option value="sum">Add the quantities</option></select></label>
+          </div>
+          {res?.source && (
+            <div className="mt-4">
+              <p className="text-sm font-semibold mb-1" style={{ color: 'var(--t0)' }}>Cable OD per cable type (optional - runs the gland check; re-runs reuse the generated schedule)</p>
+              <div className="overflow-auto max-h-64 border rounded-lg" style={{ borderColor: 'var(--b1)' }}>
+                <table className="w-full text-xs"><thead style={{ background: 'var(--s2)' }}><tr>{['Cable type', 'Existing gland (schedule)', 'Cable OD (mm)', 'Result'].map((h) => <th key={h} className="px-2 py-1.5 text-left font-medium" style={{ color: 'var(--t1)' }}>{h}</th>)}</tr></thead>
+                  <tbody>{res.advisory.map((a: Row) => (
+                    <tr key={a.key} className="border-t" style={{ borderColor: 'var(--b1)', color: 'var(--t0)' }}>
+                      <td className="px-2 py-1">{a.cable_type}</td><td className="px-2 py-1">{a.existing.join(', ') || '-'}</td>
+                      <td className="px-2 py-1"><input className={field} style={{ ...fieldStyle, width: '6rem' }} placeholder="mm" value={cd[a.key]?.od ?? ''} onChange={(e) => setCd({ ...cd, [a.key]: { ...(cd[a.key] || {}), od: e.target.value } })} /></td>
+                      <td className="px-2 py-1">{a.result}</td></tr>))}</tbody></table>
+              </div>
+              <Button onClick={() => iodbRef.current?.run(true)} className="mt-2 bg-blue-600 hover:bg-blue-700">Re-run with these OD values</Button>
+            </div>)}
+        </Card>)}
+
+      {source === 'schedule' && <FileUploadCard title="Step 1 - Cable Schedule (Excel)" icon={Upload} file={file} onChange={setFile}
                       hint="The workbook is only read. Cable schedule sheets are found by their gland columns; the file is never changed.">
         {detect && (
           <div className="mt-3 text-xs" style={{ color: 'var(--t0)' }}>
@@ -177,9 +214,9 @@ function TabA({ project, refFile, setError }: { project: string; refFile: File |
             <p className="mt-1" style={{ color: 'var(--t1)' }}>{detect.cable_types.length} cable types · {detect.occurrences} gland entries</p>
           </div>
         )}
-      </FileUploadCard>
+      </FileUploadCard>}
 
-      {detect && (
+      {source === 'schedule' && detect && (
         <Card title="Step 2 - Cable OD and construction per cable type" description="Optional but needed for the gland check. The schedule's own gland is shown and is never overwritten.">
           <div className="overflow-auto max-h-96 border rounded-lg" style={{ borderColor: 'var(--b1)' }}>
             <table className="w-full text-xs">

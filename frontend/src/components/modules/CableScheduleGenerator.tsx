@@ -17,6 +17,7 @@ import ExtraCableSheets from './cableschedule/ExtraCableSheets';
 import DrumScheduleGenerator from './cableschedule/DrumScheduleGenerator';
 import GlandQuantityGenerator from './cableschedule/GlandQuantityGenerator';
 import LugQuantityGenerator from './cableschedule/LugQuantityGenerator';
+import CableScheduleComplete from './cableschedule/CableScheduleComplete';
 
 interface ColumnsResponse {
   columns: string[];
@@ -51,7 +52,7 @@ export default function CableScheduleGenerator() {
   const [jbSummary, setJbSummary] = useState<JBSummaryRow[] | null>(null);
   const [result, setResult] = useState<GenerateResponse | null>(null);
   // Instrument Cable Schedule group: the schedule (default on) + optional MCC DI / MCC DO / VFD / MOV / LCP sheets
-  const [view, setView] = useState<'schedule' | 'drum' | 'gland' | 'lug'>('schedule');
+  const [view, setView] = useState<'schedule' | 'drum' | 'gland' | 'lug' | 'complete'>('schedule');
   const [includeSchedule, setIncludeSchedule] = useState(true);
   const [extraSheets, setExtraSheets] = useState<string[]>([]);
 
@@ -168,7 +169,7 @@ export default function CableScheduleGenerator() {
 
   const viewTabs = (
     <div className="flex gap-2" data-testid="cable-views">
-      {([['schedule', 'Cable Schedule'], ['drum', 'Drum Schedule Generator'], ['gland', 'Cable Gland Quantity Generator'], ['lug', 'Cable Lug Quantity Generator']] as const).map(([k, label]) => (
+      {([['schedule', 'Cable Schedule'], ['drum', 'Drum Schedule Generator'], ['gland', 'Cable Gland Quantity Generator'], ['lug', 'Cable Lug Quantity Generator'], ['complete', 'Cable Schedule Complete ⭐']] as const).map(([k, label]) => (
         <button key={k} onClick={() => setView(k)} className="px-4 py-2 rounded-xl text-sm font-semibold"
                 style={{ background: view === k ? 'var(--em)' : 'var(--s3)', color: view === k ? '#fff' : 'var(--t0)', border: '1px solid var(--b1)' }}>
           {label}
@@ -188,6 +189,21 @@ export default function CableScheduleGenerator() {
         />
         {viewTabs}
         <DrumScheduleGenerator />
+      </div>
+    );
+  }
+
+  if (view === 'complete') {
+    return (
+      <div className="space-y-6">
+        <PageHeader
+          icon={Cable}
+          iconClassName="text-red-500"
+          title="Cable Schedule Complete"
+          description="Generate Cable Schedule, I/O Summary, Gland Quantity and Cable Lug Quantity from one IODB."
+        />
+        {viewTabs}
+        <CableScheduleComplete />
       </div>
     );
   }

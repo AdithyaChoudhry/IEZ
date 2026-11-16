@@ -200,12 +200,14 @@ def _norm_thread(t: str) -> str:
 
 
 def _ip_ok(have: str, need: str) -> Optional[bool]:
-    m1, m2 = re.search(r"IP\s*(\d)(\d)", (have or "").upper()), re.search(r"IP\s*(\d)(\d)", (need or "").upper())
+    """True when ANY IP rating stated for the gland meets the requirement (a row may list IP66 / IP67 / IP68 / IP69)."""
+    m2 = re.search(r"IP\s*(\d)(\d)", (need or "").upper())
     if not m2:
         return True
-    if not m1:
+    haves = re.findall(r"IP\s*(\d)(\d)", (have or "").upper())
+    if not haves:
         return None
-    return int(m1.group(1)) >= int(m2.group(1)) and int(m1.group(2)) >= int(m2.group(2))
+    return any(int(a) >= int(m2.group(1)) and int(b) >= int(m2.group(2)) for a, b in haves)
 
 
 def _check_row(r: ref.GlandRef, inp: Inputs, std: str, project: Project) -> Optional[dict]:
@@ -275,6 +277,14 @@ def _check_row(r: ref.GlandRef, inp: Inputs, std: str, project: Project) -> Opti
         flags.append("TEMPERATURE NOT IN DATABASE")
     if inp.hazardous and not r.ex:
         flags.append("CERTIFICATION CHECK REQUIRED")
+    elif inp.hazardous:
+        flags.append("VERIFY CERTIFICATE SCOPE")
+        checks.append(f"Stated certification: {r.ex}. Verify the certificate scope (zone/EPL, gas or dust group, temperature class, protection concept) covers the exact gland variant and the installation.")
+    if std in ("ET", "BSP") and r.thread_basis.get(std):
+        flags.append("DERIVED FROM MANUFACTURER CODE TABLE - CONFIRM AVAILABILITY")
+        checks.append(f"{std} option: {r.thread_basis[std]}")
+    if std == "ET":
+        flags.append("ET IS A LEGACY THREAD - VERIFY WITH MANUFACTURER")
     flags.append("MANUFACTURER VERIFICATION REQUIRED")
     if project.gland_type and r.gland_type and project.gland_type.lower() not in r.gland_type.lower():
         flags.append("GLAND TYPE DIFFERS FROM PROJECT PREFERENCE")
@@ -284,8 +294,10 @@ def _check_row(r: ref.GlandRef, inp: Inputs, std: str, project: Project) -> Opti
             "armour_ranges": [list(a) for a in r.arm_ranges], "ip": r.ip or "not in database", "ex": r.ex or "not in database",
             "material": r.material or "not in database", "temperature": r.temp or "not in database", "tier": r.tier,
             "flags": list(dict.fromkeys(flags)), "checks": checks, "borderline": "BORDERLINE" in flags,
-            "source": {"manufacturer": r.manufacturer, "series": r.series, "document": r.source_doc, "url": r.source_url, "revision": r.revision, "notes": r.notes, "tier": r.tier},
-            "_key": (TIER_RANK(r), _pref(r, project), "BORDERLINE" in flags, _size_key(r))}
+            "source": {"manufacturer": r.manufacturer, "series": r.series, "document": r.source_doc, "url": r.source_url, "revision": r.revision, "notes": r.notes, "tier": r.tier,
+                       "standards": r.standards, "thread_basis": r.thread_basis.get(std, "")},
+            "_key": (TIER_RANK(r), _pref(r, project), int(bool(inp.hazardous and not r.ex)) + int(bool(inp.ip and not r.ip)),
+                     "BORDERLINE" in flags, _size_key(r))}
 
 
 def TIER_RANK(r: ref.GlandRef) -> int:
@@ -320,6 +332,10 @@ def advise(inp: Inputs, rows: list[ref.GlandRef], project: Optional[Project] = N
             elif not family:
                 entry.update(status="NO COMPATIBLE GLAND", message=f"The reference database has no {inp.construction.lower()} gland family. "
                              "Use a gland family specifically approved for this construction and verify the manufacturer's ranges.")
+            elif not any(r.threads(std) for r in family):
+                entry.update(status="UNAVAILABLE", message=(ET_UNAVAILABLE if std == "ET" else
+                             f"{std} gland selection unavailable for {inp.construction.lower()} cable in the selected reference database: no {inp.construction.lower()} gland row lists "
+                             f"{std} entry threads. Upload the manufacturer's table that does, or verify with the manufacturer."))
             else:
                 entry.update(status="NO COMPATIBLE GLAND", message=_why_none(inp, family, std))
             entry.update(preferred=None, alternatives=[])
@@ -425,9 +441,14 @@ def compare_cable_type(cable_type: str, existing: list[str], data: dict, rows: l
     if any(e in pre_labels for e in ex_norm):
         out["result"] = "REVIEW" if pre["borderline"] else "MATCH"
         out["message"] = ("Existing gland is the preferred option." if not pre["borderline"] else "Existing gland is the preferred option but the OD is borderline for it - verify.")
+        if best["standard"] == "ET" and "DERIVED FROM MANUFACTURER CODE TABLE - CONFIRM AVAILABILITY" in pre["flags"]:
+            out["result"] = "MANUFACTURER CHECK REQUIRED"
+            out["message"] = ("The existing ET gland lies in the published OD range, but ET is a legacy thread and the ET option is derived from the manufacturer's code table - "
+                              "confirm ET availability for this gland with the manufacturer.")
     elif any(e in valid_labels for e in ex_norm):
-        out["result"] = "REVIEW"
-        out["message"] = "Existing gland is technically valid but is not the smallest compatible option; alternatives are listed."
+        out["result"] = "MANUFACTURER CHECK REQUIRED" if best["standard"] == "ET" else "REVIEW"
+        out["message"] = ("Existing gland is technically valid but is not the smallest compatible option; alternatives are listed."
+                          + (" ET is a legacy thread: confirm availability with the manufacturer." if best["standard"] == "ET" else ""))
     else:
         out["result"] = "MISMATCH"
         out["message"] = (f"Existing {', '.join(existing)} is not among the glands whose published range covers a {od:g} mm cable. "

@@ -122,9 +122,9 @@ async def reference(current_user: User = Depends(get_current_user)):
     rows = ref.builtin()
     return {"standards": ref.STANDARDS, "principles": ref.PRINCIPLES, "disclaimer": adv.NOT_FINAL, "rule": adv.RULE_OD_VS_THREAD,
             "rows": [r.to_dict() for r in rows], "priority": "Project specification > approved vendor/project gland database > generic engineering reference",
-            "limits": ["The built-in tables hold Metric and NPT entry threads only (CMP Products published example tables).",
-                       "No IP rating, Ex certification, material or temperature data is in the built-in tables: those checks stay 'verify with the manufacturer'.",
-                       "ET and BSP need a manufacturer table (upload it below); nothing is inferred from Metric or NPT.",
+            "limits": ["Basis: manufacturers' published selection tables (CMP Products A2F / T3CDS and Hawke 501/453 UNIVERSAL), not an industry standard - no standard publishes cable-OD-to-gland-size ranges.",
+                       "Metric and NPT entry threads are as printed in the manufacturer tables. ET (Imperial Electrical Thread) and BSP options of the CMP rows come from CMP's HOW TO ORDER thread-size code table through the NPT codes - they are not printed per gland size and are flagged 'derived - confirm availability'. The Hawke sheet lists no ET or BSP.",
+                       "IP rating, Ex certification, material and temperature are present only for the Hawke rows (as printed on its datasheet); CMP rows carry none, so those checks stay 'verify with the manufacturer'. The certificate scope must always be verified.",
                        "Live retrieval from the internet is not performed; the tables were read from the manufacturer's page on " + ref.RETRIEVED + "."],
             "template_headers": ref.TEMPLATE_HEADERS}
 

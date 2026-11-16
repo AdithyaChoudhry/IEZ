@@ -1,21 +1,32 @@
 """
 gland_reference.py - the cable gland reference database, standards basis and vendor-table import.
 
-What is in the built-in data
-----------------------------
-Only values that were read from a published manufacturer table: CMP Products "Cable Gland Sizes" page
-(armoured T3CDS and unarmoured A2F, both shown there "as examples"). Nothing was estimated or converted from another
-thread. The page publishes Metric and NPT entry threads only - no BSP, no ET, no IP rating, no Ex certification, no
-material or temperature data - so those fields are empty and every consumer of this database must treat the empty
-fields as "not in the database", never as "satisfied".
+Basis of the built-in data (what is - and is not - an "industry standard")
+--------------------------------------------------------------------------
+No standard publishes cable-OD-to-gland-size ranges: IEC/EN 62444 is a framework (it defines the gland, its entry thread and
+size by the nominal diameter of the entry thread). The ranges therefore come from MANUFACTURERS' published selection tables,
+and each row names its source document, URL and retrieval date. Standards enter in two places: the thread standards
+(ASME B1.20.1 for NPT, BS 31:1940 for ET, ISO 228 for BSP parallel) and, where the manufacturer's own datasheet prints them,
+the construction / test standards of the certification (IEC/EN 60079-0/-1/-7/-31) and ingress protection (IEC/EN 60529).
+
+Built-in sources (all retrieved 2026-11-12 / 2026-11-17):
+  1. CMP Products "Cable Gland Sizes" web page - A2F (unarmoured) and T3CDS (armoured), shown there "as examples":
+     overall cable diameter, bedding, armour and the Metric / NPT entry threads.
+  2. CMP Products "IEC International Cable Glands & Accessories" catalogue - HOW TO ORDER table: the entry-thread sizes
+     offered as Metric, NPT/BSPP/BSPT/NPSM and Imperial Electrical Thread (E.T.), by thread-size code. ET and BSP options of
+     the CMP rows are taken from that table through the gland's NPT thread codes (they are not printed per gland size) and are
+     flagged "DERIVED FROM MANUFACTURER CODE TABLE - CONFIRM AVAILABILITY".
+  3. Hawke 501/453 UNIVERSAL specification sheet (distributor-hosted copy, revision not printed): armoured / braided gland
+     with cable acceptance ranges, Metric / NPT entry threads, IP66-IP69 (IEC/EN 60529), Ex db/eb/tb certification
+     (CML 19ATEX1168X / CML 19.0046X / CSA1015065) and -60 to +80 C. It lists no ET and no BSP.
+
+Fields a source does not state stay empty and every consumer treats empty as "not in the database", never as "satisfied".
 
 Priority when several sources exist (project settings > approved vendor/project table > generic reference):
-    tier PROJECT  : rows imported from the project's own table (Excel upload)
-    tier VENDOR   : rows imported from a vendor table (Excel upload)
-    tier REFERENCE: the built-in published example tables below
+    tier PROJECT / VENDOR : rows imported from an Excel upload; tier REFERENCE: the built-in tables above.
 
-Everything here is decision support. A selection is final only after it is checked against the datasheet of the
-manufacturer product that is actually going to be bought.
+Everything here is decision support. A selection is final only after it is checked against the datasheet of the manufacturer
+product that is actually going to be bought.
 """
 from __future__ import annotations
 
@@ -27,6 +38,11 @@ from typing import Any, Optional
 import openpyxl
 
 RETRIEVED = "2026-11-12"
+RETRIEVED_2 = "2026-11-17"
+CMP_CAT_URL = "https://www.cmp-products.com/Catalogues/IEC%20SHORT%20FORM%20CATALOGUE.pdf"
+CMP_CAT_DOC = "CMP Products - IEC International Cable Glands & Accessories catalogue (HOW TO ORDER: entry thread type and size table)"
+HAWKE_DOC = "Hawke 501/453 UNIVERSAL cable gland specification sheet (distributor-hosted copy)"
+HAWKE_URL = "https://cdn.shopify.com/s/files/1/0261/4637/3711/files/Hawke_CableGland_501_453_Univ.pdf"
 CMP_URL = "https://www.cmp-products.com/cable-glands/technical/cable-gland-sizes/"
 CMP_DOC = "CMP Products - Cable Gland Sizes (manufacturer selection tables, shown as examples: T3CDS armoured, A2F unarmoured)"
 
@@ -58,6 +74,8 @@ class GlandRef:
     revision: str = ""
     notes: str = ""
     tier: str = "REFERENCE"
+    standards: str = ""                                   # standards the manufacturer / framework relies on for this row
+    thread_basis: dict = field(default_factory=dict)      # standard -> how the thread options were established
 
     def threads(self, standard: str) -> list[str]:
         return {"METRIC": [self.metric] if self.metric else [], "NPT": list(self.npt), "BSP": list(self.bsp), "ET": list(self.et)}[standard]
@@ -67,7 +85,8 @@ class GlandRef:
                 "size": self.size, "od_min": self.od_min, "od_max": self.od_max, "bed_min": self.bed_min, "bed_max": self.bed_max,
                 "armour_ranges": [list(a) for a in self.arm_ranges], "metric": self.metric or "", "npt": self.npt, "bsp": self.bsp,
                 "et": self.et, "ip": self.ip, "ex": self.ex, "material": self.material, "temp": self.temp, "source_doc": self.source_doc,
-                "source_url": self.source_url, "revision": self.revision, "notes": self.notes, "tier": self.tier}
+                "source_url": self.source_url, "revision": self.revision, "notes": self.notes, "tier": self.tier,
+                "standards": self.standards, "et_basis": self.thread_basis.get("ET", ""), "bsp_basis": self.thread_basis.get("BSP", "")}
 
 
 # ── CMP published tables (values copied from the page; thread lengths, weights, ordering codes are not used) ──
@@ -106,21 +125,81 @@ def _npt(*vals) -> list:
     return [f'{v} NPT' for v in vals if v]
 
 
+# CMP "HOW TO ORDER" thread-size code table: code, metric, NPT/BSPP/BSPT/NPSM size (shared column), Imperial Electrical Thread (E.T.) size
+_CMP_CODES = [("1", "M16", '1/2"', '5/8"'), ("2", "M20", '3/4"', '3/4"'), ("3", "M25", '1"', '1"'), ("4", "M32", '1-1/4"', '1-1/4"'),
+              ("5", "M40", '1-1/2"', '1-1/2"'), ("6", "M50", '2"', '2"'), ("7", "M63", '2-1/2"', '2-1/2"'), ("8", "M75", '3"', '3"'),
+              ("9", "M90", '3-1/2"', '3-1/2"'), ("10", "M100", '4"', '4"'), ("12", "M130", '5"', '5"')]
+_CMP_BY_IMPERIAL = {c[2]: c for c in _CMP_CODES}
+_CMP_BY_METRIC = {c[1]: c for c in _CMP_CODES}
+_CMP_DERIVED = ("Derived from the manufacturer's HOW TO ORDER thread-size code table ("
+                "NPT/BSPP/BSPT/NPSM share one imperial size column; E.T. has its own column) through the gland's published NPT entry codes - "
+                "not printed per gland size. CONFIRM AVAILABILITY for the exact gland model/size with CMP.")
+
+
+def _cmp_et_bsp(metric: Optional[str], npt: list) -> tuple[list, list]:
+    """ET and BSP entry options of a CMP gland size, from the code table (see module docstring)."""
+    codes = [_CMP_BY_IMPERIAL[n.replace(" NPT", "")] for n in npt if n.replace(" NPT", "") in _CMP_BY_IMPERIAL]
+    if not codes and metric in _CMP_BY_METRIC:
+        codes = [_CMP_BY_METRIC[metric]]
+    return [f"{c[3]} ET" for c in codes], [f"{c[2]} BSP" for c in codes if c[2]]
+
+
+_STD_CMP = ("Framework: IEC/EN 62444 (entry thread, gland size). NPT: ASME B1.20.1. ET: BS 31:1940 (legacy). Cable ranges: manufacturer data - "
+            "no standard defines them. No IP / Ex / material / temperature on the page.")
+_STD_HAWKE = ("Framework: IEC/EN 62444. Certification / test: IEC/EN 60079-0, -1, -7, -31 (as printed on the datasheet). IP: IEC/EN 60529 (as printed). "
+              "NPT: ASME B1.20.1. Cable ranges: manufacturer data.")
+
+
 def builtin() -> list[GlandRef]:
     rows: list[GlandRef] = []
     for size, m, n1, n2, lo, hi in _A2F:
-        rows.append(GlandRef("CMP Products", "A2F", "Unarmoured cable gland", "UNARMOURED", size, lo, hi, metric=m, npt=_npt(n1, n2),
-                             source_doc=CMP_DOC, source_url=CMP_URL, revision=f"page undated; retrieved {RETRIEVED}",
+        npt = _npt(n1, n2)
+        et, bsp = _cmp_et_bsp(m, npt)
+        rows.append(GlandRef("CMP Products", "A2F", "Unarmoured cable gland", "UNARMOURED", size, lo, hi, metric=m, npt=npt, et=et, bsp=bsp,
+                             source_doc=CMP_DOC + "; " + CMP_CAT_DOC, source_url=CMP_URL + " | " + CMP_CAT_URL,
+                             revision=f"web page undated, retrieved {RETRIEVED}; catalogue cites IEC 60079-0:2017, retrieved {RETRIEVED_2}",
                              notes="Overall cable diameter range as published. NPT: the entry thread and the alternate entry thread listed for this size "
-                                   "(the page does not label which is which). Page gives no IP, Ex, material, temperature, BSP or ET data."))
+                                   "(the page does not label which is which). Page gives no IP, Ex, material or temperature data.",
+                             standards=_STD_CMP, thread_basis={"ET": _CMP_DERIVED, "BSP": _CMP_DERIVED}))
     for size, m, n1, n2, bl, bh, lo, hi, a1, a2 in _T3CDS:
+        npt = _npt(n1, n2)
+        et, bsp = _cmp_et_bsp(m, npt)
         rows.append(GlandRef("CMP Products", "T3CDS", "Armoured cable gland", "ARMOURED", size, lo, hi, bed_min=bl, bed_max=bh,
-                             arm_ranges=[a1, a2], metric=m, npt=_npt(n1, n2), source_doc=CMP_DOC, source_url=CMP_URL,
-                             revision=f"page undated; retrieved {RETRIEVED}",
+                             arm_ranges=[a1, a2], metric=m, npt=npt, et=et, bsp=bsp, source_doc=CMP_DOC + "; " + CMP_CAT_DOC,
+                             source_url=CMP_URL + " | " + CMP_CAT_URL, revision=f"web page undated, retrieved {RETRIEVED}; catalogue retrieved {RETRIEVED_2}",
                              notes="Bedding diameter and overall cable diameter as published. The table lists two armour ranges per size; which armour/cone "
                                    "type each belongs to is not stated in the retrieved text - verify on the manufacturer's page before relying on the armour check. "
-                                   "Page gives no IP, Ex, material, temperature, BSP or ET data."))
+                                   "Page gives no IP, Ex, material or temperature data.",
+                             standards=_STD_CMP, thread_basis={"ET": _CMP_DERIVED, "BSP": _CMP_DERIVED}))
+    # Hawke 501/453 UNIVERSAL: size, metric, NPT std, NPT option, inner sheath (bedding) min/max, outer sheath B min/max, armour/braid O1, O2, note
+    for size, m, n1, n2, bl, bh, lo, hi, o1, o2, note in _HAWKE_UNIV:
+        for constr, label in (("ARMOURED", "SWA / tape armour"), ("BRAIDED", "wire braid")):
+            rows.append(GlandRef("Hawke", "501/453/UNIV", "Flameproof / increased safety armoured & braid cable gland", constr, size, lo, hi, bed_min=bl, bed_max=bh,
+                                 arm_ranges=[o1, o2], metric=m, npt=_npt(n1, n2), ip="IP66 / IP67 / IP68 / IP69",
+                                 ex="Ex db IIC Gb, Ex eb IIC Gb, Ex tb IIIC Db (ATEX CML 19ATEX1168X, IECEx CML 19.0046X, CSA1015065)",
+                                 material="Brass / nickel-plated brass / stainless steel (ordering options)", temp="-60 C to +80 C",
+                                 source_doc=HAWKE_DOC, source_url=HAWKE_URL, revision=f"revision not printed; retrieved {RETRIEVED_2}",
+                                 notes=f"Datasheet: for use with {label}. Inner sheath = bedding diameter; outer sheath = overall diameter B; armour/braid ranges are "
+                                       "the two clamp orientations of the reversible armour clamp. " + note + " No ET or BSP threads are listed.",
+                                 standards=_STD_HAWKE))
     return rows
+
+
+# Hawke 501/453 UNIVERSAL selection table (printed values)
+_HAWKE_UNIV = [
+    ("Os", "M20", '1/2"', None, 3.5, 8.1, 5.5, 12.0, (0.8, 1.25), (0.0, 0.8), "M16 thread option: max inner sheath 10.9 mm applies to size O only."),
+    ("O", "M20", '1/2"', None, 6.5, 11.4, 9.5, 16.0, (0.8, 1.25), (0.0, 0.8), "M16 thread option: maximum inner sheath diameter 10.9 mm."),
+    ("A", "M20", '3/4"', '1/2"', 8.4, 14.3, 12.5, 20.5, (0.8, 1.25), (0.0, 0.8), ""),
+    ("B", "M25", '1"', '3/4"', 11.1, 19.7, 16.9, 26.0, (1.25, 1.6), (0.0, 0.7), ""),
+    ("C", "M32", '1-1/4"', '1"', 17.6, 26.5, 22.0, 33.0, (1.6, 2.0), (0.0, 0.7), ""),
+    ("C2", "M40", '1-1/2"', '1-1/4"', 23.1, 32.5, 28.0, 41.0, (1.6, 2.0), (0.0, 0.7), ""),
+    ("D", "M50", '2"', '1-1/2"', 28.9, 44.4, 36.0, 52.6, (1.8, 2.5), (0.0, 1.0), "Reduced NPT option: max inner sheath 42.3 mm."),
+    ("E", "M63", '2-1/2"', '2"', 39.9, 56.3, 46.0, 65.3, (1.8, 2.5), (0.0, 1.0), "Reduced NPT option: max inner sheath 54.3 mm."),
+    ("F", "M75", '3"', '2-1/2"', 50.5, 68.2, 57.0, 78.0, (1.8, 2.5), (0.0, 1.0), "Reduced NPT option: max inner sheath 65.3 mm."),
+    ("G", "M80", '3-1/2"', None, 67.0, 73.0, 75.0, 89.5, (2.0, 3.5), (0.0, 1.0), "2 mm thread pitch as standard (1.5 mm on request)."),
+    ("H", "M90", '3-1/2"', None, 67.0, 77.6, 75.0, 89.5, (2.0, 3.5), (0.0, 1.0), "2 mm thread pitch as standard (1.5 mm on request)."),
+    ("J", "M100", '4"', None, 75.0, 91.6, 88.0, 104.5, (2.5, 4.0), (0.0, 1.0), "2 mm thread pitch as standard (1.5 mm on request)."),
+]
 
 
 STANDARDS = [
@@ -133,14 +212,21 @@ STANDARDS = [
             "never converted from a metric size.", "applies_to": "NPT"},
     {"id": "BS 31:1940", "title": "Steel conduit and fittings for electrical wiring (historical definition of the ET thread)",
      "use": "ET = Electrical Thread, a legacy English electrical threadform. LEGACY / NON-STANDARD FOR MANY MODERN PRODUCTS. Not interchangeable with Metric, "
-            "NPT or BSP. Verify availability with the chosen manufacturer; where an ET entry is required some manufacturers advise an approved adaptor.",
+            "NPT or BSP. CMP's IEC catalogue lists 'Imperial Electrical Thread (E.T.)' as an entry thread type with its own size column (5/8\", 3/4\", 1\", 1-1/4\", 1-1/2\", 2\" ...); "
+            "the Hawke 501/453 UNIVERSAL sheet lists no ET (Hawke's FAQ, cited in the project specification, recommends an approved adaptor - that page could not be retrieved, HTTP 403). Verify availability with the chosen manufacturer.",
      "applies_to": "ET"},
+    {"id": "IEC/EN 60079-0, -1, -7, -31 and IEC/EN 60529", "title": "Explosive atmospheres (equipment, flameproof d, increased safety e, dust t) and ingress protection (IP code)",
+     "use": "Printed on the Hawke 501/453 UNIVERSAL datasheet as the construction/test standards of its certification and IP rating. They define the certification and IP "
+            "requirements; they do not give cable-OD ranges. The certificate scope (zone, group, temperature class) must still be checked for the exact gland.",
+     "applies_to": "Certification / IP"},
     {"id": "ISO 228-1 / ISO 7-1 (BSP)", "title": "Pipe threads (BSP parallel / taper)",
-     "use": "BSP entry threads. Sizes come from the manufacturer's table for the gland model; the built-in reference tables contain no BSP data.",
+     "use": "BSP entry threads (BSPP parallel / BSPT taper). CMP's ordering table shares one imperial size column between NPT, BSPP, BSPT and NPSM; the BSP options of the CMP rows are taken from it (flagged as derived).",
      "applies_to": "BSP"},
 ]
 
 PRINCIPLES = [
+    "Basis of the reference table: manufacturers' published selection tables (each row names its source, URL and retrieval date) - NOT an industry standard. "
+    "No standard publishes cable-OD-to-gland-size ranges; IEC/EN 62444 is a framework, ASME B1.20.1 / BS 31:1940 / ISO 228 define threads, IEC/EN 60079 and 60529 define certification and IP requirements.",
     "Cable OD decides whether a particular gland model/size can seal and clamp the cable. The entry thread decides how the gland connects to the "
     "equipment/enclosure. They are related but different selection criteria.",
     "A gland size is not determined by the thread size alone: the cable must lie inside the gland's published cable diameter range "

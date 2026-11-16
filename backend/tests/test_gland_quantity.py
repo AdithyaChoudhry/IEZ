@@ -195,12 +195,43 @@ def test_npt_comes_from_the_gland_row_and_is_not_a_metric_conversion():
     assert all('3/4" NPT' in c["thread_options"] for c in [res_for(out, "NPT")["preferred"]] + res_for(out, "NPT")["alternatives"])
 
 
-def test_et_and_bsp_are_unavailable_without_a_table_and_never_inferred():
+def test_et_and_bsp_come_from_the_manufacturer_code_table_and_are_flagged_as_derived():
     out = advise(od=9.0)
     et = res_for(out, "ET")
-    assert et["status"] == "UNAVAILABLE" and et["message"] == adv.ET_UNAVAILABLE and et["preferred"] is None and et["legacy"]
-    assert "BS 31:1940" in et["notice"] and "LEGACY" in et["notice"]
+    assert et["status"] == "VALID" and et["legacy"] and "BS 31:1940" in et["notice"] and "LEGACY" in et["notice"]
+    pre = et["preferred"]
+    assert all(o.endswith(" ET") for o in pre["thread_options"]) and pre["manufacturer"] == "CMP Products"
+    assert {"DERIVED FROM MANUFACTURER CODE TABLE - CONFIRM AVAILABILITY", "ET IS A LEGACY THREAD - VERIFY WITH MANUFACTURER"} <= set(pre["flags"])
+    assert "HOW TO ORDER" in pre["source"]["thread_basis"] and "cmp-products.com/Catalogues" in pre["source"]["url"]
+    assert [o for o in pre["thread_options"]] == ['5/8" ET', '3/4" ET'] or pre["gland_size"] != "20S"
+    bsp = res_for(out, "BSP")
+    assert bsp["status"] == "VALID" and all(o.endswith(" BSP") for o in bsp["preferred"]["thread_options"])
+    # ET is never taken from the metric size: M16 maps through CMP's own code table, not by conversion
+    c16 = next(r for r in ref.builtin() if r.series == "A2F" and r.size == "16")
+    assert c16.metric == "M16" and c16.et == ['5/8" ET'] and c16.npt == []
+
+
+def test_et_is_unavailable_where_no_manufacturer_row_offers_it():
+    out = advise(od=10.0, construction="BRAIDED", bedding=8.0, armour_min=1.0, armour_max=1.2)      # only the Hawke sheet covers braid - it lists no ET / BSP
+    et = res_for(out, "ET")
+    assert et["status"] == "UNAVAILABLE" and et["message"] == adv.ET_UNAVAILABLE and et["preferred"] is None
     assert res_for(out, "BSP")["status"] == "UNAVAILABLE"
+    assert res_for(out, "METRIC")["preferred"]["manufacturer"] == "Hawke"
+
+
+def test_hawke_rows_carry_their_printed_certification_ip_and_standards():
+    out = adv.advise(adv.inputs_from({"od": 20, "construction": "ARMOURED", "bedding": 15, "armour_min": 1.25, "armour_max": 1.6, "hazardous": True, "ip": "IP68",
+                                      "standards": "METRIC"}), ref.builtin())
+    pre = res_for(out, "METRIC")["preferred"]
+    assert pre["manufacturer"] == "Hawke" and "Ex db IIC Gb" in pre["ex"] and "IP68" in pre["ip"] and pre["temperature"].startswith("-60")
+    assert "VERIFY CERTIFICATE SCOPE" in pre["flags"] and "CERTIFICATION CHECK REQUIRED" not in pre["flags"]
+    assert "IEC/EN 60079" in pre["source"]["standards"] and "IEC/EN 60529" in pre["source"]["standards"]
+
+
+def test_reference_table_states_its_basis_and_standards():
+    rows = ref.builtin()
+    assert {r.manufacturer for r in rows} == {"CMP Products", "Hawke"} and all(r.source_url and r.source_doc and r.standards for r in rows)
+    assert any("NOT an industry standard" in p for p in ref.PRINCIPLES)
 
 
 def test_vendor_table_adds_et_and_bsp_and_takes_priority():
@@ -235,8 +266,8 @@ def test_construction_changes_the_family_and_unsupported_families_say_so():
     un = res_for(advise(od=20), "METRIC")["preferred"]
     ar = res_for(advise(od=20, construction="ARMOURED", bedding=15), "METRIC")["preferred"]
     assert un["series"] == "A2F" and ar["series"] == "T3CDS"
-    br = res_for(advise(od=10, construction="BRAIDED"), "METRIC")
-    assert br["status"] == "NO COMPATIBLE GLAND" and "braided" in br["message"].lower()
+    fl = res_for(advise(od=10, construction="FLEXIBLE"), "METRIC")
+    assert fl["status"] == "NO COMPATIBLE GLAND" and "flexible" in fl["message"].lower()
 
 
 def test_hazardous_area_never_claims_certification():
@@ -286,7 +317,7 @@ def test_existing_et_gland_asks_for_manufacturer_check():
     rows = [row(1, "A", "IC-1", "1PX1.5 Sqmm", '3/4"ET', 1, '3/4"ET', 1)]
     p = analyze(rows, cable_data={"1PX15SQMM": {"od": 9.0}})
     a = p["advisory"][0]
-    assert a["result"] == "MANUFACTURER CHECK REQUIRED"
+    assert a["result"] == "MANUFACTURER CHECK REQUIRED" and "legacy" in a["message"].lower()
     assert any(e["kind"] == "ET availability" for e in p["exceptions"])
 
 

@@ -267,6 +267,8 @@ function TabB({ project, refFile, setError, proj }: { project: string; refFile: 
       <p>IP: {c.ip} · Ex: {c.ex} · material: {c.material} · temperature: {c.temperature}</p>
       {c.checks.map((x: string, i: number) => <p key={i}>{x}</p>)}
       <p className="text-amber-600">{c.flags.join(' · ')}</p>
+      {c.source.thread_basis && <p style={{ color: 'var(--t1)' }}>Thread basis: {c.source.thread_basis}</p>}
+      {c.source.standards && <p style={{ color: 'var(--t1)' }}>Standards basis: {c.source.standards}</p>}
       <p style={{ color: 'var(--t1)' }}>Source: {c.source.manufacturer} {c.source.series} - {c.source.document || 'n/a'} {c.source.url && <a className="underline" href={c.source.url} target="_blank" rel="noreferrer">{c.source.url}</a>} ({c.source.revision || 'no revision'}) · tier {c.source.tier}</p>
     </div>);
   return (
@@ -349,10 +351,10 @@ function TabC({ reference, refFile, setError }: { reference: any; refFile: File 
             {check.problems.map((p: string, i: number) => <p key={i} className="text-xs text-amber-600">{p}</p>)}
           </div>)}
       </Card>
-      <Card title={`Reference gland table (${reference.rows.length} rows, CMP Products published example tables)`}>
-        <Table empty="-" rows={reference.rows.map((r: Row) => ({ ...r, od: `${r.od_min}-${r.od_max}`, bed: r.bed_min != null ? `${r.bed_min}-${r.bed_max}` : '', arm: (r.armour_ranges || []).map((a: number[]) => a.join('-')).join(' / '), npt: r.npt.join(' / ') }))}
-          columns={[['manufacturer', 'Manufacturer'], ['series', 'Series'], ['construction', 'Construction'], ['size', 'Size'], ['od', 'Cable OD (mm)'], ['bed', 'Bedding (mm)'], ['arm', 'Armour (mm)'], ['metric', 'Metric'], ['npt', 'NPT options'], ['ip', 'IP'], ['ex', 'Ex'], ['revision', 'Revision']]} />
-        <p className="text-xs mt-2" style={{ color: 'var(--t1)' }}>Source: {reference.rows[0]?.source_doc} - {reference.rows[0]?.source_url}</p>
+      <Card title={`Reference gland table (${reference.rows.length} rows - manufacturers' published tables: CMP Products, Hawke)`} description="Basis: manufacturers' published selection tables, not an industry standard. No standard publishes cable-OD-to-gland-size ranges; the standards column shows what each row relies on.">
+        <Table empty="-" rows={reference.rows.map((r: Row) => ({ ...r, od: `${r.od_min}-${r.od_max}`, bed: r.bed_min != null ? `${r.bed_min}-${r.bed_max}` : '', arm: (r.armour_ranges || []).map((a: number[]) => a.join('-')).join(' / '), npt: r.npt.join(' / '), et: (r.et || []).join(' / '), bsp: (r.bsp || []).join(' / ') }))}
+          columns={[['manufacturer', 'Manufacturer'], ['series', 'Series'], ['construction', 'Construction'], ['size', 'Size'], ['od', 'Cable OD (mm)'], ['bed', 'Bedding (mm)'], ['arm', 'Armour (mm)'], ['metric', 'Metric'], ['npt', 'NPT options'], ['et', 'ET options (derived)'], ['bsp', 'BSP options (derived)'], ['ip', 'IP'], ['ex', 'Ex certification'], ['standards', 'Standards basis'], ['source_doc', 'Source document'], ['revision', 'Revision']]} />
+        <p className="text-xs mt-2" style={{ color: 'var(--t1)' }}>Sources: {Array.from(new Set(reference.rows.map((r: Row) => `${r.manufacturer} ${r.series}: ${r.source_url}`))).join('  |  ')}</p>
       </Card>
     </div>
   );

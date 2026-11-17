@@ -42,9 +42,21 @@ interface FieldSpec {
   source: 'iodb' | 'predefined'; defaults: string[]; source_note: string;
   color: string; input_type: 'iodb' | 'dropdown' | 'text'; options: string[]; mandatory: boolean;
 }
-interface DatasheetInfo { sheet: string; eg_sheet: string | null; title: string; }
+interface DatasheetInfo { sheet: string; eg_sheet: string | null; title: string; annexure_sheet?: string | null; annexure_capacity?: number; missing_annexures?: string[]; }
+type GenFormat = 'INDIVIDUAL' | 'CONSOLIDATED';
+/** Template fields are keyed "SECTION::Label": labels such as "Type" repeat in several sections of one datasheet. */
+const fieldKey = (f: { section: string; label: string }) => `${f.section}::${f.label}`;
+const keyLabel = (k: string) => k.includes('::') ? k.split('::').filter(Boolean).join(' · ') : k;
+const FORMAT_INFO: Record<GenFormat, { label: string; desc: string }> = {
+  CONSOLIDATED: { label: 'Consolidated Datasheet with Annexure', desc: 'One common instrument datasheet with a tag-wise engineering annexure (one row per selected tag).' },
+  INDIVIDUAL: { label: 'Individual Datasheet for Each Tag', desc: 'A separate instrument datasheet for every selected tag, packaged as Datasheets.zip.' },
+};
+interface VIssue { severity: 'ERROR' | 'REVIEW'; code: string; message: string; tag?: string; field?: string }
+interface VResult { format: string; issues: VIssue[]; counts: { ERROR: number; REVIEW: number }; iodb_columns?: string[];
+  annexure?: { sheet: string; capacity: number; rows: number; preview: Record<string, any>[];
+    columns: { col: number; label: string; kind: string; hidden: boolean; iodb_column: string | null }[] } }
 interface ApprovalInfo { approved_by: string; employee_id: string; role: string; date: string; time_log: string; }
-interface GenStatus { job_id: string; status: 'processing' | 'done' | 'error'; result?: { filename: string; tag_count: number; message: string; requested_count?: number; failed_tags?: { tag: string; reason: string }[] }; error?: string; }
+interface GenStatus { job_id: string; status: 'processing' | 'done' | 'error'; result?: { filename: string; tag_count: number; message: string; requested_count?: number; failed_tags?: { tag: string; reason: string }[]; format?: GenFormat }; error?: string; }
 
 type SpecSource = 'iodb' | 'ai' | 'user';
 
@@ -175,12 +187,13 @@ function ApprovalModal({
 
 // ── Raise Approval Request Modal ──────────────────────────────────────────────
 function RaiseRequestModal({
-  tags, instrumentType, specValues,
+  tags, instrumentType, specValues, extra,
   onSuccess, onClose,
 }: {
   tags: string[];
   instrumentType: string;
   specValues: Record<string, string>;
+  extra?: Record<string, any>;
   onSuccess: (reqId: number) => void;
   onClose: () => void;
 }) {
@@ -202,7 +215,7 @@ function RaiseRequestModal({
         submitter_notes: notes || null,
         tag_numbers: tags,
         instrument_type: instrumentType,
-        payload: specValues,
+        payload: { ...(extra?.display || {}), ...Object.fromEntries(Object.entries(specValues).map(([k, v]) => [keyLabel(k), v])), __iez: extra?.machine },
       });
       onSuccess(res.data.id);
       onClose();
@@ -471,7 +484,15 @@ export default function DataSheetGenerator() {
   // Step 4 — spec input
   const [specMode, setSpecMode] = useState<'ai' | 'manual' | null>(null);
   const [tenderFiles, setTenderFiles] = useState<File[]>([]);
-  const [aiResults, setAiResults] = useState<{ label: string; value: string; confidence: number }[]>([]);
+  const [aiResults, setAiResults] = useState<{ label: string; value: string; confidence: number; snippet?: string }[]>([]);
+  // Generation format + consolidated annexure mapping + the exact package that was approved
+  const [genFormat, setGenFormat] = useState<GenFormat | ''>('');
+  const [annexMap, setAnnexMap] = useState<Record<string, string>>({});
+  const [validation, setValidation] = useState<VResult | null>(null);
+  const [validating, setValidating] = useState(false);
+  const [requestedFp, setRequestedFp] = useState<string | null>(null);
+  const [approvedFp, setApprovedFp] = useState<string | null>(null);
+  const [notice, setNotice] = useState('');
   const [aiRunning, setAiRunning] = useState(false);
   const [showSpecPopup, setShowSpecPopup] = useState(false);
   const [kbValues, setKbValues] = useState<Record<string, string>>({});
@@ -531,6 +552,11 @@ export default function DataSheetGenerator() {
         if (s.reqStatus) setReqStatus(s.reqStatus);
         // A 'processing' job can't be resumed after a reload, so only restore finished ones.
         if (s.genStatus && s.genStatus.status !== 'processing') setGenStatus(s.genStatus);
+        if (s.genFormat) setGenFormat(s.genFormat);
+        if (s.annexMap) setAnnexMap(s.annexMap);
+        if (s.aiResults) setAiResults(s.aiResults);
+        if (s.requestedFp) setRequestedFp(s.requestedFp);
+        if (s.approvedFp) setApprovedFp(s.approvedFp);
       }
     } catch { /* ignore */ }
     return () => {
@@ -548,11 +574,13 @@ export default function DataSheetGenerator() {
         selectedDatasheet, fields, specValues, specSources,
         kbValues, iodbGreen, iodbConfirmed, overrides,
         vendorScores, selectedVS, approval, pendingReqId, reqStatus, genStatus,
+        genFormat, annexMap, aiResults, requestedFp, approvedFp,
       }));
     } catch { /* ignore */ }
   }, [step, instrumentTypes, selectedType, tags, selectedTags, selectedDatasheet,
       fields, specValues, specSources, kbValues, iodbGreen, iodbConfirmed, overrides,
-      vendorScores, selectedVS, approval, pendingReqId, reqStatus, genStatus]);
+      vendorScores, selectedVS, approval, pendingReqId, reqStatus, genStatus,
+      genFormat, annexMap, aiResults, requestedFp, approvedFp]);
 
   const filteredTypes = useMemo(() => instrumentTypes.filter(t => t.toLowerCase().includes(typeSearch.toLowerCase())), [instrumentTypes, typeSearch]);
   const filteredTags = useMemo(() => tags.filter(t => t.toLowerCase().includes(tagSearch.toLowerCase())), [tags, tagSearch]);
@@ -606,7 +634,7 @@ export default function DataSheetGenerator() {
       const f: FieldSpec[] = res.data.fields || [];
       setFields(f);
       const init: Record<string, string[]> = {};
-      f.forEach(spec => { init[spec.label] = [...spec.defaults]; });
+      f.forEach(spec => { init[fieldKey(spec)] = [...spec.defaults]; });
       setOverrides(init);
     } catch (e: any) { setError(e?.response?.data?.detail || 'Failed to load fields'); }
     finally { setBusy(false); }
@@ -640,13 +668,13 @@ export default function DataSheetGenerator() {
     try {
       const fd = new FormData();
       tenderFiles.forEach(f => fd.append('tender_file', f));
-      fd.append('label', 'All specifications');
+      // every field of the selected datasheet is extracted on its own (value, confidence, supporting text)
+      const byName: Record<string, string> = {};
+      (userFields.length ? userFields : Object.keys(KB).map(k => ({ section: '', label: k }))).forEach(f => { byName[keyLabel(fieldKey(f))] = f.section ? fieldKey(f) : f.label; });
+      fd.append('labels', JSON.stringify(Object.keys(byName)));
       const res = await api.post('/sop-datasheet/extract-spec', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
-      const extracted = Object.entries(KB).map(([label]) => ({
-        label,
-        value: res.data.extracted_value || '',
-        confidence: res.data.confidence || 0,
-      }));
+      if (res.data.error) { setError(res.data.error); }
+      const extracted = (res.data.fields || []).map((f: any) => ({ label: byName[f.label] || f.label, value: f.value || '', confidence: f.confidence || 0, snippet: f.snippet || '' }));
       setAiResults(extracted);
     } catch (e: any) { setError(e?.response?.data?.detail || 'AI extraction failed'); }
     finally { setAiRunning(false); }
@@ -659,8 +687,8 @@ export default function DataSheetGenerator() {
 
     // From IODB green fields
     iodbFields.forEach(f => {
-      vals[f.label] = iodbGreen[f.label] || '—';
-      srcs[f.label] = 'iodb';
+      vals[fieldKey(f)] = iodbGreen[f.label] || '—';
+      srcs[fieldKey(f)] = 'iodb';
     });
 
     // From AI results
@@ -670,19 +698,85 @@ export default function DataSheetGenerator() {
 
     // From knowledge base (manual)
     Object.entries(kbValues).forEach(([k, v]) => {
-      if (v) { vals[k] = v; srcs[k] = 'user'; }
+      if (!v) return;
+      // a popup value belongs to the template field of the same name when exactly one exists
+      const same = userFields.filter(f => f.label.trim().toLowerCase() === k.trim().toLowerCase());
+      const key = same.length === 1 ? fieldKey(same[0]) : k;
+      vals[key] = v; srcs[key] = 'user';
     });
 
     // From template fields overrides
     userFields.forEach(f => {
-      const v = overrides[f.label]?.filter(Boolean).join(' / ');
-      if (v && !vals[f.label]) { vals[f.label] = v; srcs[f.label] = 'user'; }
+      const k = fieldKey(f);
+      const v = overrides[k]?.filter(Boolean).join(' / ');
+      if (v && !vals[k]) { vals[k] = v; srcs[k] = 'user'; }
     });
 
     setSpecValues(vals);
     setSpecSources(srcs);
     setStep(5);
   };
+
+  // ── Reviewed values -> overrides (exactly what is approved and generated) ──────
+  const effectiveOverrides = (): Record<string, string[]> => {
+    const out: Record<string, string[]> = { ...overrides };
+    Object.entries(specValues).forEach(([label, val]) => {
+      if (specSources[label] === 'iodb' || !val || val === '—') return;
+      out[label] = String(val).split(' / ').map(x => x.trim());
+    });
+    return out;
+  };
+  const currentMapping = (): Record<string, string> => {
+    const m: Record<string, string> = {};
+    (validation?.annexure?.columns || []).filter(c => c.kind === 'data').forEach(c => { m[String(c.col)] = annexMap[String(c.col)] ?? (c.iodb_column || ''); });
+    return m;
+  };
+  const fingerprint = () => JSON.stringify({ f: genFormat, t: [...selectedTags].sort(), d: selectedDatasheet, o: effectiveOverrides(),
+    m: genFormat === 'CONSOLIDATED' ? currentMapping() : {} });
+  const invalidateApproval = (why: string) => {
+    if (!approval && reqStatus === 'idle' && !pendingReqId) return;
+    if (reqPollRef.current) clearInterval(reqPollRef.current);
+    setApproval(null); setReqStatus('idle'); setPendingReqId(null); setRequestedFp(null); setApprovedFp(null); setGenStatus(null);
+    setNotice(`${why} The previous approval no longer applies - raise a new approval request.`);
+  };
+  const chooseFormat = (f: GenFormat) => {
+    if (f === genFormat) return;
+    if (genFormat) invalidateApproval('The datasheet generation format was changed.');
+    setGenFormat(f); setValidation(null);
+  };
+  const runValidation = async (mapping?: Record<string, string>) => {
+    if (!sopFile || !iodbFile || !selectedDatasheet || !genFormat) return;
+    setValidating(true);
+    try {
+      const fd = new FormData();
+      fd.append('sop_file', sopFile); fd.append('iodb_file', iodbFile);
+      fd.append('datasheet_sheet', selectedDatasheet); fd.append('instrument_type', selectedType);
+      fd.append('selected_tags', JSON.stringify(selectedTags)); fd.append('generation_format', genFormat);
+      fd.append('overrides', JSON.stringify(effectiveOverrides()));
+      fd.append('annexure_mapping', JSON.stringify(mapping ?? annexMap));
+      const res = await api.post('/sop-datasheet/validate', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      if (!res.data || !res.data.counts) throw new Error('Unexpected validation response');
+      setValidation(res.data);
+    } catch (e: any) { setError(e?.response?.data?.detail || e?.message || 'Validation failed'); }
+    finally { setValidating(false); }
+  };
+  useEffect(() => { if (step === 5 && sopFile && iodbFile) runValidation(); }, [step, genFormat]); // eslint-disable-line react-hooks/exhaustive-deps
+  // A pending approval keeps being checked after a page refresh
+  useEffect(() => {
+    if (reqStatus !== 'pending' || !pendingReqId || reqPollRef.current) return;
+    const fp = requestedFp;
+    reqPollRef.current = setInterval(async () => {
+      try {
+        const r = await api.get(`/approvals/${pendingReqId}`);
+        if (r.data.status === 'approved') {
+          clearInterval(reqPollRef.current!);
+          setReqStatus('approved'); setApprovedFp(fp);
+          setApproval({ approved_by: r.data.reviewed_by_name, employee_id: r.data.reviewed_by_id, role: r.data.reviewed_role,
+            date: new Date(r.data.updated_at).toLocaleDateString(), time_log: new Date(r.data.updated_at).toLocaleTimeString() });
+        } else if (r.data.status === 'rejected') { clearInterval(reqPollRef.current!); setReqStatus('rejected'); }
+      } catch { /* keep polling */ }
+    }, 15_000);
+  }, [reqStatus, pendingReqId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Approval ──────────────────────────────────────────────────────────────────
   const handleApproval = (info: ApprovalInfo) => {
@@ -700,6 +794,12 @@ export default function DataSheetGenerator() {
   // ── Generate ──────────────────────────────────────────────────────────────────
   const startGenerate = async () => {
     if (!sopFile || !iodbFile || !selectedDatasheet || !selectedTags.length) return;
+    if (!genFormat) { setError('Select the datasheet generation format first.'); return; }
+    if (!pendingReqId || reqStatus !== 'approved' || !approvedFp) { setError('Lead Engineer approval is required before generation.'); return; }
+    if (approvedFp !== fingerprint()) {
+      invalidateApproval('The format, tags, template, specification values or annexure mapping changed after approval.');
+      return;
+    }
     setBusy(true); setGenStatus(null); clearError();
     try {
       const out: Record<string, string[]> = { ...overrides };
@@ -722,7 +822,10 @@ export default function DataSheetGenerator() {
       fd.append('datasheet_sheet', selectedDatasheet);
       fd.append('instrument_type', selectedType);
       fd.append('selected_tags', JSON.stringify(selectedTags));
-      fd.append('overrides', JSON.stringify(out));
+      fd.append('overrides', JSON.stringify({ ...out, ...effectiveOverrides() }));
+      fd.append('generation_format', genFormat);
+      fd.append('approval_id', String(pendingReqId));
+      if (genFormat === 'CONSOLIDATED') fd.append('annexure_mapping', JSON.stringify(currentMapping()));
       const res = await api.post('/sop-datasheet/generate', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
       setGenStatus({ job_id: res.data.job_id, status: 'processing' });
       pollRef.current = setInterval(async () => {
@@ -738,9 +841,10 @@ export default function DataSheetGenerator() {
   const downloadZip = async () => {
     try {
       const res = await api.get('/sop-datasheet/download', { responseType: 'blob' });
-      const url = URL.createObjectURL(new Blob([res.data], { type: 'application/zip' }));
+      const fname = genStatus?.result?.filename || 'Datasheets.zip';
+      const url = URL.createObjectURL(new Blob([res.data], { type: String(res.headers['content-type'] || 'application/octet-stream') }));
       const a = document.createElement('a');
-      a.href = url; a.download = 'Datasheets.zip';
+      a.href = url; a.download = fname;
       document.body.appendChild(a); a.click(); document.body.removeChild(a);
       setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch (e: any) {
@@ -762,6 +866,13 @@ export default function DataSheetGenerator() {
 
       <StepBar current={step} />
       {error && <Alert variant="error" onClose={clearError}>{error}</Alert>}
+      {notice && <Alert variant="warning" onClose={() => setNotice('')}>{notice}</Alert>}
+      {genFormat && step >= 3 && (
+        <div className="flex items-center gap-2 text-xs" data-testid="format-badge">
+          <span className="eyebrow">Format</span>
+          <span className="px-2.5 py-1 rounded-full font-semibold" style={{ background: 'var(--s3)', color: 'var(--t0)', border: '1px solid var(--b2)' }}>{FORMAT_INFO[genFormat].label}</span>
+        </div>
+      )}
 
       {/* ── STEP 1: IODB Upload + Instrument Type ── */}
       {step === 1 && (
@@ -873,6 +984,26 @@ export default function DataSheetGenerator() {
       {step === 3 && (
         <div className="space-y-4">
           {card(<>
+            <label htmlFor="gen-format" className="eyebrow block mb-2">Datasheet generation format</label>
+            <select id="gen-format" value={genFormat} onChange={e => chooseFormat(e.target.value as GenFormat)}
+              className="w-full px-3 py-2.5 rounded-xl text-sm font-medium"
+              style={{ background: 'var(--s1)', border: `1px solid ${genFormat ? 'var(--b2)' : 'var(--em)'}`, color: 'var(--t0)', outline: 'none' }}>
+              <option value="" disabled>Select a format…</option>
+              <option value="CONSOLIDATED">{FORMAT_INFO.CONSOLIDATED.label}</option>
+              <option value="INDIVIDUAL">{FORMAT_INFO.INDIVIDUAL.label}</option>
+            </select>
+            <div className="grid sm:grid-cols-2 gap-2 mt-3">
+              {(['CONSOLIDATED', 'INDIVIDUAL'] as GenFormat[]).map(f => (
+                <button key={f} type="button" onClick={() => chooseFormat(f)} className="text-left rounded-xl px-3 py-2.5 transition-all"
+                  style={{ background: genFormat === f ? 'var(--em-dim)' : 'var(--s3)', border: `1px solid ${genFormat === f ? 'var(--em)' : 'var(--b1)'}` }}>
+                  <p className="text-xs font-semibold" style={{ color: 'var(--t0)' }}>{FORMAT_INFO[f].label}</p>
+                  <p className="text-[11px] mt-0.5 leading-snug" style={{ color: 'var(--t2)' }}>{FORMAT_INFO[f].desc}</p>
+                </button>
+              ))}
+            </div>
+            {!genFormat && <p className="text-[11px] mt-2" style={{ color: 'var(--t2)' }}>Choose a format to continue. Both use the same IODB, specification input, validation and approval.</p>}
+          </>)}
+          {card(<>
             <div className="flex items-center gap-2 mb-4">
               <FileText className="w-4 h-4" style={{ color: 'var(--gold)' }} />
               <span className="text-sm font-bold" style={{ color: 'var(--gold)' }}>Upload SOP Datasheet Template</span>
@@ -899,13 +1030,21 @@ export default function DataSheetGenerator() {
                     Loaded <strong>{fields.length}</strong> spec fields — {iodbFields.length} auto (green), {userFields.length} manual
                   </Alert>
                 )}
+                {fields.length > 0 && genFormat === 'CONSOLIDATED' && (() => {
+                  const d = datasheets.find(x => x.sheet === selectedDatasheet);
+                  return d?.annexure_sheet
+                    ? <Alert variant="info">Annexure <strong>{d.annexure_sheet}</strong> found ({d.annexure_capacity} template row(s)) - it expands to one row per selected tag ({selectedTags.length}).</Alert>
+                    : <Alert variant="error">This SOP workbook has no tag-wise annexure for this datasheet. Upload the consolidated SOP workbook (datasheet that refers to an annexure sheet such as ANNEXURE-I, with a TAG NO column), or choose the individual format.</Alert>;
+                })()}
               </div>
             )}
           </>)}
 
           <div className="flex gap-3">
             <Button variant="secondary" onClick={() => setStep(2)}>← Back</Button>
-            <Button onClick={() => setStep(4)} disabled={!selectedDatasheet || fields.length === 0} className="flex-1">
+            <Button onClick={() => setStep(4)} className="flex-1"
+              disabled={!genFormat || !selectedDatasheet || fields.length === 0 ||
+                (genFormat === 'CONSOLIDATED' && !datasheets.find(x => x.sheet === selectedDatasheet)?.annexure_sheet)}>
               Select Input Mode <ChevronRight className="w-3.5 h-3.5" />
             </Button>
           </div>
@@ -1012,7 +1151,7 @@ export default function DataSheetGenerator() {
                   {aiResults.filter(r => r.value).map((r, i) => (
                     <div key={i} className="flex items-center justify-between px-3 py-2 rounded-lg"
                       style={{ background: 'var(--s3)', border: '1px solid var(--b1)' }}>
-                      <span className="text-xs" style={{ color: 'var(--t2)' }}>{r.label}</span>
+                      <span className="text-xs" style={{ color: 'var(--t2)' }} title={r.snippet || ''}>{keyLabel(r.label)}{r.snippet ? <span className="block text-[10px] italic truncate max-w-[260px]" style={{ color: 'var(--t2)' }}>“{r.snippet}”</span> : null}</span>
                       <div className="flex items-center gap-2">
                         <span className="text-xs font-semibold" style={{ color: 'var(--t0)' }}>{r.value}</span>
                         <span className="text-[10px] px-1.5 py-0.5 rounded-full"
@@ -1086,6 +1225,7 @@ export default function DataSheetGenerator() {
               <span className="text-sm font-bold" style={{ color: 'var(--sky)' }}>Review Specifications</span>
               <span className="ml-auto text-xs" style={{ color: 'var(--t2)' }}>Source: IODB · AI · Manual</span>
             </div>
+            <p className="text-[11px] mb-3" style={{ color: 'var(--t2)' }}>Values edited here are the ones sent for approval and written to the datasheet.</p>
 
             {validErrs.length > 0 && (
               <div className="mb-4 rounded-xl p-3 space-y-1.5" style={{ background: 'rgba(248,113,113,0.06)', border: '1px solid rgba(248,113,113,0.2)' }}>
@@ -1112,7 +1252,7 @@ export default function DataSheetGenerator() {
                     const srcLabel = src === 'iodb' ? '● IODB' : src === 'ai' ? '✦ AI' : '✎ Manual';
                     return (
                       <tr key={label} style={{ borderBottom: i < Object.keys(specValues).length - 1 ? '1px solid var(--b1)' : 'none', background: i % 2 === 0 ? 'transparent' : 'var(--s3)' }}>
-                        <td className="px-3 py-2.5 font-semibold" style={{ color: 'var(--t1)' }}>{label}</td>
+                        <td className="px-3 py-2.5 font-semibold" style={{ color: 'var(--t1)' }}>{keyLabel(label)}</td>
                         <td className="px-3 py-2.5" style={{ color: 'var(--t0)' }}>
                           <input value={val} onChange={e => setSpecValues(v => ({ ...v, [label]: e.target.value }))}
                             className="w-full px-2 py-1 rounded-lg text-xs bg-transparent"
@@ -1129,6 +1269,56 @@ export default function DataSheetGenerator() {
                 </tbody>
               </table>
             </div>
+          </>)}
+
+          {/* Engineering validation (+ annexure mapping for the consolidated format) */}
+          {card(<>
+            <div className="flex items-center gap-2 mb-3">
+              <Shield className="w-4 h-4" style={{ color: 'var(--em)' }} />
+              <span className="text-sm font-bold" style={{ color: 'var(--t0)' }}>Engineering validation</span>
+              {validation && <span className="text-xs ml-2" style={{ color: validation.counts.ERROR ? 'var(--rose)' : 'var(--t2)' }}>{validation.counts.ERROR} error(s) · {validation.counts.REVIEW} review item(s)</span>}
+              <button onClick={() => runValidation()} className="ml-auto text-xs px-3 py-1.5 rounded-lg flex items-center gap-1.5" style={{ background: 'var(--s3)', border: '1px solid var(--b2)', color: 'var(--t0)' }}>
+                {validating ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />} Re-check
+              </button>
+            </div>
+            {!validation && <p className="text-xs" style={{ color: 'var(--t2)' }}>{validating ? 'Checking tags, IODB data and template…' : (!sopFile || !iodbFile)
+              ? 'The IODB and the SOP workbook have to be selected again after a page refresh (steps 1 and 3) - files are not kept by the browser.' : 'Not checked yet.'}</p>}
+            {validation && validation.issues.length === 0 && <p className="text-xs" style={{ color: 'var(--ok)' }}>All checks passed.</p>}
+            {validation && validation.issues.length > 0 && (
+              <ul className="space-y-1 max-h-56 overflow-y-auto">
+                {validation.issues.map((i, k) => (
+                  <li key={k} className="text-xs flex gap-2" style={{ color: i.severity === 'ERROR' ? 'var(--rose)' : 'var(--gold)' }}>
+                    <span className="font-semibold flex-shrink-0">{i.severity}</span><span style={{ color: 'var(--t1)' }}>{i.message}</span>
+                  </li>))}
+              </ul>
+            )}
+            {validation?.annexure && (
+              <div className="mt-4">
+                <p className="text-xs font-semibold mb-1" style={{ color: 'var(--t0)' }}>Annexure {validation.annexure.sheet} - {validation.annexure.rows} tag row(s) · column mapping (confirm before approval)</p>
+                <div className="overflow-auto max-h-72 rounded-lg" style={{ border: '1px solid var(--b1)' }}>
+                  <table className="w-full text-xs">
+                    <thead><tr><th className="text-left px-2 py-1.5">Annexure column</th><th className="text-left px-2 py-1.5">IODB column</th><th className="text-left px-2 py-1.5">{selectedTags[0] || 'First tag'}</th></tr></thead>
+                    <tbody>
+                      {validation.annexure.columns.map(c => (
+                        <tr key={c.col}>
+                          <td className="px-2 py-1">{c.label}{c.hidden ? ' (hidden column)' : ''}</td>
+                          <td className="px-2 py-1">
+                            {c.kind === 'data' ? (
+                              <select value={annexMap[String(c.col)] ?? (c.iodb_column || '')}
+                                onChange={e => { const m = { ...annexMap, [String(c.col)]: e.target.value }; setAnnexMap(m); runValidation(m); }}
+                                className="w-full px-2 py-1 rounded-md text-xs">
+                                <option value="">- none (left blank) -</option>
+                                {(validation.iodb_columns || []).map(o => <option key={o} value={o}>{o}</option>)}
+                              </select>
+                            ) : <span style={{ color: 'var(--t2)' }}>{c.kind === 'tag' ? 'selected tag' : 'serial number'}</span>}
+                          </td>
+                          <td className="px-2 py-1 font-mono">{String(validation.annexure!.preview[0]?.[String(c.col)] ?? '')}</td>
+                        </tr>))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
           </>)}
 
           {/* Request status banner */}
@@ -1165,7 +1355,9 @@ export default function DataSheetGenerator() {
             <Button variant="secondary" onClick={() => setStep(4)}>← Back</Button>
             {/* Raise request button — always available */}
             {reqStatus !== 'pending' && (
-              <Button variant="secondary" onClick={() => {
+              <Button variant="secondary" disabled={!validation || validation.counts.ERROR > 0 || validating}
+                title={!validation ? 'Run the engineering validation first' : validation.counts.ERROR ? 'Resolve the validation errors first' : ''}
+                onClick={() => {
                 const errs = validateSpecs(specValues);
                 setValidErrs(errs);
                 if (errs.length === 0) setShowRaiseModal(true);
@@ -1213,6 +1405,7 @@ export default function DataSheetGenerator() {
                 ['Date & Time', `${approval.date} ${approval.time_log}`],
                 ['Tags', selectedTags.join(', ')],
                 ['Instrument Type', selectedType],
+                ['Format', genFormat ? FORMAT_INFO[genFormat].label : '—'],
               ].map(([k, v]) => (
                 <div key={k} className="rounded-xl px-4 py-3" style={{ background: 'var(--s3)', border: '1px solid rgba(74,222,128,0.15)' }}>
                   <p className="text-[10px] mb-0.5" style={{ color: 'var(--t2)' }}>{k}</p>
@@ -1385,12 +1578,18 @@ export default function DataSheetGenerator() {
           {/* Expected output */}
           <div className="rounded-xl p-4" style={{ background: 'var(--s3)', border: '1px solid var(--b1)' }}>
             <p className="text-xs font-semibold mb-2" style={{ color: 'var(--t2)' }}>Output files:</p>
+            {genFormat === 'CONSOLIDATED' ? (
+              <div className="space-y-1">
+                <p className="text-xs font-mono" style={{ color: 'var(--em-lt)' }}>📄 {selectedDatasheet.replace(/[^A-Za-z0-9_-]+/g, '_')}_CONSOLIDATED_DATASHEET.xlsx</p>
+                <p className="text-xs" style={{ color: 'var(--t2)' }}>Main datasheet (common specifications) + annexure with {selectedTags.length} tag row(s)</p>
+              </div>
+            ) : (
             <div className="space-y-1">
               {selectedTags.map(t => (
                 <p key={t} className="text-xs font-mono" style={{ color: 'var(--em-lt)' }}>📄 {t}.xlsx</p>
               ))}
               <p className="text-xs font-mono mt-2" style={{ color: 'var(--gold)' }}>📦 Datasheets.zip (all files)</p>
-            </div>
+            </div>)}
           </div>
 
           {/* Generation status */}
@@ -1456,6 +1655,7 @@ export default function DataSheetGenerator() {
                 setSpecMode(null); setAiResults([]); setKbValues({}); setIodbGreen({}); setIodbConfirmed(false);
                 setSpecValues({}); setSpecSources({}); setApproval(null); setLocked(false);
                 setVendorScores(null); setSelectedVS(null); setGenStatus(null);
+                setGenFormat(''); setAnnexMap({}); setValidation(null); setRequestedFp(null); setApprovedFp(null); setPendingReqId(null); setReqStatus('idle');
               }}>
                 New Datasheet
               </Button>
@@ -1476,7 +1676,16 @@ export default function DataSheetGenerator() {
       {showRaiseModal && (
         <RaiseRequestModal
           tags={selectedTags} instrumentType={selectedType} specValues={specValues}
+          extra={{
+            display: { 'Datasheet Format': genFormat ? FORMAT_INFO[genFormat].label : '', 'Datasheet': selectedDatasheet,
+                       'Validation': validation ? `${validation.counts.ERROR} error(s), ${validation.counts.REVIEW} review item(s)` : 'not run' },
+            machine: { format: genFormat, datasheet: selectedDatasheet, overrides: effectiveOverrides(),
+                       annexure_mapping: genFormat === 'CONSOLIDATED' ? currentMapping() : null,
+                       review_items: (validation?.issues || []).map(i => i.message) },
+          }}
           onSuccess={(reqId) => {
+            const fp = fingerprint();
+            setRequestedFp(fp);
             setPendingReqId(reqId); setReqStatus('pending');
             // Poll for approval every 15 s
             if (reqPollRef.current) clearInterval(reqPollRef.current);
@@ -1487,6 +1696,7 @@ export default function DataSheetGenerator() {
                 if (st === 'approved') {
                   clearInterval(reqPollRef.current!);
                   setReqStatus('approved');
+                  setApprovedFp(fp);
                   // Build approval info from the request data
                   setApproval({
                     approved_by: r.data.reviewed_by_name,

@@ -233,7 +233,7 @@ function RequestCard({ req, onAction }: { req: ApprovalReq; onAction: () => void
                       </tr>
                     </thead>
                     <tbody>
-                      {Object.entries(payload).slice(0, 30).map(([k, v], idx) => (
+                      {Object.entries(payload).filter(([k]) => !k.startsWith('__')).slice(0, 80).map(([k, v], idx) => (
                         <tr key={k} style={{ background: idx % 2 === 0 ? 'transparent' : 'var(--s3)' }}>
                           <td className="px-3 py-1.5 font-medium" style={{ color: 'var(--t1)', borderRight: '1px solid var(--b1)' }}>{k}</td>
                           <td className="px-3 py-1.5" style={{ color: 'var(--t0)' }}>

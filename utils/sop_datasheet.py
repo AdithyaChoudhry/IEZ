@@ -709,6 +709,15 @@ def _build_iodb_colmap(df: pd.DataFrame, fields: list[FieldSpec],
     return colmap
 
 
+def field_key(f: "FieldSpec") -> str:
+    return f"{f.section}::{f.label}"
+
+
+def override_for(f: "FieldSpec", overrides: dict) -> list | None:
+    v = overrides.get(field_key(f))
+    return v if v is not None else overrides.get(f.label)
+
+
 def _resolve_values_for_tag(
     fields: list[FieldSpec],
     overrides: dict[str, list[str]],
@@ -719,8 +728,9 @@ def _resolve_values_for_tag(
     """Resolve every field's value cell for one tag → {(row,col): (value, source)}."""
     resolved: dict[tuple[int, int], tuple[str, str]] = {}
     for f in fields:
-        # Per-field user override keyed by label (falls back to defaults).
-        ov = overrides.get(f.label)
+        # Per-field user override: "SECTION::Label" first (labels such as "Type" repeat in several sections),
+        # then the plain label (older clients); falls back to the template default.
+        ov = override_for(f, overrides)
         for idx, col in enumerate(f.value_cols):
             default = f.defaults[idx] if idx < len(f.defaults) else ""
             if f.source == "predefined":

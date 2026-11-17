@@ -17,8 +17,9 @@ import threading
 import tempfile
 from pathlib import Path
 
-from ..deps import get_current_user
-from ..auth.models import User
+from ..deps import get_current_user, get_db
+from ..auth.models import User, ApprovalRequest
+from sqlalchemy.orm import Session
 from ..models.sop_datasheet import (
     FieldSpecModel,
     DatasheetInfoModel,
@@ -46,6 +47,7 @@ from utils.sop_datasheet import (
     get_iodb_tags,
     generate_with_report as generate_datasheets,
 )
+from utils import sop_consolidated as SC
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +67,16 @@ _OUTPUT_DIR = Path(tempfile.gettempdir()) / "iez_sop_datasheet_output"
 
 def _output_path(user_id) -> Path:
     return _OUTPUT_DIR / f"{user_id}_sop_datasheet.zip"
+
+
+def _output_meta(user_id) -> tuple[Path, Path]:
+    """Format-independent copy of the last output (file + its name), so a download survives a restart."""
+    return _OUTPUT_DIR / f"{user_id}_sop_datasheet.bin", _OUTPUT_DIR / f"{user_id}_sop_datasheet.name"
+
+
+def _media_type(filename: str) -> str:
+    return "application/zip" if filename.lower().endswith(".zip") else \
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
 def _check_ext(filename: str, allowed: set[str]) -> None:
@@ -133,7 +145,8 @@ async def datasheets(
         sheets = read_workbook(sop_bytes, sop_file.filename or "")
     except Exception as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Failed to read SOP workbook: {exc}")
-    return DatasheetsResponse(datasheets=[DatasheetInfoModel(**asdict(d)) for d in list_datasheet_sheets(sheets)])
+    return DatasheetsResponse(datasheets=[DatasheetInfoModel(**asdict(d), **SC.annexure_info(sheets, d.sheet))
+                                          for d in list_datasheet_sheets(sheets)])
 
 
 @router.post("/fields", response_model=FieldsResponse)
@@ -162,10 +175,13 @@ async def fields(
     target_model = sheets.get(target_name) or sheets[datasheet_sheet]
 
     specs = parse_field_spec(target_model, target_model)
+    ann = SC.annexure_info(sheets, datasheet_sheet)
     return FieldsResponse(
         datasheet=datasheet_sheet,
         title=info.title if info else datasheet_sheet,
         fields=[FieldSpecModel(**asdict(s)) for s in specs],
+        annexure_sheet=ann["annexure_sheet"],
+        annexure_capacity=ann["annexure_capacity"],
     )
 
 
@@ -187,13 +203,20 @@ async def tags(
 
 
 def _run_generate_job(job_id, sop_bytes, sop_filename, datasheet_sheet,
-                      iodb_bytes, instrument_type, selected_tags, overrides, user_id):
-    """Generate one datasheet per tag in a background thread."""
+                      iodb_bytes, instrument_type, selected_tags, overrides, user_id,
+                      generation_format=SC.INDIVIDUAL, annexure_mapping=None, approval_id=None):
+    """Generate the datasheet package in a background thread (individual: one file per tag; consolidated: one workbook)."""
     try:
-        zip_bytes, filename, err, failed = generate_datasheets(
-            sop_bytes, sop_filename, datasheet_sheet,
-            iodb_bytes, instrument_type, selected_tags, overrides,
-        )
+        if generation_format == SC.INDIVIDUAL:
+            zip_bytes, filename, err, failed = generate_datasheets(
+                sop_bytes, sop_filename, datasheet_sheet,
+                iodb_bytes, instrument_type, selected_tags, overrides,
+            )
+        else:
+            zip_bytes, filename, err, failed = SC.generate_package(
+                generation_format, sop_bytes, sop_filename, datasheet_sheet,
+                iodb_bytes, instrument_type, selected_tags, overrides, annexure_mapping,
+            )
         if err:
             generation_jobs[job_id] = {"status": "error", "error": err}
             return
@@ -201,7 +224,11 @@ def _run_generate_job(job_id, sop_bytes, sop_filename, datasheet_sheet,
         generation_cache[f"{user_id}_sop_datasheet"] = {"bytes": zip_bytes, "filename": filename}
         try:
             _OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-            _output_path(user_id).write_bytes(zip_bytes)
+            if filename.lower().endswith(".zip"):
+                _output_path(user_id).write_bytes(zip_bytes)
+            data_p, name_p = _output_meta(user_id)
+            data_p.write_bytes(zip_bytes)
+            name_p.write_text(filename)
         except OSError:
             logger.warning("Could not persist datasheet ZIP to disk", exc_info=True)
         generation_jobs[job_id] = {
@@ -211,11 +238,13 @@ def _run_generate_job(job_id, sop_bytes, sop_filename, datasheet_sheet,
                 tag_count=generated,
                 requested_count=len(set(map(str, selected_tags))),
                 failed_tags=failed,
+                format=generation_format,
+                approval_id=approval_id,
                 message=(
-                    f"Generated {generated} datasheet(s) for {instrument_type}"
+                    (f"Consolidated datasheet generated for {instrument_type}: main datasheet + annexure with {generated} tag(s)"
+                     if generation_format == SC.CONSOLIDATED else f"Generated {generated} datasheet(s) for {instrument_type}")
                     if not failed else
-                    f"{generated} of {generated + len(failed)} datasheets generated for {instrument_type}. "
-                    f"{len(failed)} failed."
+                    f"{generated} of {generated + len(failed)} tags generated for {instrument_type}. {len(failed)} failed."
                 ),
             ),
         }
@@ -226,6 +255,71 @@ def _run_generate_job(job_id, sop_bytes, sop_filename, datasheet_sheet,
         generation_jobs[job_id] = {"status": "error", "error": str(exc)}
 
 
+def _approved_package(db: Session, approval_id: int, fmt: str, tags: list, datasheet_sheet: str) -> tuple[dict, dict | None]:
+    """The approved request must cover exactly this package; returns (approved overrides + approval stamps, approved mapping)."""
+    req = db.get(ApprovalRequest, approval_id)
+    if req is None or req.request_type != "spec":
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Approval request #{approval_id} not found.")
+    if req.status != "approved":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                            detail=f"Approval request #{approval_id} is {req.status} - datasheets are generated only after Lead Engineer approval.")
+    try:
+        payload = json.loads(req.payload_json or "{}")
+        approved_tags = json.loads(req.tag_numbers or "[]")
+    except ValueError:
+        payload, approved_tags = {}, []
+    meta = payload.get("__iez") or {}
+    approved_fmt = meta.get("format", SC.INDIVIDUAL)
+    if approved_fmt != fmt:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                            detail=f"Request #{approval_id} was approved for '{SC.FORMAT_LABELS.get(approved_fmt, approved_fmt)}', not "
+                                   f"'{SC.FORMAT_LABELS.get(fmt, fmt)}'. Changing the format needs a new approval.")
+    if sorted({str(t).strip() for t in approved_tags}) != sorted({str(t).strip() for t in tags}):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                            detail=f"The selected tags differ from the tags approved in request #{approval_id}. Raise a new approval.")
+    if meta.get("datasheet") and meta["datasheet"] != datasheet_sheet:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                            detail=f"Request #{approval_id} was approved for datasheet '{meta['datasheet']}', not '{datasheet_sheet}'.")
+    overrides = {str(k): [str(x) for x in (v if isinstance(v, list) else [v])] for k, v in (meta.get("overrides") or {}).items()}
+    if req.reviewed_by_name:
+        overrides["Approved By"] = [req.reviewed_by_name]
+    if req.reviewed_by_id:
+        overrides["Employee ID"] = [req.reviewed_by_id]
+    if req.updated_at:
+        overrides["Approval Date"] = [req.updated_at.strftime("%Y-%m-%d %H:%M")]
+    mapping = meta.get("annexure_mapping")
+    return overrides, (mapping if isinstance(mapping, dict) else None)
+
+
+@router.post("/validate")
+async def validate_package(
+    sop_file: UploadFile = File(...),
+    iodb_file: UploadFile = File(...),
+    datasheet_sheet: str = Form(...),
+    instrument_type: str = Form(""),
+    selected_tags: str = Form(...),
+    generation_format: str = Form(SC.INDIVIDUAL),
+    overrides: str = Form("{}"),
+    annexure_mapping: str = Form("{}"),
+    current_user: User = Depends(get_current_user),
+):
+    """Engineering checks before approval: tags in the IODB, duplicates, mandatory values, common specs that differ per tag,
+    unresolved placeholders (individual), annexure mapping / blank tag data (consolidated). Nothing is corrected."""
+    _check_ext(sop_file.filename or "", ALLOWED_SOP_EXTENSIONS)
+    _check_ext(iodb_file.filename or "", ALLOWED_IODB_EXTENSIONS)
+    try:
+        tags_list = json.loads(selected_tags)
+        overrides_dict = json.loads(overrides) if overrides else {}
+        mapping_dict = json.loads(annexure_mapping) if annexure_mapping else {}
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Invalid request data: {exc}")
+    try:
+        ctx = SC.load_context(await sop_file.read(), sop_file.filename or "", datasheet_sheet, await iodb_file.read())
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    return SC.validate(ctx, (generation_format or "").strip().upper(), tags_list, overrides_dict, mapping_dict)
+
+
 @router.post("/generate", response_model=GenerateJobResponse, status_code=status.HTTP_202_ACCEPTED)
 async def generate(
     sop_file: UploadFile = File(...),
@@ -234,19 +328,40 @@ async def generate(
     instrument_type: str = Form(...),
     selected_tags: str = Form(...),   # JSON array
     overrides: str = Form("{}"),      # JSON object: {label: [values]}
+    generation_format: str = Form(SC.INDIVIDUAL),   # INDIVIDUAL | CONSOLIDATED
+    approval_id: int | None = Form(None),           # Lead Engineer approval of exactly this package
+    annexure_mapping: str = Form("{}"),             # consolidated: {annexure column: IODB column}
     current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
-    """Kick off datasheet generation (one file per tag); poll the status endpoint."""
+    """Kick off datasheet generation; poll the status endpoint.
+
+    INDIVIDUAL   - one datasheet per tag, zipped (existing behaviour).
+    CONSOLIDATED - one workbook: main datasheet + tag-wise annexure. Requires an approved request; the approved values are used.
+    When an approval_id is given, the package must match what was approved (format, tags, datasheet) and the approved
+    specification values are used instead of the ones sent by the browser."""
     _check_ext(sop_file.filename or "", ALLOWED_SOP_EXTENSIONS)
     _check_ext(iodb_file.filename or "", ALLOWED_IODB_EXTENSIONS)
 
     try:
         tags_list = json.loads(selected_tags)
         overrides_dict = json.loads(overrides) if overrides else {}
+        mapping_dict = json.loads(annexure_mapping) if annexure_mapping else {}
         if not tags_list:
             raise ValueError("No tags selected")
     except Exception as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Invalid request data: {exc}")
+    fmt = (generation_format or SC.INDIVIDUAL).strip().upper()
+    if fmt not in SC.FORMATS:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail=f"Unknown generation_format '{generation_format}'. Use {' or '.join(SC.FORMATS)}.")
+    if fmt == SC.CONSOLIDATED and approval_id is None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                            detail="The consolidated datasheet needs an approved request - raise it for Lead Engineer approval first.")
+    if approval_id is not None:
+        overrides_dict, approved_mapping = _approved_package(db, approval_id, fmt, tags_list, datasheet_sheet)
+        if approved_mapping is not None:
+            mapping_dict = approved_mapping
 
     sop_bytes = await sop_file.read()
     iodb_bytes = await iodb_file.read()
@@ -257,7 +372,8 @@ async def generate(
     threading.Thread(
         target=_run_generate_job,
         args=(job_id, sop_bytes, sop_file.filename or "", datasheet_sheet,
-              iodb_bytes, instrument_type, tags_list, overrides_dict, current_user.id),
+              iodb_bytes, instrument_type, tags_list, overrides_dict, current_user.id,
+              fmt, mapping_dict, approval_id),
         daemon=True,
     ).start()
 
@@ -283,16 +399,20 @@ async def download(current_user: User = Depends(get_current_user)):
     if cached:
         data, filename = cached["bytes"], cached["filename"]
     else:
-        path = _output_path(current_user.id)
-        if not path.exists():
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
-                                detail="No generated datasheets found. Please generate first.")
-        data, filename = path.read_bytes(), "Datasheets.zip"
+        data_p, name_p = _output_meta(current_user.id)
+        if data_p.exists() and name_p.exists():
+            data, filename = data_p.read_bytes(), name_p.read_text().strip() or "Datasheets.zip"
+        else:
+            path = _output_path(current_user.id)
+            if not path.exists():
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                                    detail="No generated datasheets found. Please generate first.")
+            data, filename = path.read_bytes(), "Datasheets.zip"
     logger.info("SOP datasheet download: user=%s file=%s bytes=%d source=%s",
                 current_user.id, filename, len(data), "memory" if cached else "disk")
     return StreamingResponse(
         io.BytesIO(data),
-        media_type="application/zip",
+        media_type=_media_type(filename),
         headers={
             "Content-Disposition": f'attachment; filename="{filename}"',
             "Content-Length": str(len(data)),
@@ -300,36 +420,99 @@ async def download(current_user: User = Depends(get_current_user)):
     )
 
 
+def _tender_text(raw: bytes, filename: str) -> str:
+    """Readable text of a tender document: PDF text layer, OCR for scanned pages / images, plain text otherwise."""
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    text = ""
+    if ext == "pdf" or raw[:4] == b"%PDF":
+        try:
+            import pdfplumber
+            with pdfplumber.open(io.BytesIO(raw)) as pdf:
+                text = "\n".join((p.extract_text() or "") for p in pdf.pages[:40])
+        except Exception:
+            text = ""
+        if len(text.strip()) < 40:                               # scanned PDF: OCR the first pages
+            try:
+                from utils.sdie_extractor import extract_pages, ocr_page
+                text = "\n".join(l["text"] for img in extract_pages(raw, filename)[:6] for l in ocr_page(img))
+            except Exception:
+                pass
+        return text
+    if ext in ("png", "jpg", "jpeg", "tif", "tiff", "bmp"):
+        try:
+            from utils.sdie_extractor import extract_pages, ocr_page
+            return "\n".join(l["text"] for img in extract_pages(raw, filename)[:6] for l in ocr_page(img))
+        except Exception:
+            return ""
+    return raw.decode("utf-8", errors="ignore")
+
+
+async def _groq(prompt: str, max_tokens: int, json_mode: bool = False) -> str:
+    import os, httpx
+    groq_key = os.environ.get("GROQ_API_KEY", "")
+    if not groq_key:
+        raise RuntimeError("GROQ_API_KEY not configured.")
+    body = {"model": "llama-3.3-70b-versatile", "messages": [{"role": "user", "content": prompt}], "temperature": 0.1, "max_tokens": max_tokens}
+    if json_mode:
+        body["response_format"] = {"type": "json_object"}
+    async with httpx.AsyncClient(timeout=60) as client:
+        resp = await client.post("https://api.groq.com/openai/v1/chat/completions",
+                                 headers={"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"}, json=body)
+    data = resp.json()
+    return data["choices"][0]["message"]["content"].strip()
+
+
 @router.post("/extract-spec", response_model=ExtractSpecResponse)
 async def extract_spec(
-    label: str = Form(...),
+    label: str = Form("All specifications"),
     tender_text: str = Form(""),
-    tender_file: UploadFile | None = File(None),
+    labels: str = Form(""),                                   # JSON list: extract every field separately
+    tender_file: list[UploadFile] | None = File(None),
     current_user: User = Depends(get_current_user),
 ):
     """
-    Extract a single spec value from tender text or an uploaded PDF/image.
-    Uses Groq AI to pull the value and report confidence.
+    Extract specification values from tender text or uploaded documents (PDF text / OCR / text) with Groq AI.
+    With `labels`, every field gets its own value, confidence and supporting snippet (nothing is copied between fields);
+    without it the single-label behaviour is unchanged.
     """
-    import os, httpx
+    parts = [tender_text.strip()] if tender_text.strip() else []
+    for f in tender_file or []:
+        raw = await f.read()
+        t = _tender_text(raw, f.filename or "")
+        if t.strip():
+            parts.append(t)
+    text = "\n\n".join(parts)
+    if not text.strip():
+        return ExtractSpecResponse(label=label, extracted_value="", confidence=0.0, raw_snippet="",
+                                   error="No readable text found in the tender documents.")
+    try:
+        wanted = [str(x) for x in json.loads(labels)] if labels else []
+    except ValueError:
+        wanted = []
 
-    text = tender_text.strip()
-    if tender_file is not None:
-        raw = await tender_file.read()
-        # Try simple text decode first (works for text/CSV embedded in PDF-ish uploads).
+    if wanted:
+        prompt = (
+            "You are an instrument specification extractor for water treatment plant projects.\n"
+            "Extract the value of EACH of the specification fields below from the tender text. Treat every field on its own: "
+            "use only text that states that field, never reuse a value for a different field, keep units exactly as written, "
+            "and leave value empty with confidence 0 when the text does not state it.\n\n"
+            f"FIELDS: {json.dumps(wanted)}\n\nTEXT:\n{text[:14000]}\n\n"
+            'Respond with JSON only: {"fields": [{"label": "<field>", "value": "<value or empty>", "confidence": <0.0-1.0>, '
+            '"snippet": "<the exact supporting text>"}]}'
+        )
         try:
-            text = raw.decode("utf-8", errors="ignore")[:8000]
-        except Exception:
-            text = ""
-
-    if not text:
-        return ExtractSpecResponse(label=label, extracted_value="", confidence=0.0,
-                                   raw_snippet="", error="No text provided for extraction.")
-
-    groq_key = os.environ.get("GROQ_API_KEY", "")
-    if not groq_key:
-        return ExtractSpecResponse(label=label, extracted_value="", confidence=0.0,
-                                   raw_snippet="", error="GROQ_API_KEY not configured.")
+            parsed = json.loads(await _groq(prompt, 3000, json_mode=True))
+            got = {str(x.get("label", "")).strip().lower(): x for x in parsed.get("fields", []) if isinstance(x, dict)}
+            fields_out = []
+            for lab in wanted:
+                x = got.get(lab.strip().lower(), {})
+                val = str(x.get("value", "") or "").strip()
+                fields_out.append({"label": lab, "value": val, "confidence": float(x.get("confidence", 0.0) or 0.0) if val else 0.0,
+                                   "snippet": str(x.get("snippet", "") or "")[:400]})
+            return ExtractSpecResponse(label=label, extracted_value="", confidence=0.0, raw_snippet="", fields=fields_out, text_chars=len(text))
+        except Exception as exc:
+            logger.exception("extract-spec (multi) Groq call failed")
+            return ExtractSpecResponse(label=label, extracted_value="", confidence=0.0, raw_snippet="", error=str(exc), text_chars=len(text))
 
     prompt = (
         f"You are an instrument specification extractor for water treatment plant projects.\n"
@@ -340,21 +523,13 @@ async def extract_spec(
         f"If the field is not mentioned, set value to \"\" and confidence to 0.0."
     )
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.post(
-                "https://api.groq.com/openai/v1/chat/completions",
-                headers={"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"},
-                json={"model": "llama-3.3-70b-versatile", "messages": [{"role": "user", "content": prompt}],
-                      "temperature": 0.1, "max_tokens": 256},
-            )
-        data = resp.json()
-        raw_content = data["choices"][0]["message"]["content"].strip()
-        parsed = json.loads(raw_content)
+        parsed = json.loads(await _groq(prompt, 256))
         return ExtractSpecResponse(
             label=label,
             extracted_value=str(parsed.get("value", "")),
             confidence=float(parsed.get("confidence", 0.0)),
             raw_snippet=str(parsed.get("snippet", "")),
+            text_chars=len(text),
         )
     except Exception as exc:
         logger.exception("extract-spec Groq call failed")

@@ -550,7 +550,7 @@ export default function AdminManagement() {
   );
 
   return (
-    <div className="p-6 max-w-6xl mx-auto space-y-6">
+    <div className="sm:p-6 max-w-6xl mx-auto space-y-6">
       <PageHeader
         icon={ShieldCheck}
         title="Admin Management"
@@ -558,7 +558,7 @@ export default function AdminManagement() {
       />
 
       {/* Tab bar */}
-      <div className="flex gap-1 p-1 rounded-xl w-fit" style={{ background: 'var(--s2)', border: '1px solid var(--b1)' }}>
+      <div className="flex gap-1 p-1 rounded-xl w-fit max-w-full overflow-x-auto no-scrollbar" style={{ background: 'var(--s2)', border: '1px solid var(--b1)' }}>
         {([['users', ShieldCheck, 'Users'], ['routing', Bell, 'Notification Routing']] as const).map(([key, Icon, label]) => (
           <button
             key={key}
@@ -583,8 +583,8 @@ export default function AdminManagement() {
       {success && <Alert variant="success">{success}</Alert>}
 
       {/* Controls */}
-      <div className="flex items-center gap-3">
-        <div className="relative flex-1">
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="relative flex-1 basis-full sm:basis-0">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5" style={{ color: 'var(--t2)' }} />
           <input value={search} onChange={e => setSearch(e.target.value)}
             placeholder="Search by name, ID, role, or department…"
@@ -600,7 +600,7 @@ export default function AdminManagement() {
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {[
           ['Total Users', users.length, 'var(--em)'],
           ['Active', users.filter(u => u.status === 'active').length, '#4ade80'],

@@ -3,6 +3,7 @@
  * "Generate" menu (and role-filtered Admin menu), and a full-screen sheet on small screens.
  */
 import { NavLink, Link, useLocation } from 'react-router-dom';
+import { createPortal } from 'react-dom';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ChevronDown, Menu, X, ArrowRight } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
@@ -107,7 +108,7 @@ export default function TopNav({ mobile }: { mobile: boolean }) {
       <>
         <button onClick={() => setSheet(true)} className="tn-item !px-2.5" aria-label="Open navigation"><Menu className="w-5 h-5" /></button>
         <Brand />
-        {sheet && (
+        {sheet && createPortal(
           <div className="sheet">
             <div className="flex items-center justify-between px-5 h-16" style={{ borderBottom: '1px solid var(--b1)' }}>
               <Brand />
@@ -132,7 +133,7 @@ export default function TopNav({ mobile }: { mobile: boolean }) {
               ))}
             </div>
           </div>
-        )}
+          , document.body)}
       </>
     );
   }

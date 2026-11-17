@@ -105,7 +105,7 @@ export default function DashboardPage() {
             Instrumentation documents, engineered end to end - from one IODB to issued drawings.
           </p>
         </div>
-        <div className="hidden lg:flex justify-center items-center fade-up" style={{ animationDelay: '220ms' }}>
+        <div className="flex justify-center items-center fade-up mt-4 lg:mt-0" style={{ animationDelay: '220ms' }}>
           <div className="w-full max-w-[640px]"><LoopArt tag="101" controller="plc" tone={{ line: 'var(--t1)', text: 'var(--t2)' }} /></div>
         </div>
       </section>
@@ -113,7 +113,7 @@ export default function DashboardPage() {
       {/* ── Figures ── */}
       <section className="reveal grid grid-cols-1 sm:grid-cols-3" style={{ borderTop: '1px solid var(--b2)', borderBottom: '1px solid var(--b1)' }}>
         {figures.map((f, i) => (
-          <div key={f.label} className="relative py-7 pr-6 fade-up" style={{ paddingLeft: i === 0 ? 0 : 24, borderLeft: i === 0 ? 'none' : '1px solid var(--b1)', animationDelay: `${420 + i * 90}ms` }}>
+          <div key={f.label} className={`relative py-6 sm:py-7 pr-6 fade-up ${i === 0 ? '' : 'fig-sep'}`} style={{ animationDelay: `${420 + i * 90}ms` }}>
             {f.label === 'Uptime' && <div className="absolute right-2 top-1/2 -translate-y-1/2"><Gauge value={f.val} size={78} label="Uptime %" /></div>}
             <p className="eyebrow">{f.label}</p>
             <p className="mt-3 font-semibold leading-none" style={{ fontFamily: 'var(--font-display)', fontSize: 46, letterSpacing: '-0.045em', color: 'var(--t0)' }}>
@@ -126,7 +126,7 @@ export default function DashboardPage() {
 
       {/* ── Signal path + AI ── */}
       <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 mt-10">
-        <section className="xl:col-span-8 reveal ui-card p-7" style={{ '--d': '60ms' } as React.CSSProperties}>
+        <section className="xl:col-span-8 reveal ui-card p-5 sm:p-7" style={{ '--d': '60ms' } as React.CSSProperties}>
           <div className="flex items-end justify-between gap-4">
             <div>
               <p className="eyebrow">Signal path</p>
@@ -135,9 +135,9 @@ export default function DashboardPage() {
             <p className="hidden md:block text-[13px]" style={{ color: 'var(--t2)' }}>Select a stage to open it</p>
           </div>
           <div className="mt-9 overflow-x-auto pb-1">
-            <div className="relative min-w-[640px] grid grid-cols-6">
+            <div className="relative sm:min-w-[640px] grid grid-cols-3 sm:grid-cols-6 gap-y-7">
               {/* the line and the travelling signal */}
-              <div className="absolute left-[8.33%] right-[8.33%] top-[21px] h-px" style={{ background: 'var(--b3)' }}>
+              <div className="hidden sm:block absolute left-[8.33%] right-[8.33%] top-[21px] h-px" style={{ background: 'var(--b3)' }}>
                 <span className="absolute -top-[3px] w-[7px] h-[7px] rounded-full" style={{ background: 'var(--em)', boxShadow: '0 0 0 4px var(--em-dim)', animation: 'travel 5.5s cubic-bezier(.45,0,.55,1) infinite' }} />
               </div>
               {PATH.map((p) => {

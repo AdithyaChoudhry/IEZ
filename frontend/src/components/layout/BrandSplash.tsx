@@ -1,5 +1,5 @@
 /**
- * Brand intro: played when the iEZ mark (top-left) is clicked. ~3 s: the mark lands, its signal lamp drops in
+ * Brand intro: played when the iEZ mark (top-left) is clicked. ~6 s: the mark lands, its signal lamp drops in
  * and pulses, sparks radiate, "iEZ" rises, then "Built by Akash Balaji" is written on in script with a pen nib
  * and a flourish. Click or Esc closes it early. Reduced-motion users get a static card.
  */
@@ -11,7 +11,7 @@ const SPARKS = 18;
 
 export default function BrandSplash({ onDone }: { onDone: () => void }) {
   useEffect(() => {
-    const id = window.setTimeout(onDone, 3200);
+    const id = window.setTimeout(onDone, 6100);
     const key = (e: KeyboardEvent) => { if (e.key === 'Escape') onDone(); };
     window.addEventListener('keydown', key);
     const prev = document.body.style.overflow;
@@ -27,18 +27,18 @@ export default function BrandSplash({ onDone }: { onDone: () => void }) {
         {/* mark + lamp + rings + sparks */}
         <div className="bs-markwrap">
           <div className="bs-mark"><BrandMark size={96} ink="#f6f5f2" fg="#100f0e" /></div>
-          <span className="bs-ring" style={{ animationDelay: '.62s' }} />
-          <span className="bs-ring" style={{ animationDelay: '.86s' }} />
-          <span className="bs-ring" style={{ animationDelay: '1.1s' }} />
+          <span className="bs-ring" style={{ animationDelay: '.8s' }} />
+          <span className="bs-ring" style={{ animationDelay: '1.15s' }} />
+          <span className="bs-ring" style={{ animationDelay: '1.5s' }} />
           {Array.from({ length: SPARKS }, (_, i) => (
-            <span key={i} className="bs-spark" style={{ ['--a' as any]: `${(360 / SPARKS) * i + (i % 2 ? 7 : 0)}deg`, ['--r' as any]: `${130 + (i % 3) * 38}px`, animationDelay: `${0.6 + (i % 4) * 0.04}s` }} />
+            <span key={i} className="bs-spark" style={{ ['--a' as any]: `${(360 / SPARKS) * i + (i % 2 ? 7 : 0)}deg`, ['--r' as any]: `${130 + (i % 3) * 38}px`, animationDelay: `${0.8 + (i % 4) * 0.05}s` }} />
           ))}
         </div>
 
         {/* wordmark */}
         <h1 className="bs-word" aria-hidden>
-          {['i', 'E', 'Z'].map((c, i) => <span key={c} style={{ animationDelay: `${0.7 + i * 0.09}s` }}>{c}</span>)}
-          <span className="bs-dot" style={{ animationDelay: '.98s' }}>.</span>
+          {['i', 'E', 'Z'].map((c, i) => <span key={c} style={{ animationDelay: `${1.0 + i * 0.14}s` }}>{c}</span>)}
+          <span className="bs-dot" style={{ animationDelay: '1.5s' }}>.</span>
         </h1>
 
         {/* signature */}

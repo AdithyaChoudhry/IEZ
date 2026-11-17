@@ -591,7 +591,7 @@ export default function CoverSheetGenerator() {
 
   if (mode === 'template') {
     return (
-      <div className="p-6 max-w-6xl mx-auto space-y-5">
+      <div className="sm:p-6 max-w-6xl mx-auto space-y-5">
         <PageHeader icon={FileSpreadsheet} title="Cover Sheet Generator"
           description="Your Excel coversheet defines how it looks · the MDL defines which document · you supply revision, date and sign-off" />
         {modeSelector}
@@ -608,7 +608,7 @@ export default function CoverSheetGenerator() {
   }
 
   return (
-    <div className="p-6 max-w-6xl mx-auto space-y-5">
+    <div className="sm:p-6 max-w-6xl mx-auto space-y-5">
       {/* ── Top bar with header + Upload MDL ── */}
       <div className="flex items-start gap-4">
         <div className="flex-1">

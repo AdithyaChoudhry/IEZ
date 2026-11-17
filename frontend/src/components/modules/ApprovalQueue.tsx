@@ -323,7 +323,7 @@ export default function ApprovalQueue() {
   const handled = requests.filter(r => r.status !== 'pending');
 
   return (
-    <div className="p-6 max-w-4xl mx-auto space-y-5">
+    <div className="sm:p-6 max-w-4xl mx-auto space-y-5">
       <div className="flex items-center gap-4">
         <div className="flex-1">
           <PageHeader icon={ClipboardCheck}

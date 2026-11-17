@@ -168,9 +168,9 @@ export default function CableScheduleGenerator() {
   const totalTags = jbSummary?.reduce((sum, r) => sum + r.tag_count, 0) || 0;
 
   const viewTabs = (
-    <div className="flex gap-2" data-testid="cable-views">
+    <div className="flex gap-2 overflow-x-auto no-scrollbar -mx-4 px-4 sm:mx-0 sm:px-0 sm:flex-wrap" data-testid="cable-views">
       {([['schedule', 'Cable Schedule'], ['drum', 'Drum Schedule Generator'], ['gland', 'Cable Gland Quantity Generator'], ['lug', 'Cable Lug Quantity Generator'], ['complete', 'Cable Schedule Complete ⭐']] as const).map(([k, label]) => (
-        <button key={k} onClick={() => setView(k)} className="px-4 py-2 rounded-xl text-sm font-semibold"
+        <button key={k} onClick={() => setView(k)} className="px-4 py-2 rounded-xl text-sm font-semibold whitespace-nowrap flex-shrink-0"
                 style={{ background: view === k ? 'var(--em)' : 'var(--s3)', color: view === k ? '#fff' : 'var(--t0)', border: '1px solid var(--b1)' }}>
           {label}
         </button>

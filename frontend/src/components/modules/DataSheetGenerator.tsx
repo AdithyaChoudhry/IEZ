@@ -78,7 +78,7 @@ function StepBar({ current }: { current: number }) {
         return (
           <div key={i} className="flex items-center flex-1 last:flex-none">
             <div className="flex flex-col items-center gap-1.5">
-              <div className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold transition-all duration-300"
+              <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-full flex items-center justify-center text-xs font-bold transition-all duration-300 flex-shrink-0"
                 style={{
                   background: done ? 'var(--em)' : active ? 'var(--em-dim)' : 'var(--s3)',
                   border: `1.5px solid ${done || active ? 'var(--em)' : 'var(--b2)'}`,
@@ -86,7 +86,7 @@ function StepBar({ current }: { current: number }) {
                 }}>
                 {done ? <CheckCircle2 className="w-4 h-4" /> : idx}
               </div>
-              <span className="text-[9px] font-medium whitespace-nowrap" style={{ color: active ? 'var(--em-lt)' : done ? 'var(--t1)' : 'var(--t2)' }}>
+              <span className={`text-[9px] font-medium whitespace-nowrap ${active ? '' : 'hidden sm:block'}`} style={{ color: active ? 'var(--em-lt)' : done ? 'var(--t1)' : 'var(--t2)' }}>
                 {label}
               </span>
             </div>
@@ -860,7 +860,7 @@ export default function DataSheetGenerator() {
 
   // ── Render ─────────────────────────────────────────────────────────────────────
   return (
-    <div className="p-6 max-w-5xl mx-auto space-y-6">
+    <div className="sm:p-6 max-w-5xl mx-auto space-y-6">
       <PageHeader icon={FileSpreadsheet} title="Smart Datasheet Generator"
         description="IODB-assisted · AI spec extraction · Engineering approval workflow" />
 

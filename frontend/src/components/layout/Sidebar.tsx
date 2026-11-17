@@ -1,76 +1,29 @@
 import { NavLink, useLocation } from 'react-router-dom';
-import { useEffect, useState } from 'react';
-import {
-  Home, CheckCircle2, FileSpreadsheet, Network,
-  FileText, Cable, GitBranch, Layers, ScanSearch,
-  Sparkles, Droplets, ShieldCheck, ClipboardCheck, BarChart2,
-  Radio, ClipboardList,
-} from 'lucide-react';
-import clsx from 'clsx';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { Droplets, Sparkles } from 'lucide-react';
 import api from '@/services/api';
 import { useAuth } from '@/context/AuthContext';
+import { visibleSections, isActive } from './nav';
 
-interface SidebarProps { isOpen: boolean; }
-
-interface SidebarItem {
-  path: string;
-  icon: React.ElementType;
-  label: string;
-  exact?: boolean;
-  badge?: boolean;
-  allowedRoles?: string[];
+interface SidebarProps {
+  rail: boolean;              // collapsed to an icon rail
+  mobile: boolean;            // small screen: the sidebar is an overlay drawer
+  mobileOpen: boolean;
+  onNavigate?: () => void;
 }
 
-const ADMIN_ROLES = ['Admin'];
-const LEAD_ROLES  = ['Admin', 'Lead Engineer', 'Reviewer'];
+export const SIDEBAR_W = 264;
+export const RAIL_W = 76;
 
-const sections = [
-  {
-    label: 'Overview',
-    items: [{ path: '/', icon: Home, label: 'Dashboard', exact: true }],
-  },
-  {
-    label: 'Validation',
-    items: [{ path: '/validator', icon: CheckCircle2, label: 'IODB Validator' }],
-  },
-  {
-    label: 'Generators',
-    items: [
-      { path: '/instrument-list', icon: FileSpreadsheet, label: 'Instrument List' },
-      { path: '/io-list',         icon: Network,         label: 'I/O List' },
-      { path: '/datasheet',       icon: FileText,        label: 'Data Sheet' },
-      { path: '/cable-schedule',  icon: Cable,           label: 'Cable Schedule' },
-      { path: '/loop-wiring',     icon: GitBranch,       label: 'Loop Wiring' },
-      // Loop Wiring (Test) is hidden from the sidebar; the /loop-test route and component are kept.
-      { path: '/cover-sheet',     icon: Layers,          label: 'Cover Sheet' },
-      { path: '/process-data',    icon: ClipboardList,   label: 'Process Data Requisition' },
-    ],
-  },
-  {
-    label: 'Smart AI',
-    items: [{ path: '/smart-datasheet', icon: ScanSearch, label: 'Spec Extraction' }],
-    ai: true,
-  },
-  {
-    label: 'Procurement',
-    items: [
-      { path: '/tbe', icon: BarChart2, label: 'Vendor Analysis & TBE' },
-    ],
-  },
-  {
-    label: 'Admin',
-    items: [
-      { path: '/admin',          icon: ShieldCheck,   label: 'Admin Management', allowedRoles: ADMIN_ROLES, exact: true },
-      { path: '/admin/login-activity', icon: Radio,   label: 'Login Activity',   allowedRoles: ADMIN_ROLES },
-      { path: '/approval-queue', icon: ClipboardCheck, label: 'Approval Queue',  allowedRoles: LEAD_ROLES, badge: true },
-    ],
-  },
-];
-
-export default function Sidebar({ isOpen }: SidebarProps) {
+export default function Sidebar({ rail, mobile, mobileOpen, onNavigate }: SidebarProps) {
   const location = useLocation();
   const { role } = useAuth();
   const [pendingCount, setPendingCount] = useState(0);
+  const navRef = useRef<HTMLDivElement>(null);
+  const itemRefs = useRef<Record<string, HTMLAnchorElement | null>>({});
+  const [ind, setInd] = useState<{ y: number; h: number; on: boolean }>({ y: 0, h: 40, on: false });
+  const sections = visibleSections(role);
+  const compact = rail && !mobile;
 
   useEffect(() => {
     const fetchCount = () => {
@@ -79,104 +32,105 @@ export default function Sidebar({ isOpen }: SidebarProps) {
         .catch(() => {/* ignore */});
     };
     fetchCount();
-    const interval = setInterval(fetchCount, 30_000); // refresh every 30 s
+    const interval = setInterval(fetchCount, 30_000);
     return () => clearInterval(interval);
   }, []);
 
+  // the active pill glides to the active item
+  const measure = () => {
+    const active = sections.flatMap(s => s.items).find(i => isActive(i, location.pathname));
+    const el = active ? itemRefs.current[active.path] : null;
+    if (!el || !navRef.current) { setInd(i => ({ ...i, on: false })); return; }
+    setInd({ y: el.offsetTop, h: el.offsetHeight, on: true });
+  };
+  useLayoutEffect(measure, [location.pathname, role, compact]);
+  useEffect(() => {
+    const t = window.setTimeout(measure, 650);           // after the rail/expand width animation settles
+    window.addEventListener('resize', measure);
+    return () => { window.clearTimeout(t); window.removeEventListener('resize', measure); };
+  });
+
+  const hidden = mobile && !mobileOpen;
   return (
     <aside
-      className={clsx('fixed left-0 z-40 flex flex-col overflow-hidden bar-glass')}
+      className={`sb glass-panel ${compact ? 'rail' : ''}`}
       style={{
-        top: '56px',
-        width: 244,
-        height: 'calc(100vh - 56px)',
-        borderRight: '1px solid var(--b1)',
-        transform: isOpen ? 'none' : 'translateX(-100%)',
-        opacity: isOpen ? 1 : 0,
-        pointerEvents: isOpen ? 'auto' : 'none',
-        transition: 'transform .55s var(--spring), opacity .35s var(--ease)',
+        width: compact ? RAIL_W : SIDEBAR_W,
+        transform: hidden ? 'translateX(calc(-100% - 24px))' : 'none',
+        opacity: hidden ? 0 : 1,
+        pointerEvents: hidden ? 'none' : 'auto',
       }}
+      aria-label="Main navigation"
     >
-      <div className="flex-1 overflow-y-auto py-4 px-3">
-        {sections.map((section) => {
-          const visibleItems = (section.items as SidebarItem[]).filter(
-            item => !item.allowedRoles || item.allowedRoles.includes(role)
-          );
-          if (visibleItems.length === 0) return null;
-          return (
-          <div
-            key={section.label}
-            className="mb-5"
-          >
-            <div className="flex items-center gap-1.5 px-3 mb-1.5">
-              {section.ai && <Sparkles className="w-3 h-3" style={{ color: 'var(--gold)' }} />}
-              <span
-                className="text-[11px] font-semibold"
-                style={{ color: section.ai ? 'var(--gold)' : 'var(--t2)', letterSpacing: '0.01em' }}
-              >
-                {section.label}
-              </span>
-            </div>
-
-            <nav className="space-y-0.5">
-              {visibleItems.map((item) => {
-                const Icon = item.icon;
-                const isActive = item.exact
-                  ? location.pathname === item.path
-                  : (location.pathname.startsWith(item.path) && item.path !== '/');
-                const showBadge = item.badge && pendingCount > 0;
-
-                return (
-                  <NavLink key={item.path} to={item.path} end={item.exact ?? false}>
-                    <div
-                      className="flex items-center gap-3 px-3 py-[9px] rounded-[10px] text-[13px] font-medium relative"
-                      style={{
-                        background: isActive ? 'var(--em)' : 'transparent',
-                        color: isActive ? '#fff' : 'var(--t0)',
-                        transition: 'background .25s var(--ease), color .25s var(--ease), transform .35s var(--spring)',
-                        boxShadow: isActive ? '0 6px 16px -8px var(--em-glow)' : 'none',
-                      }}
-                      onMouseEnter={e => {
-                        if (!isActive) {
-                          e.currentTarget.style.background = 'var(--s3)';
-                          e.currentTarget.style.transform = 'translateX(2px)';
-                        }
-                      }}
-                      onMouseLeave={e => {
-                        if (!isActive) {
-                          e.currentTarget.style.background = 'transparent';
-                          e.currentTarget.style.transform = 'none';
-                        }
-                      }}
-                    >
-                      <Icon
-                        className="w-[17px] h-[17px] flex-shrink-0"
-                        style={{ color: isActive ? '#fff' : 'var(--em)', opacity: isActive ? 1 : 0.9 }}
-                      />
-                      <span>{item.label}</span>
-                      {showBadge && (
-                        <span className="ml-auto text-[9px] font-black px-1.5 py-0.5 rounded-full min-w-[18px] text-center"
-                          style={{ background: 'var(--gold)', color: '#fff' }}>
-                          {pendingCount > 99 ? '99+' : pendingCount}
-                        </span>
-                      )}
-
-                    </div>
-                  </NavLink>
-                );
-              })}
-            </nav>
-          </div>
-          );
-        })}
+      {/* Brand */}
+      <div className="flex items-center gap-3 px-[18px] pt-[18px] pb-4 flex-shrink-0">
+        <div className="w-10 h-10 rounded-[13px] flex items-center justify-center flex-shrink-0 relative overflow-hidden"
+          style={{ background: 'var(--grad)', boxShadow: 'inset 0 1px 0 rgba(255,255,255,.35), 0 10px 22px -8px var(--em-glow)' }}>
+          <Droplets className="w-5 h-5 text-white relative" />
+        </div>
+        <div className="sb-label min-w-0">
+          <p className="text-[19px] font-bold leading-none" style={{ fontFamily: 'var(--font-display)', letterSpacing: '-0.04em', color: 'var(--t0)' }}>
+            i<span className="text-grad">EZ</span>
+          </p>
+          <p className="text-[11px] mt-1 truncate" style={{ color: 'var(--t2)' }}>WABAG · Instrumentation</p>
+        </div>
       </div>
 
-      <div className="p-3 flex-shrink-0" style={{ borderTop: '1px solid var(--b1)' }}>
-        <div className="flex items-center gap-2.5 px-3 py-2.5 rounded-[12px]" style={{ background: 'var(--s3)' }}>
-          <Droplets className="w-4 h-4 flex-shrink-0" style={{ color: 'var(--em)' }} />
-          <div>
-            <p className="text-[11px] font-semibold" style={{ color: 'var(--t0)' }}>iEZ v3.1 <span style={{ color: 'var(--gold)', fontSize: 10, fontWeight: 500 }}>Under Development</span></p>
-            <p className="text-[10px]" style={{ color: 'var(--t2)' }}>Built by Akash Balaji</p>
+      {/* Navigation */}
+      <div className="flex-1 overflow-y-auto px-3 pb-3" style={compact ? { overflow: 'visible' } : { overflowX: 'hidden', maskImage: 'linear-gradient(to bottom, #000 calc(100% - 28px), transparent)', WebkitMaskImage: 'linear-gradient(to bottom, #000 calc(100% - 28px), transparent)' }}>
+        <div ref={navRef} className="relative">
+          <span className="sb-ind" aria-hidden style={{ transform: `translateY(${ind.y}px)`, height: ind.h, opacity: ind.on ? 1 : 0, top: 0 }} />
+          {sections.map((section) => (
+            <div key={section.label} className="mb-3">
+              <div className="sb-sec flex items-center gap-1.5 px-3 pt-2 pb-1.5 overflow-hidden">
+                {section.ai && <Sparkles className="w-3 h-3 flex-shrink-0" style={{ color: 'var(--gold)' }} />}
+                <span className="text-[11px] font-semibold uppercase whitespace-nowrap" style={{ letterSpacing: '.08em', color: section.ai ? 'var(--gold)' : 'var(--t2)' }}>
+                  {section.label}
+                </span>
+              </div>
+              <nav className="space-y-0.5">
+                {section.items.map((item) => {
+                  const Icon = item.icon;
+                  const active = isActive(item, location.pathname);
+                  const showBadge = item.badge && pendingCount > 0;
+                  return (
+                    <NavLink
+                      key={item.path}
+                      to={item.path}
+                      end={item.exact ?? false}
+                      ref={(el) => { itemRefs.current[item.path] = el; }}
+                      className={`sb-item ${active ? 'active' : ''}`}
+                      data-tip={compact ? item.label : undefined}
+                      onClick={onNavigate}
+                    >
+                      <Icon className="ico" style={{ color: active ? '#fff' : item.color }} strokeWidth={2} />
+                      <span className="sb-label flex-1 truncate">{item.label}</span>
+                      {showBadge && (
+                        <span className={compact ? 'absolute top-1.5 right-2 w-2 h-2 rounded-full' : 'sb-label text-[10px] font-bold px-1.5 py-0.5 rounded-full min-w-[20px] text-center'}
+                          style={{ background: active ? 'rgba(255,255,255,.25)' : 'var(--gold)', color: '#fff' }}>
+                          {compact ? '' : pendingCount > 99 ? '99+' : pendingCount}
+                        </span>
+                      )}
+                    </NavLink>
+                  );
+                })}
+              </nav>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Footer */}
+      <div className="p-3 flex-shrink-0">
+        <div className="sb-foot flex items-center gap-3 px-3 py-2.5 rounded-[14px]" style={{ background: 'color-mix(in srgb, var(--t0) 4%, transparent)', border: '1px solid var(--b0)' }}
+          data-tip={compact ? 'All systems operational · iEZ v3.1' : undefined}>
+          <span className="dot relative flex w-2.5 h-2.5 flex-shrink-0 ml-[3px]">
+            <span className="absolute inset-0 rounded-full" style={{ background: 'var(--ok)', animation: 'ping-sm 2.4s cubic-bezier(0,0,.2,1) infinite', opacity: .45 }} />
+            <span className="relative w-2.5 h-2.5 rounded-full" style={{ background: 'var(--ok)' }} />
+          </span>
+          <div className="sb-label min-w-0">
+            <p className="text-[12px] font-semibold truncate" style={{ color: 'var(--t0)' }}>All systems operational</p>
+            <p className="text-[11px] truncate" style={{ color: 'var(--t2)' }}>iEZ v3.1 · <span style={{ color: 'var(--gold)' }}>Under development</span> · Akash Balaji</p>
           </div>
         </div>
       </div>

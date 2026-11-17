@@ -2,15 +2,16 @@ import { SharedIodbChip } from '../ui/SharedIodb';
 import { useAuth } from '@/context/AuthContext';
 import { useTheme } from '@/context/ThemeContext';
 import {
-  Menu, LogOut, User, ChevronDown, Droplets, Bell, CheckCheck,
+  PanelLeft, Search, LogOut, User, ChevronDown, Bell, CheckCheck,
   Clock, ThumbsUp, ThumbsDown, Info, CheckCircle2, XCircle,
   AlertTriangle, Loader2, X, FileText, Tag, Sun, Moon,
 } from 'lucide-react';
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
+import { currentPage } from './nav';
 import api from '@/services/api';
 
-interface HeaderProps { onToggleSidebar: () => void; }
+interface HeaderProps { onToggleSidebar: () => void; onOpenPalette: () => void; }
 
 interface NotifItem {
   id: number;
@@ -301,7 +302,10 @@ function QuickApproveDrawer({
 }
 
 // ── Header ─────────────────────────────────────────────────────────────────────
-export default function Header({ onToggleSidebar }: HeaderProps) {
+export default function Header({ onToggleSidebar, onOpenPalette }: HeaderProps) {
+  const { pathname } = useLocation();
+  const page = currentPage(pathname);
+  const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform);
   const { user, logout } = useAuth();
   const { theme, toggleTheme } = useTheme();
   const navigate = useNavigate();
@@ -379,49 +383,47 @@ export default function Header({ onToggleSidebar }: HeaderProps) {
   return (
     <>
       <header
-        className="sticky top-0 z-50 flex items-center justify-between px-5 h-[56px] bar-glass"
-        style={{ borderBottom: '1px solid var(--b1)' }}
+        className="sticky z-40 flex items-center justify-between gap-3 pl-2.5 pr-2.5 h-[60px] glass-panel"
+        style={{ top: 12, borderRadius: 20 }}
       >
-        {/* Left */}
-        <div className="flex items-center gap-3">
+        {/* Left: sidebar toggle + where am I */}
+        <div className="flex items-center gap-2 min-w-0">
           <button
             onClick={onToggleSidebar}
-            className="w-8 h-8 flex items-center justify-center rounded-lg transition-all duration-150"
-            style={{ color: 'var(--t2)' }}
+            aria-label="Toggle sidebar"
+            className="w-10 h-10 flex items-center justify-center rounded-[13px] flex-shrink-0"
+            style={{ color: 'var(--t1)', transition: 'background .2s, color .2s, transform .35s var(--spring)' }}
             onMouseEnter={e => { e.currentTarget.style.background = 'var(--s3)'; e.currentTarget.style.color = 'var(--t0)'; }}
-            onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--t2)'; }}
+            onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--t1)'; }}
           >
-            <Menu className="w-4 h-4" />
+            <PanelLeft className="w-[18px] h-[18px]" />
           </button>
-
-          <div className="flex items-center gap-2.5 select-none">
-            <div
-              className="w-8 h-8 rounded-[10px] flex items-center justify-center"
-              style={{ background: 'linear-gradient(160deg, var(--em-lt), var(--em))', boxShadow: '0 4px 12px -2px var(--em-glow)' }}
-            >
-              <Droplets className="w-4 h-4 text-white" />
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <span
-                  className="text-[17px] font-bold leading-none"
-                  style={{ fontFamily: 'var(--font-display)', color: 'var(--t0)', letterSpacing: '-0.03em' }}
-                >
-                  i<span className="text-gradient">EZ</span>
-                </span>
+          {page && (
+            <div key={page.item.path} className="flex items-center gap-2.5 min-w-0 pop-in" style={{ transformOrigin: 'left center' }}>
+              <span className="w-8 h-8 rounded-[10px] flex items-center justify-center flex-shrink-0"
+                style={{ background: `color-mix(in srgb, ${page.item.color} 16%, transparent)` }}>
+                <page.item.icon className="w-4 h-4" style={{ color: page.item.color }} />
+              </span>
+              <div className="min-w-0 leading-tight">
+                <p className="text-[11px] font-medium truncate" style={{ color: 'var(--t2)' }}>iEZ · {page.section.label}</p>
+                <p className="text-[15px] font-semibold truncate" style={{ color: 'var(--t0)', letterSpacing: '-0.02em' }}>{page.item.label}</p>
               </div>
-              <p className="text-[10px] leading-tight tracking-wide" style={{ color: 'var(--t2)' }}>
-                WABAG · Instrumentation
-              </p>
             </div>
-          </div>
+          )}
         </div>
 
-        {/* Centre */}
-        <div className="hidden md:flex items-center gap-2 px-3.5 py-1.5 rounded-full" style={{ background: 'var(--s3)' }}>
-          <span className="ping-dot w-1.5 h-1.5 rounded-full" style={{ background: 'var(--ok)' }} />
-          <span className="text-[11px] font-medium" style={{ color: 'var(--t1)' }}>Systems operational</span>
-        </div>
+        {/* Centre: command palette */}
+        <button
+          onClick={onOpenPalette}
+          className="hidden md:flex items-center gap-2.5 h-10 pl-3.5 pr-2 rounded-[13px] flex-1 max-w-[420px] mx-auto text-left"
+          style={{ background: 'color-mix(in srgb, var(--t0) 5%, transparent)', border: '1px solid var(--b1)', color: 'var(--t2)', transition: 'border-color .2s, background .2s, box-shadow .3s' }}
+          onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--b2)'; e.currentTarget.style.boxShadow = '0 0 0 4px var(--em-dim)'; }}
+          onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--b1)'; e.currentTarget.style.boxShadow = 'none'; }}
+        >
+          <Search className="w-4 h-4 flex-shrink-0" />
+          <span className="text-[13.5px] flex-1 truncate">Search modules and actions…</span>
+          <kbd className="k">{isMac ? '⌘' : 'Ctrl'}</kbd><kbd className="k">K</kbd>
+        </button>
 
         {/* Right */}
         <div className="flex items-center gap-2">
@@ -430,12 +432,12 @@ export default function Header({ onToggleSidebar }: HeaderProps) {
           <button
             onClick={toggleTheme}
             title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
-            className="w-8 h-8 flex items-center justify-center rounded-lg transition-all duration-150"
+            className="w-10 h-10 flex items-center justify-center rounded-[13px] transition-all duration-150"
             style={{ color: 'var(--t2)' }}
             onMouseEnter={e => { e.currentTarget.style.background = 'var(--s3)'; e.currentTarget.style.color = 'var(--t0)'; }}
             onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--t2)'; }}
           >
-            {theme === 'dark' ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+            <span key={theme} className="pop-in inline-flex" style={{ transformOrigin: 'center' }}>{theme === 'dark' ? <Sun className="w-[18px] h-[18px]" /> : <Moon className="w-[18px] h-[18px]" />}</span>
           </button>
 
           <SharedIodbChip />
@@ -444,7 +446,7 @@ export default function Header({ onToggleSidebar }: HeaderProps) {
           <div className="relative" ref={bellRef}>
             <button
               onClick={openBell}
-              className="relative w-8 h-8 flex items-center justify-center rounded-lg transition-all duration-150"
+              className="relative w-10 h-10 flex items-center justify-center rounded-[13px] transition-all duration-150"
               style={{ color: 'var(--t2)' }}
               onMouseEnter={e => { e.currentTarget.style.background = 'var(--s3)'; e.currentTarget.style.color = 'var(--t0)'; }}
               onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--t2)'; }}
@@ -462,7 +464,7 @@ export default function Header({ onToggleSidebar }: HeaderProps) {
 
             {bellOpen && (
               <div
-                className="glass absolute right-0 mt-1.5 w-80 rounded-xl overflow-hidden shadow-2xl animate-fade-in"
+                className="glass absolute right-0 mt-2 w-[22rem] overflow-hidden pop-in"
                 style={{ zIndex: 100 }}
               >
                 <div className="flex items-center justify-between px-4 py-2.5" style={{ borderBottom: '1px solid var(--b1)' }}>
@@ -528,13 +530,13 @@ export default function Header({ onToggleSidebar }: HeaderProps) {
           <div className="relative" ref={profileRef}>
             <button
               onClick={() => setProfileOpen(!profileOpen)}
-              className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg transition-all duration-150"
+              className="flex items-center gap-2 pl-1.5 pr-2.5 h-10 rounded-[13px] transition-all duration-150"
               onMouseEnter={e => (e.currentTarget.style.background = 'var(--s3)')}
               onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
             >
               <div
-                className="w-7 h-7 rounded-full flex items-center justify-center text-white text-xs font-bold"
-                style={{ background: 'linear-gradient(135deg, var(--em), #1d4ed8)' }}
+                className="w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-bold"
+                style={{ background: 'var(--grad)', boxShadow: 'inset 0 1px 0 rgba(255,255,255,.3)' }}
               >
                 {user?.username?.charAt(0).toUpperCase() || <User className="w-3.5 h-3.5" />}
               </div>
@@ -548,7 +550,7 @@ export default function Header({ onToggleSidebar }: HeaderProps) {
             </button>
 
             {profileOpen && (
-              <div className="glass absolute right-0 mt-1.5 w-52 rounded-xl overflow-hidden shadow-2xl animate-fade-in" style={{ zIndex: 100 }}>
+              <div className="glass absolute right-0 mt-2 w-60 overflow-hidden pop-in" style={{ zIndex: 100 }}>
                 <div className="px-4 py-3" style={{ borderBottom: '1px solid var(--b1)' }}>
                   <p className="text-sm font-semibold" style={{ color: 'var(--t0)' }}>{user?.username}</p>
                   <p className="text-xs mt-0.5" style={{ color: 'var(--t2)' }}>{user?.email}</p>

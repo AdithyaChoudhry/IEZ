@@ -22,19 +22,16 @@ export default function LoginPage() {
   return (
     <div className="min-h-screen relative overflow-hidden flex items-center justify-center px-5 py-12" style={{ background: 'var(--s0)' }}>
       {/* ambient light */}
-      <div className="absolute inset-0 pointer-events-none overflow-hidden">
-        <div className="mesh-blob-a absolute -top-40 left-1/4 w-[36rem] h-[36rem] rounded-full blur-3xl" style={{ background: 'var(--hero-a)' }} />
-        <div className="mesh-blob-b absolute -bottom-48 right-1/4 w-[34rem] h-[34rem] rounded-full blur-3xl" style={{ background: 'var(--hero-b)' }} />
-      </div>
+      <div className="ambient" aria-hidden><i /><i /><i /></div>
 
       <div className="relative w-full max-w-[400px] animate-rise">
         <div className="flex flex-col items-center text-center mb-9">
-          <div className="w-[72px] h-[72px] rounded-[22px] flex items-center justify-center mb-6"
-            style={{ background: 'linear-gradient(160deg, var(--em-lt), var(--em))', boxShadow: '0 18px 40px -12px var(--em-glow)' }}>
+          <div className="w-[76px] h-[76px] rounded-[24px] flex items-center justify-center mb-7 animate-float"
+            style={{ background: 'var(--grad)', boxShadow: '0 18px 40px -12px var(--em-glow)' }}>
             <Droplets className="w-9 h-9 text-white" />
           </div>
           <h1 className="font-bold" style={{ fontFamily: 'var(--font-display)', color: 'var(--t0)', fontSize: 34, letterSpacing: '-0.04em', lineHeight: 1.08 }}>
-            Sign in to i<span className="text-gradient">EZ</span>.
+            Sign in to i<span className="text-grad">EZ</span>.
           </h1>
           <p className="mt-2 text-[15px]" style={{ color: 'var(--t1)' }}>Instrumentation Engineering EZ · VA TECH WABAG</p>
         </div>
@@ -46,7 +43,7 @@ export default function LoginPage() {
           </div>
         )}
 
-        <form onSubmit={submit} className="glass p-6 space-y-4" style={{ borderRadius: 24 }}>
+        <form onSubmit={submit} className="glass-panel p-7 space-y-4" style={{ borderRadius: 28 }}>
           <div>
             <label className="block text-[13px] font-medium mb-1.5" style={{ color: 'var(--t1)' }}>Username</label>
             <input type="text" required autoComplete="username" value={username} onChange={e => setUsername(e.target.value)}

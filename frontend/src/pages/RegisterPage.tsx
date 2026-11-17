@@ -26,23 +26,21 @@ export default function RegisterPage() {
 
   return (
     <div className="min-h-screen flex items-center justify-center px-4 py-12" style={{ background: 'var(--s0)' }}>
-      <div className="fixed inset-0 pointer-events-none overflow-hidden">
-        <div className="mesh-blob-a absolute top-1/3 left-1/2 -translate-x-1/2 w-96 h-96 rounded-full blur-3xl" style={{ background: 'var(--hero-a)' }} />
-      </div>
+      <div className="ambient" aria-hidden><i /><i /><i /></div>
 
       <div className="relative w-full max-w-md animate-rise">
         {/* Logo */}
         <div className="flex items-center gap-3 justify-center mb-10">
-          <div className="w-11 h-11 rounded-[14px] flex items-center justify-center" style={{ background: 'linear-gradient(160deg, var(--em-lt), var(--em))', boxShadow: '0 12px 28px -10px var(--em-glow)' }}>
+          <div className="w-11 h-11 rounded-[14px] flex items-center justify-center" style={{ background: 'var(--grad)', boxShadow: '0 12px 28px -10px var(--em-glow)' }}>
             <Droplets className="w-4 h-4 text-white" />
           </div>
           <span className="text-2xl font-bold" style={{ fontFamily: 'var(--font-display)', color: 'var(--t0)', letterSpacing: '-0.035em' }}>
-            i<span className="text-gradient">EZ</span>
+            i<span className="text-grad">EZ</span>
           </span>
         </div>
 
         {/* Card */}
-        <div className="glass p-8" style={{ borderRadius: 26 }}>
+        <div className="glass-panel p-8" style={{ borderRadius: 28 }}>
           <div className="mb-7">
             <h2 className="font-bold mb-1" style={{ fontFamily: 'var(--font-display)', color: 'var(--t0)', fontSize: 28, letterSpacing: '-0.035em' }}>Create your account.</h2>
             <p className="text-sm" style={{ color: 'var(--t1)' }}>Join the iEZ engineering platform</p>

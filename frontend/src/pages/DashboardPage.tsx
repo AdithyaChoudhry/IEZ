@@ -1,7 +1,7 @@
 import { Link } from 'react-router-dom';
 import { LoopArt, Gauge } from '@/components/art/InstrumentArt';
 import { useEffect, useState } from 'react';
-import { ArrowRight, ArrowUpRight, Search, Database, CheckCircle2, FileSpreadsheet, Cable, GitBranch, Layers } from 'lucide-react';
+import { ArrowRight, ArrowUpRight, Database, CheckCircle2, FileSpreadsheet, Cable, GitBranch, Layers } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { useReveal } from '@/hooks/useReveal';
 import { NAV_SECTIONS } from '@/components/layout/nav';
@@ -54,15 +54,36 @@ function greeting(d: Date): string {
   return h < 5 ? 'Working late' : h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening';
 }
 
-const openPalette = () => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, ctrlKey: true }));
+/** Live date + time with seconds; only this component re-renders every second. */
+function LiveClock() {
+  const [t, setT] = useState(new Date());
+  useEffect(() => {
+    let id = 0;
+    const tick = () => { setT(new Date()); id = window.setTimeout(tick, 1000 - (Date.now() % 1000)); };   // aligned to the second
+    id = window.setTimeout(tick, 1000 - (Date.now() % 1000));
+    return () => window.clearTimeout(id);
+  }, []);
+  const date = t.toLocaleDateString(undefined, { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' }).toUpperCase();
+  const two = (n: number) => String(n).padStart(2, '0');
+  const hh = two(t.getHours()), mm = two(t.getMinutes()), ss = two(t.getSeconds());
+  return (
+    <p className="eyebrow flex items-center gap-2" aria-label={`${date} ${hh}:${mm}:${ss}`}>
+      <span className="signal live-dot">●</span>
+      <span>{date}</span><span>·</span>
+      <span className="clock" style={{ color: 'var(--t1)' }}>
+        {hh}<span className="clock-colon">:</span>{mm}<span className="clock-colon">:</span>
+        <span className="clock-sec"><span key={ss} className="clock-roll">{ss}</span></span>
+      </span>
+    </p>
+  );
+}
 
 export default function DashboardPage() {
   const { user } = useAuth();
   const root = useReveal<HTMLDivElement>();
   const [now, setNow] = useState(new Date());
-  useEffect(() => { const t = setInterval(() => setNow(new Date()), 30_000); return () => clearInterval(t); }, []);
+  useEffect(() => { const t = setInterval(() => setNow(new Date()), 60_000); return () => clearInterval(t); }, []);
   const name = (user as any)?.employee_name || user?.username || 'Engineer';
-  const stamp = `${now.toLocaleDateString(undefined, { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' })} · ${now.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}`.toUpperCase();
 
   const figures: { label: string; val: number; suffix?: string; note: string }[] = [
     { label: 'Modules', val: MODULES.length, note: 'in one workspace' },
@@ -74,29 +95,26 @@ export default function DashboardPage() {
   return (
     <div ref={root}>
       {/* ── Masthead ── */}
-      <section className="reveal in flex flex-col lg:flex-row lg:items-end gap-8 justify-between pb-10">
-        <div>
-          <p className="eyebrow"><span className="signal">●</span>&nbsp; {stamp}</p>
-          <h1 className="mt-5 font-semibold" style={{ fontFamily: 'var(--font-display)', color: 'var(--t0)', letterSpacing: '-0.045em', lineHeight: 1.0, fontSize: 'clamp(40px, 5vw, 64px)' }}>
-            {greeting(now)},<br />{name}<span className="signal">.</span>
+      <section className="reveal in grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)] items-center gap-6 pb-10">
+        <div className="min-w-0">
+          <LiveClock />
+          <h1 className="mt-5 font-semibold" style={{ fontFamily: 'var(--font-display)', color: 'var(--t0)', letterSpacing: '-0.045em', lineHeight: 1.02, fontSize: 'clamp(40px, 5vw, 64px)' }}>
+            <span className="line-reveal"><span style={{ animationDelay: '80ms' }}>{greeting(now)},</span></span>
+            <span className="line-reveal"><span style={{ animationDelay: '200ms' }}>{name}<span className="signal">.</span></span></span>
           </h1>
-          <p className="mt-5 max-w-xl text-[17px]" style={{ color: 'var(--t1)', lineHeight: 1.55 }}>
+          <p className="mt-5 max-w-xl text-[17px] fade-up" style={{ color: 'var(--t1)', lineHeight: 1.55, animationDelay: '360ms' }}>
             Instrumentation documents, engineered end to end - from one IODB to issued drawings.
           </p>
         </div>
-        <div className="flex flex-col items-start lg:items-end gap-6">
-          <div className="hidden lg:block w-[460px] -mb-2"><LoopArt tag="101" tone={{ line: 'var(--t2)', text: 'var(--t2)' }} /></div>
-        <div className="flex flex-wrap gap-2.5">
-          <Link to="/cable-schedule" className="btn btn-primary h-11 px-5 text-[14px]">Open Cable Schedule <ArrowRight className="w-4 h-4" /></Link>
-          <button onClick={openPalette} className="btn btn-secondary h-11 px-4 text-[14px]"><Search className="w-4 h-4" />Search <kbd className="k ml-1">⌘K</kbd></button>
-        </div>
+        <div className="hidden lg:flex justify-center items-center fade-up" style={{ animationDelay: '220ms' }}>
+          <div className="w-full max-w-[640px]"><LoopArt tag="101" tone={{ line: 'var(--t1)', text: 'var(--t2)' }} /></div>
         </div>
       </section>
 
       {/* ── Figures ── */}
       <section className="reveal grid grid-cols-2 lg:grid-cols-4" style={{ borderTop: '1px solid var(--b2)', borderBottom: '1px solid var(--b1)' }}>
         {figures.map((f, i) => (
-          <div key={f.label} className="relative py-7 pr-6" style={{ paddingLeft: i % 4 === 0 ? 0 : 24, borderLeft: i % 4 === 0 ? 'none' : '1px solid var(--b1)' }}>
+          <div key={f.label} className="relative py-7 pr-6 fade-up" style={{ paddingLeft: i % 4 === 0 ? 0 : 24, borderLeft: i % 4 === 0 ? 'none' : '1px solid var(--b1)', animationDelay: `${420 + i * 90}ms` }}>
             {f.label === 'Uptime' && <div className="absolute right-2 top-1/2 -translate-y-1/2"><Gauge value={f.val} size={78} label="Uptime %" /></div>}
             <p className="eyebrow">{f.label}</p>
             <p className="mt-3 font-semibold leading-none" style={{ fontFamily: 'var(--font-display)', fontSize: 46, letterSpacing: '-0.045em', color: 'var(--t0)' }}>

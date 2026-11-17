@@ -39,6 +39,7 @@ export default function MainLayout() {
   return (
     <div className="min-h-screen" style={{ background: 'var(--s0)' }}>
       <Header mobile={mobile} onOpenPalette={() => setPalette(true)} />
+      <div key={`bar-${pathname}`} className="route-bar" aria-hidden />
       <main>
         {/* keyed by route: each page eases in */}
         <div key={pathname} className="page-enter max-w-[1440px] mx-auto px-5 lg:px-8 pt-9 pb-16">

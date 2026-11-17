@@ -2,16 +2,16 @@ import { SharedIodbChip } from '../ui/SharedIodb';
 import { useAuth } from '@/context/AuthContext';
 import { useTheme } from '@/context/ThemeContext';
 import {
-  PanelLeft, Search, LogOut, User, ChevronDown, Bell, CheckCheck,
+  Search, LogOut, User, ChevronDown, Bell, CheckCheck,
   Clock, ThumbsUp, ThumbsDown, Info, CheckCircle2, XCircle,
   AlertTriangle, Loader2, X, FileText, Tag, Sun, Moon,
 } from 'lucide-react';
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
-import { currentPage } from './nav';
+import { useNavigate } from 'react-router-dom';
+import TopNav from './TopNav';
 import api from '@/services/api';
 
-interface HeaderProps { onToggleSidebar: () => void; onOpenPalette: () => void; }
+interface HeaderProps { mobile: boolean; onOpenPalette: () => void; }
 
 interface NotifItem {
   id: number;
@@ -302,9 +302,7 @@ function QuickApproveDrawer({
 }
 
 // ── Header ─────────────────────────────────────────────────────────────────────
-export default function Header({ onToggleSidebar, onOpenPalette }: HeaderProps) {
-  const { pathname } = useLocation();
-  const page = currentPage(pathname);
+export default function Header({ mobile, onOpenPalette }: HeaderProps) {
   const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform);
   const { user, logout } = useAuth();
   const { theme, toggleTheme } = useTheme();
@@ -382,47 +380,23 @@ export default function Header({ onToggleSidebar, onOpenPalette }: HeaderProps) 
 
   return (
     <>
-      <header
-        className="sticky z-40 flex items-center justify-between gap-3 pl-2.5 pr-2.5 h-[60px] glass-panel"
-        style={{ top: 12, borderRadius: 20 }}
-      >
-        {/* Left: sidebar toggle + where am I */}
-        <div className="flex items-center gap-2 min-w-0">
-          <button
-            onClick={onToggleSidebar}
-            aria-label="Toggle sidebar"
-            className="w-10 h-10 flex items-center justify-center rounded-[13px] flex-shrink-0"
-            style={{ color: 'var(--t1)', transition: 'background .2s, color .2s, transform .35s var(--spring)' }}
-            onMouseEnter={e => { e.currentTarget.style.background = 'var(--s3)'; e.currentTarget.style.color = 'var(--t0)'; }}
-            onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--t1)'; }}
-          >
-            <PanelLeft className="w-[18px] h-[18px]" />
-          </button>
-          {page && (
-            <div key={page.item.path} className="flex items-center gap-2.5 min-w-0 pop-in" style={{ transformOrigin: 'left center' }}>
-              <span className="w-8 h-8 rounded-[10px] flex items-center justify-center flex-shrink-0"
-                style={{ background: `color-mix(in srgb, ${page.item.color} 16%, transparent)` }}>
-                <page.item.icon className="w-4 h-4" style={{ color: page.item.color }} />
-              </span>
-              <div className="min-w-0 leading-tight">
-                <p className="text-[11px] font-medium truncate" style={{ color: 'var(--t2)' }}>iEZ · {page.section.label}</p>
-                <p className="text-[15px] font-semibold truncate" style={{ color: 'var(--t0)', letterSpacing: '-0.02em' }}>{page.item.label}</p>
-              </div>
-            </div>
-          )}
-        </div>
+      <header className="topbar bar-glass">
+        <div className="h-full max-w-[1440px] mx-auto px-5 lg:px-8 flex items-center justify-between gap-4">
+        {/* Left: brand + work areas */}
+        <TopNav mobile={mobile} />
 
-        {/* Centre: command palette */}
+        {/* Command palette */}
         <button
           onClick={onOpenPalette}
-          className="hidden md:flex items-center gap-2.5 h-10 pl-3.5 pr-2 rounded-[13px] flex-1 max-w-[420px] mx-auto text-left"
-          style={{ background: 'color-mix(in srgb, var(--t0) 5%, transparent)', border: '1px solid var(--b1)', color: 'var(--t2)', transition: 'border-color .2s, background .2s, box-shadow .3s' }}
-          onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--b2)'; e.currentTarget.style.boxShadow = '0 0 0 4px var(--em-dim)'; }}
-          onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--b1)'; e.currentTarget.style.boxShadow = 'none'; }}
+          className="hidden md:flex items-center gap-2 h-9 pl-3 pr-1.5 rounded-[9px] ml-auto xl:min-w-[220px]"
+          style={{ background: 'var(--s2)', border: '1px solid var(--b2)', color: 'var(--t2)', transition: 'border-color .15s' }}
+          onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--b3)'; }}
+          onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--b2)'; }}
+          aria-label="Search (command palette)"
         >
           <Search className="w-4 h-4 flex-shrink-0" />
-          <span className="text-[13.5px] flex-1 truncate">Search modules and actions…</span>
-          <kbd className="k">{isMac ? '⌘' : 'Ctrl'}</kbd><kbd className="k">K</kbd>
+          <span className="hidden xl:inline text-[13px] flex-1 text-left">Search…</span>
+          <kbd className="k">{isMac ? '⌘K' : 'Ctrl K'}</kbd>
         </button>
 
         {/* Right */}
@@ -432,7 +406,7 @@ export default function Header({ onToggleSidebar, onOpenPalette }: HeaderProps) 
           <button
             onClick={toggleTheme}
             title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
-            className="w-10 h-10 flex items-center justify-center rounded-[13px] transition-all duration-150"
+            className="w-9 h-9 flex items-center justify-center rounded-[9px] transition-all duration-150"
             style={{ color: 'var(--t2)' }}
             onMouseEnter={e => { e.currentTarget.style.background = 'var(--s3)'; e.currentTarget.style.color = 'var(--t0)'; }}
             onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--t2)'; }}
@@ -446,7 +420,7 @@ export default function Header({ onToggleSidebar, onOpenPalette }: HeaderProps) 
           <div className="relative" ref={bellRef}>
             <button
               onClick={openBell}
-              className="relative w-10 h-10 flex items-center justify-center rounded-[13px] transition-all duration-150"
+              className="relative w-9 h-9 flex items-center justify-center rounded-[9px] transition-all duration-150"
               style={{ color: 'var(--t2)' }}
               onMouseEnter={e => { e.currentTarget.style.background = 'var(--s3)'; e.currentTarget.style.color = 'var(--t0)'; }}
               onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--t2)'; }}
@@ -530,13 +504,13 @@ export default function Header({ onToggleSidebar, onOpenPalette }: HeaderProps) 
           <div className="relative" ref={profileRef}>
             <button
               onClick={() => setProfileOpen(!profileOpen)}
-              className="flex items-center gap-2 pl-1.5 pr-2.5 h-10 rounded-[13px] transition-all duration-150"
+              className="flex items-center gap-2 pl-1 pr-2 h-9 rounded-[9px] transition-all duration-150"
               onMouseEnter={e => (e.currentTarget.style.background = 'var(--s3)')}
               onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
             >
               <div
-                className="w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-bold"
-                style={{ background: 'var(--grad)', boxShadow: 'inset 0 1px 0 rgba(255,255,255,.3)' }}
+                className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold"
+                style={{ background: 'var(--ink)', color: 'var(--ink-fg)' }}
               >
                 {user?.username?.charAt(0).toUpperCase() || <User className="w-3.5 h-3.5" />}
               </div>
@@ -568,6 +542,7 @@ export default function Header({ onToggleSidebar, onOpenPalette }: HeaderProps) 
               </div>
             )}
           </div>
+        </div>
         </div>
       </header>
 

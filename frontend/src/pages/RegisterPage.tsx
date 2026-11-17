@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '@/context/AuthContext';
-import { UserPlus, Droplets, Eye, EyeOff } from 'lucide-react';
+import { UserPlus, Eye, EyeOff } from 'lucide-react';
+import { Brand } from '@/components/layout/TopNav';
 
 export default function RegisterPage() {
   const [email, setEmail]         = useState('');
@@ -29,20 +30,12 @@ export default function RegisterPage() {
       <div className="ambient" aria-hidden><i /><i /><i /></div>
 
       <div className="relative w-full max-w-md animate-rise">
-        {/* Logo */}
-        <div className="flex items-center gap-3 justify-center mb-10">
-          <div className="w-11 h-11 rounded-[14px] flex items-center justify-center" style={{ background: 'var(--grad)', boxShadow: '0 12px 28px -10px var(--em-glow)' }}>
-            <Droplets className="w-4 h-4 text-white" />
-          </div>
-          <span className="text-2xl font-bold" style={{ fontFamily: 'var(--font-display)', color: 'var(--t0)', letterSpacing: '-0.035em' }}>
-            i<span className="text-grad">EZ</span>
-          </span>
-        </div>
+        <div className="flex justify-center mb-10"><Brand /></div>
 
         {/* Card */}
-        <div className="glass-panel p-8" style={{ borderRadius: 28 }}>
+        <div className="ui-card p-8">
           <div className="mb-7">
-            <h2 className="font-bold mb-1" style={{ fontFamily: 'var(--font-display)', color: 'var(--t0)', fontSize: 28, letterSpacing: '-0.035em' }}>Create your account.</h2>
+            <h2 className="font-bold mb-1" style={{ fontFamily: 'var(--font-display)', color: 'var(--t0)', fontSize: 28, letterSpacing: '-0.035em' }}>Create your account<span className="signal">.</span></h2>
             <p className="text-sm" style={{ color: 'var(--t1)' }}>Join the iEZ engineering platform</p>
           </div>
 
@@ -87,7 +80,7 @@ export default function RegisterPage() {
 
           <p className="mt-6 text-center text-sm" style={{ color: 'var(--t1)' }}>
             Already have an account?{' '}
-            <Link to="/login" className="font-semibold" style={{ color: 'var(--em-lt)' }}>Sign in</Link>
+            <Link to="/login" className="font-medium underline underline-offset-4" style={{ color: 'var(--t0)' }}>Sign in</Link>
           </p>
         </div>
 

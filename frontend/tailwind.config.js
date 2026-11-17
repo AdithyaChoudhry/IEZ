@@ -5,21 +5,22 @@ export default {
     extend: {
       colors: {
         primary: {
-          50:  'rgba(59,130,246,0.06)',
-          100: 'rgba(59,130,246,0.1)',
-          200: '#bfdbfe',
-          300: '#93c5fd',
-          400: '#60a5fa',
-          500: '#3b82f6',
-          600: '#2563eb',
-          700: '#1d4ed8',
-          800: '#1e40af',
-          900: '#1e3a8a',
+          50:  'rgba(229,84,27,0.06)',
+          100: 'rgba(229,84,27,0.1)',
+          200: '#fed7c3',
+          300: '#fdb08a',
+          400: '#fb8a55',
+          500: '#e5541b',
+          600: '#c2410c',
+          700: '#9a3412',
+          800: '#7c2d12',
+          900: '#431407',
         },
       },
       fontFamily: {
         sans:    ['Inter', 'system-ui', 'sans-serif'],
-        display: ["'Space Grotesk'", 'sans-serif'],
+        display: ["'Inter Tight'", 'Inter', 'sans-serif'],
+        mono:    ["'JetBrains Mono'", 'ui-monospace', 'monospace'],
       },
       animation: {
         'mesh':      'mesh-drift 16s ease-in-out infinite',

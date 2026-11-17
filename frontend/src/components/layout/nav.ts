@@ -21,6 +21,8 @@ export interface NavItem {
 
 export interface NavSection {
   label: string;
+  top: string;                 // label in the top bar
+  code: string;                // short index code (mono) used in menus
   items: NavItem[];
   ai?: boolean;
 }
@@ -30,15 +32,15 @@ export const LEAD_ROLES = ['Admin', 'Lead Engineer', 'Reviewer'];
 
 export const NAV_SECTIONS: NavSection[] = [
   {
-    label: 'Overview',
+    label: 'Overview', top: 'Dashboard', code: '00',
     items: [{ path: '/', icon: Home, label: 'Dashboard', hint: 'Home - all modules at a glance', exact: true, color: '#4f7cff' }],
   },
   {
-    label: 'Validation',
+    label: 'Validation', top: 'Validator', code: '01',
     items: [{ path: '/validator', icon: CheckCircle2, label: 'IODB Validator', hint: 'Check an IODB against engineering rules', keywords: 'rules check iodb', color: '#22c55e' }],
   },
   {
-    label: 'Generators',
+    label: 'Generators', top: 'Generate', code: '02',
     items: [
       { path: '/instrument-list', icon: FileSpreadsheet, label: 'Instrument List', hint: 'Instrument index from the IODB', keywords: 'index', color: '#4f7cff' },
       { path: '/io-list', icon: Network, label: 'I/O List', hint: 'Signal list with filters', keywords: 'io signals', color: '#8b5cf6' },
@@ -50,16 +52,16 @@ export const NAV_SECTIONS: NavSection[] = [
     ],
   },
   {
-    label: 'Smart AI',
+    label: 'Smart AI', top: 'Spec Extraction', code: '03',
     ai: true,
     items: [{ path: '/smart-datasheet', icon: ScanSearch, label: 'Spec Extraction', hint: 'AI reads tender PDFs into datasheets', keywords: 'ai pdf ocr tender sdie', color: '#a855f7' }],
   },
   {
-    label: 'Procurement',
+    label: 'Procurement', top: 'Vendor TBE', code: '04',
     items: [{ path: '/tbe', icon: BarChart2, label: 'Vendor Analysis & TBE', hint: 'Technical bid evaluation', keywords: 'vendor bid tbe offer', color: '#0ea5e9' }],
   },
   {
-    label: 'Admin',
+    label: 'Admin', top: 'Admin', code: '05',
     items: [
       { path: '/admin', icon: ShieldCheck, label: 'Admin Management', hint: 'Users, roles, vendors', allowedRoles: ADMIN_ROLES, exact: true, color: '#64748b' },
       { path: '/admin/login-activity', icon: Radio, label: 'Login Activity', hint: 'Who signed in, when', allowedRoles: ADMIN_ROLES, color: '#64748b' },

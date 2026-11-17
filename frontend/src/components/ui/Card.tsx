@@ -25,10 +25,10 @@ export default function Card({ title, description, icon: Icon, iconClassName, ac
         <div className="flex items-start justify-between mb-5 gap-4">
           <div>
             {title && (
-              <h3 className="text-[17px] font-semibold flex items-center gap-3" style={{ color: 'var(--t0)', letterSpacing: '-0.022em' }}>
+              <h3 className="text-[16px] font-semibold flex items-center gap-3" style={{ color: 'var(--t0)', letterSpacing: '-0.015em', fontFamily: 'var(--font-display)' }}>
                 {Icon && (
-                  <span className="w-8 h-8 rounded-[10px] flex items-center justify-center flex-shrink-0" style={{ background: 'var(--em-dim)' }}>
-                    <Icon className={clsx('w-4 h-4', iconClassName || '')} style={!iconClassName ? { color: 'var(--em)' } : {}} />
+                  <span className="w-8 h-8 rounded-[8px] flex items-center justify-center flex-shrink-0" style={{ background: 'var(--s3)' }}>
+                    <Icon className={clsx('w-4 h-4', iconClassName || '')} style={!iconClassName ? { color: 'var(--t0)' } : {}} strokeWidth={1.8} />
                   </span>
                 )}
                 {title}

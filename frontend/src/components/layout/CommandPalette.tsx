@@ -3,7 +3,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Search, CornerDownLeft, Moon, Sun, PanelLeft, LogOut, Clock, ArrowUp, ArrowDown } from 'lucide-react';
+import { Search, CornerDownLeft, Moon, Sun, LogOut, Clock, ArrowUp, ArrowDown } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { useTheme } from '@/context/ThemeContext';
 import { visibleSections, NAV_SECTIONS } from './nav';
@@ -38,7 +38,7 @@ export function readRecent(): string[] {
   try { return JSON.parse(localStorage.getItem(RECENT_KEY) || '[]'); } catch { return []; }
 }
 
-export default function CommandPalette({ open, onClose, onToggleRail }: { open: boolean; onClose: () => void; onToggleRail: () => void }) {
+export default function CommandPalette({ open, onClose }: { open: boolean; onClose: () => void }) {
   const navigate = useNavigate();
   const { role, logout } = useAuth();
   const { theme, toggleTheme } = useTheme();
@@ -58,11 +58,10 @@ export default function CommandPalette({ open, onClose, onToggleRail }: { open: 
     const actions: Cmd[] = [
       { id: 'theme', group: 'Actions', label: theme === 'dark' ? 'Switch to light appearance' : 'Switch to dark appearance', icon: theme === 'dark' ? Sun : Moon, color: '#f59e0b',
         run: () => { onClose(); window.setTimeout(toggleTheme, 120); }, text: 'theme appearance dark light mode' },
-      { id: 'rail', group: 'Actions', label: 'Collapse / expand sidebar', icon: PanelLeft, color: '#64748b', run: () => { onClose(); onToggleRail(); }, text: 'sidebar collapse expand rail' },
       { id: 'logout', group: 'Actions', label: 'Sign out', icon: LogOut, color: '#f43f5e', run: () => { onClose(); logout(); navigate('/login'); }, text: 'sign out logout exit' },
     ];
     return [...nav, ...actions];
-  }, [role, theme, navigate, onClose, onToggleRail, toggleTheme, logout]);
+  }, [role, theme, navigate, onClose, toggleTheme, logout]);
 
   const results = useMemo(() => {
     const query = q.trim().toLowerCase();
@@ -94,7 +93,7 @@ export default function CommandPalette({ open, onClose, onToggleRail }: { open: 
     <div className="cmdk-overlay" onMouseDown={onClose} role="dialog" aria-modal="true" aria-label="Command palette">
       <div className="cmdk glass" onMouseDown={(e) => e.stopPropagation()} onKeyDown={onKey}>
         <div className="flex items-center gap-3 px-5 h-[62px]" style={{ borderBottom: '1px solid var(--b1)' }}>
-          <Search className="w-5 h-5 flex-shrink-0" style={{ color: 'var(--em)' }} />
+          <Search className="w-5 h-5 flex-shrink-0" style={{ color: 'var(--t1)' }} />
           <input ref={inputRef} value={q} onChange={(e) => setQ(e.target.value)} placeholder="Where do you want to go?"
             className="flex-1 bg-transparent outline-none text-[17px]" style={{ color: 'var(--t0)', letterSpacing: '-0.01em' }} />
           <kbd className="k">esc</kbd>
@@ -109,15 +108,15 @@ export default function CommandPalette({ open, onClose, onToggleRail }: { open: 
               <div key={c.group + c.id}>
                 {head && <p className="eyebrow px-3 pt-3 pb-1.5 flex items-center gap-1.5">{head === 'Recent' && <Clock className="w-3 h-3" />}{head}</p>}
                 <div data-i={i} className={`cmdk-row ${i === sel ? 'on' : ''}`} onMouseMove={() => setSel(i)} onClick={() => c.run()}>
-                  <span className="w-9 h-9 rounded-[11px] flex items-center justify-center flex-shrink-0"
-                    style={{ background: `linear-gradient(160deg, ${c.color}, color-mix(in srgb, ${c.color} 70%, #000))`, boxShadow: 'inset 0 1px 0 rgba(255,255,255,.25)' }}>
-                    <Icon className="w-[18px] h-[18px] text-white" />
+                  <span className="w-8 h-8 rounded-[8px] flex items-center justify-center flex-shrink-0"
+                    style={{ background: i === sel ? 'var(--ink)' : 'var(--s3)', color: i === sel ? 'var(--ink-fg)' : 'var(--t0)', transition: 'background .12s, color .12s' }}>
+                    <Icon className="w-4 h-4" strokeWidth={1.8} />
                   </span>
                   <div className="flex-1 min-w-0">
                     <p className="text-[14.5px] font-medium truncate" style={{ color: 'var(--t0)' }}>{c.label}</p>
                     {c.hint && <p className="text-[12.5px] truncate" style={{ color: 'var(--t2)' }}>{c.hint}</p>}
                   </div>
-                  {i === sel && <CornerDownLeft className="w-4 h-4 flex-shrink-0" style={{ color: 'var(--em)' }} />}
+                  {i === sel && <CornerDownLeft className="w-4 h-4 flex-shrink-0" style={{ color: 'var(--t1)' }} />}
                 </div>
               </div>
             );
@@ -126,7 +125,7 @@ export default function CommandPalette({ open, onClose, onToggleRail }: { open: 
         <div className="flex items-center gap-4 px-5 h-11 text-[12px]" style={{ borderTop: '1px solid var(--b1)', color: 'var(--t2)' }}>
           <span className="flex items-center gap-1.5"><kbd className="k"><ArrowUp className="w-3 h-3" /></kbd><kbd className="k"><ArrowDown className="w-3 h-3" /></kbd>move</span>
           <span className="flex items-center gap-1.5"><kbd className="k"><CornerDownLeft className="w-3 h-3" /></kbd>open</span>
-          <span className="ml-auto">iEZ</span>
+          <span className="ml-auto flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full" style={{ background: 'var(--em)' }} />iEZ</span>
         </div>
       </div>
     </div>

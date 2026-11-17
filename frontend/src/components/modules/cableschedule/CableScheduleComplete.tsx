@@ -5,6 +5,7 @@
  * used as everywhere else). The progress tracker shows the REAL stage states reported by the backend job; nothing is
  * shown as complete before its engine has finished.
  */
+import { AnalyserArt } from '../../art/InstrumentArt';
 import { useEffect, useRef, useState } from 'react';
 import { AlertTriangle, CheckCircle2, Download, FileText, Loader2, MinusCircle, Package, Upload, XCircle } from 'lucide-react';
 import api from '@/services/api';
@@ -153,6 +154,7 @@ export default function CableScheduleComplete() {
           <Package className="w-6 h-6" />{busy ? 'Generating...' : 'GENERATE COMPLETE CABLE SCHEDULE'}
         </Button>
         {!val?.ok && iodb && val && <p className="text-xs text-red-500 mt-2 text-center">Fix the IODB errors above first.</p>}
+        {busy && <div className="mt-5 max-w-[360px]"><AnalyserArt tag="FIT 101" unit="m³/h" base={42} label="Building the package" /></div>}
         {(busy || res || Object.keys(stages).length > 0) && (
           <ul className="mt-4 space-y-1" data-testid="progress">
             {stageRows.map((st: Row, i: number) => (

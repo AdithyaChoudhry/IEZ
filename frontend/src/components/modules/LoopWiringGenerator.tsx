@@ -4,6 +4,7 @@
  *   I/O Assignment -> validate -> group by LOOP_NAME -> LOOP TYPE + SPD + TERM = TYPICAL -> one of 42 approved templates
  *   -> FIELD CODE mapping -> DATA BLOCK -> formula-driven drawing -> trace + validate -> preview -> LOOP_WIRING_GENERATED.xlsx
  */
+import { LoopArt } from '../art/InstrumentArt';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { GitBranch, Upload, Download, CheckCircle2, AlertTriangle, XCircle, ChevronRight, Loader2, FlaskConical, Library } from 'lucide-react';
 import api from '@/services/api';
@@ -165,6 +166,17 @@ export default function LoopWiringGenerator() {
       </FileUploadCard>
 
       <Button onClick={validate} loading={validating} disabled={!file} size="lg" fullWidth className="text-lg py-4"><CheckCircle2 className="w-6 h-6" />{validating ? 'Validating...' : 'VALIDATE I/O ASSIGNMENT'}</Button>
+
+      {!an && (
+        <div className="ui-card p-8 flex flex-col lg:flex-row items-center gap-8">
+          <div className="w-full max-w-[520px]"><LoopArt tag="101" tone={{ bg: 'var(--card)' }} /></div>
+          <div className="max-w-sm">
+            <p className="eyebrow">Waiting for an I/O Assignment</p>
+            <p className="mt-2 text-[20px] font-semibold" style={{ fontFamily: 'var(--font-display)', color: 'var(--t0)', letterSpacing: '-0.02em' }}>Every loop, drawn from its typical.</p>
+            <p className="mt-2 text-[14px]" style={{ color: 'var(--t1)', lineHeight: 1.55 }}>Upload the filled I/O Assignment and validate it. Each LOOP_NAME becomes one drawing: field device, junction box, marshalling, system - traced end to end.</p>
+          </div>
+        </div>
+      )}
 
       {an && (
         <>

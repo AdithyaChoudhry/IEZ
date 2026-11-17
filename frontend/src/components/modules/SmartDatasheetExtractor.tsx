@@ -1,4 +1,5 @@
 import PageHeader from '../ui/PageHeader';
+import { AnalyserArt } from '../art/InstrumentArt';
 import { useState, useCallback, useEffect, useRef } from 'react';
 import {
   ScanSearch, Upload, FileSpreadsheet, Download,
@@ -284,6 +285,7 @@ function ProcessingVisualizer({ step, fileCount, currentFileIdx, fileName, elaps
           <Clock className="w-3.5 h-3.5 text-blue-400" /> {formatTime(elapsed)}
         </div>
       </div>
+      <div className="px-5 pt-5"><AnalyserArt tag="AIT 201" unit="pH" base={7.2} label="Reading tender documents" className="max-w-[360px]" /></div>
 
       <div className="grid grid-cols-3 gap-5 p-5">
         <div className="space-y-2">

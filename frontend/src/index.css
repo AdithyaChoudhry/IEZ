@@ -321,6 +321,26 @@ main .border-teal-200   { border-color:color-mix(in srgb, var(--em) 28%, transpa
 [data-theme='light'] main [style*="rgb(96, 165, 250)"]  { color:var(--em-lt) !important; }
 [data-theme='light'] main [style*="rgb(147, 197, 253)"] { color:var(--em-lt) !important; }
 
+/* ─── Instrument line art (components/art/InstrumentArt.tsx) ─────────────────────────────────── */
+.ia { display:block; width:100%; height:auto; overflow:visible; }
+.ia .ia-t { font: 500 9px/1 var(--font-mono); letter-spacing:.08em; }
+.ia .ia-s { font: 500 8.5px/1 var(--font-mono); letter-spacing:.06em; }
+.ia .ia-b { font: 600 11px/1 var(--font-mono); }
+.ia .ia-num { font: 600 15px/1 var(--font-mono); }
+.ia-anim .ia-draw { stroke-dasharray: 1; stroke-dashoffset: 1; animation: ia-draw 1.4s var(--out) forwards; animation-delay: var(--d, 0ms); }
+.ia-anim .ia-fade { opacity: 0; animation: fade .9s var(--ease) forwards; animation-delay: var(--d, 0ms); }
+.ia-anim .ia-flow { animation: ia-flow 1.6s linear infinite; }
+.ia-anim .ia-needle { animation: ia-needle 3.2s cubic-bezier(.34,1.3,.64,1) .9s both, ia-flutter 2.8s ease-in-out 4.1s infinite; }
+.ia-anim .ia-stroke { animation: ia-stroke 4.8s ease-in-out 1.6s infinite; }
+.ia-jitter { animation: ia-jitter 2.6s ease-in-out 1.8s infinite; }
+.ia-blink { animation: blink 1.6s ease-in-out infinite; }
+@keyframes ia-draw    { to { stroke-dashoffset: 0; } }
+@keyframes ia-flow    { to { stroke-dashoffset: -25; } }
+@keyframes ia-needle  { from { transform: rotate(-135deg); } to { transform: rotate(38deg); } }
+@keyframes ia-flutter { 0%,100% { transform: rotate(38deg); } 30% { transform: rotate(40deg); } 65% { transform: rotate(36.5deg); } }
+@keyframes ia-stroke  { 0%,40%,100% { transform: translateY(0); } 55%,80% { transform: translateY(-3px); } }
+@keyframes ia-jitter  { 0%,100% { transform: rotate(0deg); } 30% { transform: rotate(1.8deg); } 65% { transform: rotate(-1.3deg); } }
+
 /* ─── Spec Extraction page (scoped): legacy violet / emerald styling mapped onto Ink & Signal ─── */
 .sdie .iz-tile { background: var(--ink) !important; color: var(--ink-fg) !important; border-radius: 10px !important; }
 .sdie .iz-tile svg { color: var(--ink-fg) !important; }

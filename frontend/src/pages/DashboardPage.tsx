@@ -1,4 +1,5 @@
 import { Link } from 'react-router-dom';
+import { LoopArt, Gauge } from '@/components/art/InstrumentArt';
 import { useEffect, useState } from 'react';
 import { ArrowRight, ArrowUpRight, Search, Database, CheckCircle2, FileSpreadsheet, Cable, GitBranch, Layers } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
@@ -83,16 +84,20 @@ export default function DashboardPage() {
             Instrumentation documents, engineered end to end - from one IODB to issued drawings.
           </p>
         </div>
+        <div className="flex flex-col items-start lg:items-end gap-6">
+          <div className="hidden lg:block w-[460px] -mb-2"><LoopArt tag="101" tone={{ line: 'var(--t2)', text: 'var(--t2)' }} /></div>
         <div className="flex flex-wrap gap-2.5">
           <Link to="/cable-schedule" className="btn btn-primary h-11 px-5 text-[14px]">Open Cable Schedule <ArrowRight className="w-4 h-4" /></Link>
           <button onClick={openPalette} className="btn btn-secondary h-11 px-4 text-[14px]"><Search className="w-4 h-4" />Search <kbd className="k ml-1">⌘K</kbd></button>
+        </div>
         </div>
       </section>
 
       {/* ── Figures ── */}
       <section className="reveal grid grid-cols-2 lg:grid-cols-4" style={{ borderTop: '1px solid var(--b2)', borderBottom: '1px solid var(--b1)' }}>
         {figures.map((f, i) => (
-          <div key={f.label} className="py-7 pr-6" style={{ paddingLeft: i % 4 === 0 ? 0 : 24, borderLeft: i % 4 === 0 ? 'none' : '1px solid var(--b1)' }}>
+          <div key={f.label} className="relative py-7 pr-6" style={{ paddingLeft: i % 4 === 0 ? 0 : 24, borderLeft: i % 4 === 0 ? 'none' : '1px solid var(--b1)' }}>
+            {f.label === 'Uptime' && <div className="absolute right-2 top-1/2 -translate-y-1/2"><Gauge value={f.val} size={78} label="Uptime %" /></div>}
             <p className="eyebrow">{f.label}</p>
             <p className="mt-3 font-semibold leading-none" style={{ fontFamily: 'var(--font-display)', fontSize: 46, letterSpacing: '-0.045em', color: 'var(--t0)' }}>
               <Counter to={f.val} suffix={f.suffix} />

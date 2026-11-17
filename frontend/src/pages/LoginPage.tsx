@@ -3,6 +3,7 @@ import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '@/context/AuthContext';
 import { LogIn, Eye, EyeOff } from 'lucide-react';
 import { Brand, BrandMark } from '@/components/layout/TopNav';
+import { LoopArt } from '@/components/art/InstrumentArt';
 
 export default function LoginPage() {
   const [username, setUsername] = useState('');
@@ -34,11 +35,8 @@ export default function LoginPage() {
           <h1 className="mt-6 font-semibold" style={{ fontFamily: 'var(--font-display)', fontSize: 'clamp(44px, 4.6vw, 68px)', lineHeight: 1.0, letterSpacing: '-0.045em' }}>
             From one IODB<br />to issued drawings<span style={{ color: '#ff6a2b' }}>.</span>
           </h1>
-          <div className="relative mt-12 h-px max-w-md" style={{ background: 'rgba(255,248,235,.25)' }}>
-            <span className="absolute -top-[3px] w-[7px] h-[7px] rounded-full" style={{ background: '#ff6a2b', boxShadow: '0 0 0 4px rgba(255,106,43,.18)', animation: 'travel 5s cubic-bezier(.45,0,.55,1) infinite' }} />
-          </div>
-          <div className="mt-4 flex justify-between max-w-md mono text-[10.5px]" style={{ color: '#a8a49b' }}>
-            <span>IODB</span><span>VALIDATE</span><span>LISTS</span><span>CABLES</span><span>LOOPS</span><span>ISSUE</span>
+          <div className="relative mt-12 max-w-[560px]">
+            <LoopArt tag="101" tone={{ line: 'rgba(246,245,242,.72)', text: '#8f8b83', accent: '#ff6a2b', faint: 'rgba(255,248,235,.18)', bg: '#171614' }} />
           </div>
         </div>
         <p className="relative mono text-[11px]" style={{ color: '#6f6b64' }}>VA TECH WABAG · BUILT BY AKASH BALAJI · V3.1</p>

@@ -4,7 +4,7 @@ import {
   Home, CheckCircle2, FileSpreadsheet, Network,
   FileText, Cable, GitBranch, Layers, ScanSearch,
   Sparkles, Droplets, ShieldCheck, ClipboardCheck, BarChart2,
-  Radio, FlaskConical, ClipboardList,
+  Radio, ClipboardList,
 } from 'lucide-react';
 import clsx from 'clsx';
 import api from '@/services/api';
@@ -41,7 +41,7 @@ const sections = [
       { path: '/datasheet',       icon: FileText,        label: 'Data Sheet' },
       { path: '/cable-schedule',  icon: Cable,           label: 'Cable Schedule' },
       { path: '/loop-wiring',     icon: GitBranch,       label: 'Loop Wiring' },
-      { path: '/loop-test',       icon: FlaskConical,    label: 'Loop Wiring (Test)' },
+      // Loop Wiring (Test) is hidden from the sidebar; the /loop-test route and component are kept.
       { path: '/cover-sheet',     icon: Layers,          label: 'Cover Sheet' },
       { path: '/process-data',    icon: ClipboardList,   label: 'Process Data Requisition' },
     ],

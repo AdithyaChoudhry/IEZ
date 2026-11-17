@@ -1,5 +1,5 @@
 /* ─────────────────────────────────────────────────────────────────────────────
-   Smart Datasheet Generator — 9-step engineering workflow
+   Smart Datasheet Generator — engineering workflow (steps 7-8, vendor match/select, are disconnected: VENDOR_STEPS_ENABLED)
    1. IODB Upload & Type   2. Tag Selection   3. Template & Sheet
    4. Spec Input (AI/Manual)   5. Review   6. Approval & Lock
    7. Vendor Match   8. Vendor Select   9. Generate
@@ -49,13 +49,20 @@ interface GenStatus { job_id: string; status: 'processing' | 'done' | 'error'; r
 type SpecSource = 'iodb' | 'ai' | 'user';
 
 // ── Outer Step Bar (9 steps) ───────────────────────────────────────────────────
-const STEPS = ['IODB & Type', 'Tags', 'Template', 'Spec Input', 'Review', 'Approval', 'Vendor Match', 'Vendor Select', 'Generate'];
+const ALL_STEPS = ['IODB & Type', 'Tags', 'Template', 'Spec Input', 'Review', 'Approval', 'Vendor Match', 'Vendor Select', 'Generate'];
+// Steps 7 (Vendor Match) and 8 (Vendor Select) are disconnected from the workflow. Their code below is kept intact:
+// set this to true to bring them back (the step bar, navigation and saved-session restore all follow it).
+const VENDOR_STEPS_ENABLED = false;
+const VENDOR_STEP_NOS = [7, 8];
+const STEPS = ALL_STEPS.map((label, i) => ({ label, no: i + 1 })).filter((x) => VENDOR_STEPS_ENABLED || !VENDOR_STEP_NOS.includes(x.no));
+const nextStep = (n: number) => (!VENDOR_STEPS_ENABLED && VENDOR_STEP_NOS.includes(n + 1) ? 9 : n + 1);
+const prevStep = (n: number) => (!VENDOR_STEPS_ENABLED && VENDOR_STEP_NOS.includes(n - 1) ? 6 : n - 1);
 
 function StepBar({ current }: { current: number }) {
   return (
     <div className="flex items-center gap-0 mb-8">
-      {STEPS.map((label, i) => {
-        const idx = i + 1; const done = idx < current; const active = idx === current;
+      {STEPS.map(({ label, no }, i) => {
+        const idx = i + 1; const done = no < current; const active = no === current;
         return (
           <div key={i} className="flex items-center flex-1 last:flex-none">
             <div className="flex flex-col items-center gap-1.5">
@@ -504,7 +511,7 @@ export default function DataSheetGenerator() {
       const saved = sessionStorage.getItem('datasheet_state');
       if (saved) {
         const s = JSON.parse(saved);
-        if (s.step) setStep(s.step);
+        if (s.step) setStep(!VENDOR_STEPS_ENABLED && VENDOR_STEP_NOS.includes(s.step) ? 9 : s.step);
         if (s.instrumentTypes) setInstrumentTypes(s.instrumentTypes);
         if (s.selectedType) setSelectedType(s.selectedType);
         if (s.tags) setTags(s.tags);
@@ -682,10 +689,12 @@ export default function DataSheetGenerator() {
     setApproval(info);
     setLocked(true);
     setShowApproval(false);
-    const scores = scoreVendors(specValues);
-    setVendorScores(scores);
-    if (scores.length > 0) setSelectedVS(scores[0]);
-    setStep(7);
+    if (VENDOR_STEPS_ENABLED) {
+      const scores = scoreVendors(specValues);
+      setVendorScores(scores);
+      if (scores.length > 0) setSelectedVS(scores[0]);
+    }
+    setStep(nextStep(6));
   };
 
   // ── Generate ──────────────────────────────────────────────────────────────────
@@ -749,7 +758,7 @@ export default function DataSheetGenerator() {
   return (
     <div className="p-6 max-w-5xl mx-auto space-y-6">
       <PageHeader icon={FileSpreadsheet} title="Smart Datasheet Generator"
-        description="IODB-assisted · AI spec extraction · Engineering approval workflow · SIMRE vendor matching" />
+        description="IODB-assisted · AI spec extraction · Engineering approval workflow" />
 
       <StepBar current={step} />
       {error && <Alert variant="error" onClose={clearError}>{error}</Alert>}
@@ -1215,8 +1224,8 @@ export default function DataSheetGenerator() {
 
           <div className="flex gap-3">
             <Button variant="secondary" onClick={() => setStep(5)}>← Back</Button>
-            <Button onClick={() => setStep(7)} className="flex-1">
-              SIMRE Vendor Matching <ChevronRight className="w-3.5 h-3.5" />
+            <Button onClick={() => setStep(nextStep(6))} className="flex-1">
+              {VENDOR_STEPS_ENABLED ? 'SIMRE Vendor Matching' : 'Continue to Generate'} <ChevronRight className="w-3.5 h-3.5" />
             </Button>
           </div>
         </div>
@@ -1438,7 +1447,7 @@ export default function DataSheetGenerator() {
           )}
 
           <div className="flex gap-3">
-            <Button variant="secondary" onClick={() => { setStep(8); setGenStatus(null); if (pollRef.current) clearInterval(pollRef.current); setBusy(false); }}>← Back</Button>
+            <Button variant="secondary" onClick={() => { setStep(prevStep(9)); setGenStatus(null); if (pollRef.current) clearInterval(pollRef.current); setBusy(false); }}>← Back</Button>
             {genStatus?.status === 'done' && (
               <Button variant="ghost" className="flex-1" onClick={() => {
                 sessionStorage.removeItem('datasheet_state');

@@ -7,18 +7,19 @@ import {
   ShoppingCart, ClipboardList,
 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
+import { useReveal } from '@/hooks/useReveal';
 
-/* ── Module definitions ───────────────────────────────────────────────────── */
+/* ── Module definitions (iOS system colours) ─────────────────────────────── */
 const modules = [
-  { id: 'validator',   path: '/validator',       icon: CheckCircle2,  name: 'IODB Validator',    desc: 'Validate instrument databases against predefined and custom engineering rules.', accent: '#4ade80', tag: 'Validation' },
-  { id: 'instrument',  path: '/instrument-list',  icon: FileSpreadsheet,name: 'Instrument List',  desc: 'Generate instrument lists from IODB data with smart column filters.',            accent: '#60a5fa', tag: 'Generator'  },
-  { id: 'io',          path: '/io-list',           icon: Network,       name: 'I/O List',          desc: 'Create structured I/O signal lists with per-column filtering and live preview.', accent: '#a78bfa', tag: 'Generator'  },
-  { id: 'datasheet',   path: '/datasheet',         icon: FileText,      name: 'Data Sheet',        desc: 'Generate technical datasheets per tag with intelligent column matching.',          accent: '#fb923c', tag: 'Generator'  },
-  { id: 'cover',       path: '/cover-sheet',       icon: Layers,        name: 'Cover Sheet',       desc: 'Build cover sheets with custom branding and WABAG revision control.',              accent: '#34d399', tag: 'Documents'  },
-  { id: 'cable',       path: '/cable-schedule',    icon: Cable,         name: 'Cable Schedule',    desc: 'Create cable schedules grouped by junction box from field instrument data.',       accent: '#f87171', tag: 'Generator'  },
-  { id: 'loop',        path: '/loop-wiring',       icon: GitBranch,     name: 'Loop Wiring',       desc: 'Generate loop wiring diagrams automatically from input files.',                   accent: '#fbbf24', tag: 'Generator'  },
-  { id: 'tbe',         path: '/tbe',               icon: ShoppingCart,  name: 'Vendor Analysis & TBE', desc: 'Compare vendor offers and generate technical bid evaluations.',              accent: '#22d3ee', tag: 'Procurement' },
-  { id: 'process-data', path: '/process-data',     icon: ClipboardList, name: 'Process Data Requisition', desc: 'Request process data from Process Engineering for selected instrument types.', accent: '#2dd4bf', tag: 'Generator' },
+  { id: 'validator',   path: '/validator',       icon: CheckCircle2,  name: 'IODB Validator',    desc: 'Validate instrument databases against predefined and custom engineering rules.', accent: '#34c759', tag: 'Validation' },
+  { id: 'instrument',  path: '/instrument-list',  icon: FileSpreadsheet,name: 'Instrument List',  desc: 'Generate instrument lists from IODB data with smart column filters.',            accent: '#0a84ff', tag: 'Generator'  },
+  { id: 'io',          path: '/io-list',           icon: Network,       name: 'I/O List',          desc: 'Create structured I/O signal lists with per-column filtering and live preview.', accent: '#af52de', tag: 'Generator'  },
+  { id: 'datasheet',   path: '/datasheet',         icon: FileText,      name: 'Data Sheet',        desc: 'Generate technical datasheets per tag with intelligent column matching.',          accent: '#ff9f0a', tag: 'Generator'  },
+  { id: 'cover',       path: '/cover-sheet',       icon: Layers,        name: 'Cover Sheet',       desc: 'Build cover sheets with custom branding and WABAG revision control.',              accent: '#00c7be', tag: 'Documents'  },
+  { id: 'cable',       path: '/cable-schedule',    icon: Cable,         name: 'Cable Schedule',    desc: 'Create cable schedules, gland and lug quantities from field instrument data.',     accent: '#ff453a', tag: 'Generator'  },
+  { id: 'loop',        path: '/loop-wiring',       icon: GitBranch,     name: 'Loop Wiring',       desc: 'Generate loop wiring drawings from the I/O Assignment using the 42 approved typicals.', accent: '#ffcc00', tag: 'Generator'  },
+  { id: 'tbe',         path: '/tbe',               icon: ShoppingCart,  name: 'Vendor Analysis & TBE', desc: 'Compare vendor offers and generate technical bid evaluations.',              accent: '#32ade6', tag: 'Procurement' },
+  { id: 'process-data', path: '/process-data',     icon: ClipboardList, name: 'Process Data Requisition', desc: 'Request process data from Process Engineering for selected instrument types.', accent: '#30b0c7', tag: 'Generator' },
 ];
 
 /* ── Animated counter ─────────────────────────────────────────────────────── */
@@ -62,48 +63,32 @@ function ModuleCard({ mod, delay }: { mod: typeof modules[0]; delay: number }) {
   const cardRef = useMouseGlow<HTMLDivElement>();
 
   return (
-    <Link to={mod.path} className="block group">
-      <div
-        ref={cardRef}
-        className="module-card h-full p-5 flex flex-col animate-rise"
-        style={{ animationDelay: `${delay}ms`, '--mx': '50%', '--my': '50%' } as React.CSSProperties}
-      >
-        {/* Mouse-following inner glow */}
+    <Link to={mod.path} className="block group reveal" style={{ '--d': `${delay}ms` } as React.CSSProperties}>
+      <div ref={cardRef} className="module-card h-full p-6 flex flex-col" style={{ '--mx': '50%', '--my': '50%', minHeight: 208 } as React.CSSProperties}>
+        {/* spotlight that follows the cursor */}
         <div
-          className="pointer-events-none absolute inset-0 rounded-2xl opacity-0 group-hover:opacity-100 transition-opacity duration-300"
-          style={{ background: 'radial-gradient(180px circle at var(--mx) var(--my), rgba(255,255,255,0.025) 0%, transparent 70%)' }}
+          className="pointer-events-none absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-500"
+          style={{ background: 'radial-gradient(260px circle at var(--mx) var(--my), color-mix(in srgb, var(--em) 9%, transparent) 0%, transparent 70%)' }}
         />
-
-        <div className="flex items-start justify-between mb-4">
+        <div className="relative flex items-start justify-between mb-5">
           <div
-            className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0"
-            style={{ background: `${mod.accent}18`, border: `1px solid ${mod.accent}30` }}
+            className="w-12 h-12 rounded-[14px] flex items-center justify-center flex-shrink-0 transition-transform duration-500 group-hover:scale-110 group-hover:-rotate-3"
+            style={{ background: `linear-gradient(160deg, ${mod.accent}, color-mix(in srgb, ${mod.accent} 72%, #000))`, boxShadow: `0 8px 20px -8px ${mod.accent}` }}
           >
-            <Icon style={{ color: mod.accent, width: '17px', height: '17px' }} />
+            <Icon className="text-white" style={{ width: 23, height: 23 }} />
           </div>
-          <span
-            className="text-[10px] font-semibold px-2 py-0.5 rounded-full tracking-wide"
-            style={{ background: `${mod.accent}14`, color: mod.accent, border: `1px solid ${mod.accent}28` }}
-          >
-            {mod.tag}
-          </span>
+          <span className="text-[11px] font-medium" style={{ color: 'var(--t2)' }}>{mod.tag}</span>
         </div>
 
-        <h3
-          className="text-sm font-bold mb-1.5 leading-snug"
-          style={{ color: 'var(--t0)', fontFamily: "'Space Grotesk', sans-serif" }}
-        >
+        <h3 className="relative text-[19px] font-semibold mb-1.5 leading-snug" style={{ color: 'var(--t0)', letterSpacing: '-0.025em' }}>
           {mod.name}
         </h3>
-        <p className="text-xs leading-relaxed flex-1" style={{ color: 'var(--t1)' }}>
+        <p className="relative text-[14px] leading-relaxed flex-1" style={{ color: 'var(--t1)' }}>
           {mod.desc}
         </p>
 
-        <div
-          className="flex items-center gap-1 text-xs font-semibold mt-4 transition-all duration-200 opacity-0 group-hover:opacity-100 translate-x-0 group-hover:translate-x-0.5"
-          style={{ color: mod.accent }}
-        >
-          Open <ArrowRight className="w-3 h-3" />
+        <div className="relative flex items-center gap-1 text-[14px] font-medium mt-4 transition-all duration-500 opacity-0 translate-y-1 group-hover:opacity-100 group-hover:translate-y-0" style={{ color: 'var(--em)' }}>
+          Open <ArrowRight className="w-3.5 h-3.5 transition-transform duration-500 group-hover:translate-x-1" />
         </div>
       </div>
     </Link>
@@ -113,121 +98,94 @@ function ModuleCard({ mod, delay }: { mod: typeof modules[0]; delay: number }) {
 /* ── Page ─────────────────────────────────────────────────────────────────── */
 export default function DashboardPage() {
   const { user } = useAuth();
+  const root = useReveal<HTMLDivElement>();
 
   const stats = [
-    { label: 'Modules',  val: modules.length, suffix: '',  icon: Gauge,    color: 'var(--em)' },
-    { label: 'AI Tools', val: 1,   suffix: '',  icon: Sparkles, color: 'var(--gold)' },
-    { label: 'Auto-Gen', val: 6,   suffix: '',  icon: Zap,      color: 'var(--sky)' },
-    { label: 'Uptime',   val: 100, suffix: '%', icon: BarChart3, color: '#4ade80' },
+    { label: 'Modules',  val: modules.length, suffix: '',  icon: Gauge },
+    { label: 'AI tools', val: 1,   suffix: '',  icon: Sparkles },
+    { label: 'Auto-generators', val: 6,   suffix: '',  icon: Zap },
+    { label: 'Uptime',   val: 100, suffix: '%', icon: BarChart3 },
   ];
 
   return (
-    <div className="space-y-8">
+    <div ref={root} className="space-y-14">
 
       {/* ── Hero ── */}
-      <div
-        className="relative overflow-hidden rounded-2xl animate-rise"
-        style={{ background: 'var(--s2)', border: '1px solid var(--b1)' }}
-      >
-        {/* Animated mesh blobs — blue + amber */}
-        <div className="absolute inset-0 overflow-hidden pointer-events-none">
-          <div className="mesh-blob-a absolute -top-24 -left-24 w-80 h-80 rounded-full blur-3xl" style={{ background: 'rgba(59,130,246,0.09)' }} />
-          <div className="mesh-blob-b absolute -bottom-16 right-0 w-72 h-72 rounded-full blur-3xl"  style={{ background: 'rgba(245,158,11,0.05)' }} />
-          <div className="mesh-blob-c absolute top-6 right-1/3 w-48 h-48 rounded-full blur-3xl"    style={{ background: 'rgba(59,130,246,0.05)' }} />
+      <section className="relative overflow-hidden" style={{ borderRadius: 32, background: 'var(--s2)', border: '1px solid var(--b1)', boxShadow: 'var(--shadow-2)' }}>
+        <div className="absolute inset-0 pointer-events-none overflow-hidden">
+          <div className="mesh-blob-a absolute -top-32 -left-24 w-[34rem] h-[34rem] rounded-full blur-3xl" style={{ background: 'var(--hero-a)' }} />
+          <div className="mesh-blob-b absolute -bottom-40 right-0 w-[30rem] h-[30rem] rounded-full blur-3xl" style={{ background: 'var(--hero-b)' }} />
         </div>
-        <div className="absolute inset-0 dot-grid opacity-25 pointer-events-none" />
+        <div className="relative px-12 pt-16 pb-12 reveal in">
+          <p className="text-[15px] font-semibold mb-4" style={{ color: 'var(--em)', letterSpacing: '-0.01em' }}>iEZ · Instrumentation Engineering EZ</p>
+          <h1 className="font-bold leading-[1.02]" style={{ fontFamily: 'var(--font-display)', color: 'var(--t0)', letterSpacing: '-0.045em', fontSize: 'clamp(40px, 6vw, 68px)' }}>
+            Welcome,<br /><span className="text-gradient">{user?.username || 'Engineer'}.</span>
+          </h1>
+          <p className="mt-5 max-w-xl" style={{ color: 'var(--t1)', fontSize: 21, lineHeight: 1.38, letterSpacing: '-0.015em' }}>
+            Intelligent document automation for instrumentation teams. Every module runs on live data from your IODB.
+          </p>
 
-        <div className="relative px-8 py-10 flex flex-col lg:flex-row lg:items-center gap-8">
-          {/* Greeting */}
-          <div className="flex-1">
-            <h1
-              className="text-4xl font-black leading-tight mb-3"
-              style={{ fontFamily: "'Space Grotesk', sans-serif", color: 'var(--t0)', letterSpacing: '-0.025em' }}
-            >
-              Welcome,{' '}
-              <span className="text-gradient">{user?.username || 'Engineer'}</span>
-            </h1>
-            <p className="text-sm max-w-md" style={{ color: 'var(--t1)', lineHeight: '1.7' }}>
-              Intelligent document automation for instrumentation teams.
-              Every module runs on live data from your IODB.
-            </p>
-          </div>
-
-          {/* Stat cards */}
-          <div className="grid grid-cols-2 gap-3 animate-rise animation-delay-200">
-            {stats.map(s => {
+          <div className="mt-12 grid grid-cols-2 md:grid-cols-4 gap-y-6">
+            {stats.map((s, i) => {
               const Icon = s.icon;
               return (
-                <div key={s.label} className="px-4 py-3 rounded-xl" style={{ background: 'var(--s1)', border: '1px solid var(--b1)' }}>
-                  <div className="flex items-center gap-1.5 mb-2">
-                    <Icon className="w-3 h-3" style={{ color: s.color }} />
-                    <span className="text-[10px] uppercase tracking-wider font-semibold" style={{ color: 'var(--t2)' }}>{s.label}</span>
-                  </div>
-                  <span className="text-2xl font-black" style={{ fontFamily: "'Space Grotesk', sans-serif", color: s.color }}>
+                <div key={s.label} className="pr-6" style={{ borderLeft: i === 0 ? 'none' : '1px solid var(--b1)', paddingLeft: i === 0 ? 0 : 24 }}>
+                  <div className="font-bold leading-none" style={{ fontFamily: 'var(--font-display)', color: 'var(--t0)', fontSize: 44, letterSpacing: '-0.04em' }}>
                     <Counter to={s.val} suffix={s.suffix} />
-                  </span>
+                  </div>
+                  <div className="flex items-center gap-1.5 mt-2.5 text-[13px]" style={{ color: 'var(--t1)' }}>
+                    <Icon className="w-3.5 h-3.5" style={{ color: 'var(--em)' }} />{s.label}
+                  </div>
                 </div>
               );
             })}
           </div>
         </div>
-      </div>
+      </section>
 
       {/* ── Featured: SDIE ── */}
-      <div>
-        <p className="text-[10px] font-semibold tracking-widest uppercase mb-3 flex items-center gap-1.5" style={{ color: 'var(--t2)' }}>
-          <Sparkles className="w-3 h-3" style={{ color: 'var(--gold)' }} />
-          Featured · AI-Powered Tool
-        </p>
-
+      <section className="reveal">
         <Link to="/smart-datasheet" className="block group">
           <div
-            className="relative rounded-2xl overflow-hidden transition-all duration-300 group-hover:-translate-y-1 group-hover:shadow-2xl"
-            style={{ background: 'linear-gradient(135deg, rgba(59,130,246,0.08) 0%, rgba(245,158,11,0.04) 60%, var(--s2) 100%)', border: '1px solid var(--b2)' }}
+            className="relative overflow-hidden transition-all duration-700 group-hover:-translate-y-1"
+            style={{ borderRadius: 32, background: 'var(--tile-bg)', boxShadow: 'var(--shadow-2)', transitionTimingFunction: 'var(--spring)' }}
           >
-            <div className="absolute top-0 left-0 w-64 h-32 rounded-full blur-3xl pointer-events-none" style={{ background: 'rgba(59,130,246,0.1)' }} />
-            <div className="relative flex flex-col sm:flex-row sm:items-center gap-5 p-6">
-              <div
-                className="w-14 h-14 rounded-2xl flex items-center justify-center flex-shrink-0"
-                style={{ background: 'linear-gradient(135deg, var(--em), #1d4ed8)', boxShadow: '0 8px 24px rgba(59,130,246,0.25)' }}
-              >
-                <ScanSearch className="w-7 h-7 text-white" />
-              </div>
+            <div className="absolute -top-24 -right-16 w-[26rem] h-[26rem] rounded-full blur-3xl pointer-events-none transition-opacity duration-700 group-hover:opacity-100" style={{ background: 'var(--hero-a)', opacity: .7 }} />
+            <div className="absolute -bottom-32 left-1/3 w-[22rem] h-[22rem] rounded-full blur-3xl pointer-events-none" style={{ background: 'var(--hero-b)' }} />
+            <div className="relative flex flex-col md:flex-row md:items-center gap-8 px-12 py-12">
               <div className="flex-1">
-                <div className="flex flex-wrap items-center gap-2 mb-1.5">
-                  <h3 className="text-lg font-bold" style={{ fontFamily: "'Space Grotesk', sans-serif", color: 'var(--t0)' }}>
-                    Smart Spec Extraction
-                  </h3>
-                  <span className="px-2 py-0.5 text-[9px] font-bold rounded-full tracking-wider" style={{ background: 'var(--gold-dim)', color: 'var(--gold)', border: '1px solid rgba(245,158,11,0.2)' }}>AI · GROQ</span>
-                  <span className="px-2 py-0.5 text-[9px] font-bold rounded-full tracking-wider" style={{ background: 'var(--em-dim)', color: 'var(--em-lt)', border: '1px solid rgba(16,185,129,0.2)' }}>SDIE</span>
-                </div>
-                <p className="text-sm max-w-2xl" style={{ color: 'var(--t1)', lineHeight: '1.65' }}>
-                  Upload tender PDFs — AI reads section headings, groups specs per instrument type, and generates pre-filled datasheets. Zero manual copying.
+                <p className="flex items-center gap-1.5 text-[13px] font-semibold mb-3" style={{ color: 'var(--gold-lt)' }}><Sparkles className="w-3.5 h-3.5" />AI-powered · Featured</p>
+                <h3 className="font-bold leading-[1.05]" style={{ fontFamily: 'var(--font-display)', color: 'var(--tile-fg)', fontSize: 40, letterSpacing: '-0.04em' }}>
+                  Smart Spec Extraction.
+                </h3>
+                <p className="mt-3 max-w-2xl" style={{ color: 'var(--tile-fg2)', fontSize: 18, lineHeight: 1.4, letterSpacing: '-0.012em' }}>
+                  Upload tender PDFs. AI reads the section headings, groups specs per instrument type, and pre-fills your datasheets. Zero manual copying.
                 </p>
+                <div className="mt-7 inline-flex items-center gap-2 px-6 py-3 rounded-full text-[15px] font-medium text-white transition-all duration-500 group-hover:gap-3"
+                  style={{ background: 'var(--em)', boxShadow: '0 10px 28px -8px var(--em-glow)' }}>
+                  Launch <ArrowUpRight className="w-4 h-4" />
+                </div>
               </div>
-              <div
-                className="flex items-center gap-2 px-5 py-2.5 rounded-xl font-bold text-sm flex-shrink-0 text-white transition-all duration-200"
-                style={{ background: 'linear-gradient(135deg, var(--em), #1d4ed8)', boxShadow: '0 4px 14px rgba(59,130,246,0.25)' }}
-              >
-                Launch <ArrowUpRight className="w-4 h-4" />
+              <div className="hidden md:flex w-40 h-40 rounded-[40px] items-center justify-center flex-shrink-0 transition-transform duration-700 group-hover:scale-105 group-hover:-rotate-3"
+                style={{ background: 'linear-gradient(160deg, var(--em-lt), var(--em))', boxShadow: '0 30px 60px -20px var(--em-glow)', transitionTimingFunction: 'var(--spring)' }}>
+                <ScanSearch className="text-white" style={{ width: 76, height: 76 }} strokeWidth={1.5} />
               </div>
             </div>
           </div>
         </Link>
-      </div>
+      </section>
 
       {/* ── Module Grid ── */}
-      <div>
-        <p className="text-[10px] font-semibold tracking-widest uppercase mb-4 flex items-center gap-1.5" style={{ color: 'var(--t2)' }}>
-          <BarChart3 className="w-3 h-3" />
-          Engineering Modules
-        </p>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
-          {modules.map((mod, i) => <ModuleCard key={mod.id} mod={mod} delay={i * 50 + 100} />)}
+      <section>
+        <h2 className="reveal font-bold mb-6" style={{ fontFamily: 'var(--font-display)', color: 'var(--t0)', fontSize: 32, letterSpacing: '-0.035em' }}>
+          Engineering modules.
+        </h2>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+          {modules.map((mod, i) => <ModuleCard key={mod.id} mod={mod} delay={(i % 3) * 90} />)}
         </div>
-      </div>
+      </section>
 
-      <p className="text-center text-[11px] pb-4" style={{ color: 'var(--t2)' }}>
+      <p className="text-center text-[12px] pb-4" style={{ color: 'var(--t2)' }}>
         iEZ Platform · Developed for VA TECH WABAG · Built by Akash Balaji · v3.1
       </p>
     </div>

@@ -379,8 +379,8 @@ export default function Header({ onToggleSidebar }: HeaderProps) {
   return (
     <>
       <header
-        className="sticky top-0 z-50 flex items-center justify-between px-5 h-[56px]"
-        style={{ background: 'var(--s1)', borderBottom: '1px solid var(--b1)' }}
+        className="sticky top-0 z-50 flex items-center justify-between px-5 h-[56px] bar-glass"
+        style={{ borderBottom: '1px solid var(--b1)' }}
       >
         {/* Left */}
         <div className="flex items-center gap-3">
@@ -396,16 +396,16 @@ export default function Header({ onToggleSidebar }: HeaderProps) {
 
           <div className="flex items-center gap-2.5 select-none">
             <div
-              className="w-8 h-8 rounded-lg flex items-center justify-center"
-              style={{ background: 'linear-gradient(135deg, var(--em), #1d4ed8)', boxShadow: '0 0 12px var(--em-glow)' }}
+              className="w-8 h-8 rounded-[10px] flex items-center justify-center"
+              style={{ background: 'linear-gradient(160deg, var(--em-lt), var(--em))', boxShadow: '0 4px 12px -2px var(--em-glow)' }}
             >
               <Droplets className="w-4 h-4 text-white" />
             </div>
             <div>
               <div className="flex items-center gap-2">
                 <span
-                  className="text-base font-bold leading-none"
-                  style={{ fontFamily: "'Space Grotesk', sans-serif", color: 'var(--t0)', letterSpacing: '-0.02em' }}
+                  className="text-[17px] font-bold leading-none"
+                  style={{ fontFamily: 'var(--font-display)', color: 'var(--t0)', letterSpacing: '-0.03em' }}
                 >
                   i<span className="text-gradient">EZ</span>
                 </span>
@@ -418,8 +418,8 @@ export default function Header({ onToggleSidebar }: HeaderProps) {
         </div>
 
         {/* Centre */}
-        <div className="hidden md:flex items-center gap-1.5 px-3 py-1 rounded-full" style={{ background: 'var(--s2)', border: '1px solid var(--b1)' }}>
-          <span className="ping-dot w-1.5 h-1.5 rounded-full bg-blue-400" />
+        <div className="hidden md:flex items-center gap-2 px-3.5 py-1.5 rounded-full" style={{ background: 'var(--s3)' }}>
+          <span className="ping-dot w-1.5 h-1.5 rounded-full" style={{ background: 'var(--ok)' }} />
           <span className="text-[11px] font-medium" style={{ color: 'var(--t1)' }}>Systems operational</span>
         </div>
 

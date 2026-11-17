@@ -12,9 +12,9 @@ interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
 }
 
 const sizes: Record<Size, string> = {
-  sm: 'px-3 py-1.5 text-xs gap-1.5',
-  md: 'px-4 py-2   text-sm gap-2',
-  lg: 'px-5 py-2.5 text-sm gap-2',
+  sm: 'px-3.5 py-1.5 text-xs gap-1.5',
+  md: 'px-5 py-2   text-sm gap-2',
+  lg: 'px-6 py-3 text-[15px] gap-2',
 };
 
 const variantClass: Record<Variant, string> = {
@@ -27,7 +27,7 @@ const variantClass: Record<Variant, string> = {
 const variantStyle: Record<Variant, React.CSSProperties> = {
   primary:   {},
   secondary: {},
-  danger:    { background: 'rgba(248,113,113,0.1)', color: 'var(--rose)', border: '1px solid rgba(248,113,113,0.2)' },
+  danger:    { background: 'color-mix(in srgb, var(--bad) 11%, transparent)', color: 'var(--bad)', border: '1px solid transparent' },
   ghost:     { background: 'transparent', color: 'var(--t1)', border: '1px solid transparent' },
 };
 

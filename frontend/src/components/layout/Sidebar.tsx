@@ -85,19 +85,20 @@ export default function Sidebar({ isOpen }: SidebarProps) {
 
   return (
     <aside
-      className={clsx(
-        'fixed left-0 z-40 flex flex-col overflow-hidden transition-all duration-300',
-        isOpen ? 'w-56' : 'w-0 -translate-x-full'
-      )}
+      className={clsx('fixed left-0 z-40 flex flex-col overflow-hidden bar-glass')}
       style={{
         top: '56px',
+        width: 244,
         height: 'calc(100vh - 56px)',
-        background: 'var(--s0)',
-        borderRight: '1px solid var(--b0)',
+        borderRight: '1px solid var(--b1)',
+        transform: isOpen ? 'none' : 'translateX(-100%)',
+        opacity: isOpen ? 1 : 0,
+        pointerEvents: isOpen ? 'auto' : 'none',
+        transition: 'transform .55s var(--spring), opacity .35s var(--ease)',
       }}
     >
-      <div className="flex-1 overflow-y-auto py-3 px-2">
-        {sections.map((section, si) => {
+      <div className="flex-1 overflow-y-auto py-4 px-3">
+        {sections.map((section) => {
           const visibleItems = (section.items as SidebarItem[]).filter(
             item => !item.allowedRoles || item.allowedRoles.includes(role)
           );
@@ -105,14 +106,13 @@ export default function Sidebar({ isOpen }: SidebarProps) {
           return (
           <div
             key={section.label}
-            className={clsx('mb-4', si > 0 && 'border-t pt-3')}
-            style={si > 0 ? { borderColor: 'var(--b0)' } : {}}
+            className="mb-5"
           >
-            <div className="flex items-center gap-1.5 px-2 mb-1.5">
-              {section.ai && <Sparkles className="w-2.5 h-2.5" style={{ color: 'var(--gold)' }} />}
+            <div className="flex items-center gap-1.5 px-3 mb-1.5">
+              {section.ai && <Sparkles className="w-3 h-3" style={{ color: 'var(--gold)' }} />}
               <span
-                className="text-[10px] font-semibold uppercase tracking-widest"
-                style={{ color: section.ai ? 'var(--gold)' : 'var(--t2)' }}
+                className="text-[11px] font-semibold"
+                style={{ color: section.ai ? 'var(--gold)' : 'var(--t2)', letterSpacing: '0.01em' }}
               >
                 {section.label}
               </span>
@@ -129,44 +129,38 @@ export default function Sidebar({ isOpen }: SidebarProps) {
                 return (
                   <NavLink key={item.path} to={item.path} end={item.exact ?? false}>
                     <div
-                      className="flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-xs font-medium transition-all duration-150 relative"
+                      className="flex items-center gap-3 px-3 py-[9px] rounded-[10px] text-[13px] font-medium relative"
                       style={{
-                        background: isActive ? 'var(--em-dim)' : 'transparent',
-                        color: isActive ? 'var(--em-lt)' : 'var(--t1)',
+                        background: isActive ? 'var(--em)' : 'transparent',
+                        color: isActive ? '#fff' : 'var(--t0)',
+                        transition: 'background .25s var(--ease), color .25s var(--ease), transform .35s var(--spring)',
+                        boxShadow: isActive ? '0 6px 16px -8px var(--em-glow)' : 'none',
                       }}
                       onMouseEnter={e => {
                         if (!isActive) {
-                          e.currentTarget.style.background = 'var(--s2)';
-                          e.currentTarget.style.color = 'var(--t0)';
+                          e.currentTarget.style.background = 'var(--s3)';
+                          e.currentTarget.style.transform = 'translateX(2px)';
                         }
                       }}
                       onMouseLeave={e => {
                         if (!isActive) {
                           e.currentTarget.style.background = 'transparent';
-                          e.currentTarget.style.color = 'var(--t1)';
+                          e.currentTarget.style.transform = 'none';
                         }
                       }}
                     >
-                      {isActive && (
-                        <span
-                          className="absolute left-0 top-1/2 -translate-y-1/2 w-0.5 h-4 rounded-r-full"
-                          style={{ background: 'var(--em)' }}
-                        />
-                      )}
                       <Icon
-                        className="w-3.5 h-3.5 flex-shrink-0"
-                        style={{ color: isActive ? 'var(--em)' : 'inherit', opacity: isActive ? 1 : 0.65 }}
+                        className="w-[17px] h-[17px] flex-shrink-0"
+                        style={{ color: isActive ? '#fff' : 'var(--em)', opacity: isActive ? 1 : 0.9 }}
                       />
                       <span>{item.label}</span>
                       {showBadge && (
                         <span className="ml-auto text-[9px] font-black px-1.5 py-0.5 rounded-full min-w-[18px] text-center"
-                          style={{ background: 'rgba(245,158,11,0.15)', color: 'var(--gold)', border: '1px solid rgba(245,158,11,0.3)' }}>
+                          style={{ background: 'var(--gold)', color: '#fff' }}>
                           {pendingCount > 99 ? '99+' : pendingCount}
                         </span>
                       )}
-                      {!showBadge && isActive && (
-                        <span className="ml-auto w-1 h-1 rounded-full" style={{ background: 'var(--em)' }} />
-                      )}
+
                     </div>
                   </NavLink>
                 );
@@ -177,12 +171,12 @@ export default function Sidebar({ isOpen }: SidebarProps) {
         })}
       </div>
 
-      <div className="p-2 flex-shrink-0" style={{ borderTop: '1px solid var(--b0)' }}>
-        <div className="flex items-center gap-2 px-2.5 py-2 rounded-lg" style={{ background: 'var(--s1)' }}>
-          <Droplets className="w-3.5 h-3.5 flex-shrink-0" style={{ color: 'var(--em-lt)' }} />
+      <div className="p-3 flex-shrink-0" style={{ borderTop: '1px solid var(--b1)' }}>
+        <div className="flex items-center gap-2.5 px-3 py-2.5 rounded-[12px]" style={{ background: 'var(--s3)' }}>
+          <Droplets className="w-4 h-4 flex-shrink-0" style={{ color: 'var(--em)' }} />
           <div>
-            <p className="text-[10px] font-semibold" style={{ color: 'var(--t1)' }}>iEZ v3.1 <span style={{ color: 'var(--gold)', fontSize: 9 }}>Under Development</span></p>
-            <p className="text-[9px]" style={{ color: 'var(--t2)' }}>Built by Akash Balaji</p>
+            <p className="text-[11px] font-semibold" style={{ color: 'var(--t0)' }}>iEZ v3.1 <span style={{ color: 'var(--gold)', fontSize: 10, fontWeight: 500 }}>Under Development</span></p>
+            <p className="text-[10px]" style={{ color: 'var(--t2)' }}>Built by Akash Balaji</p>
           </div>
         </div>
       </div>

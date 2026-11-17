@@ -10,8 +10,9 @@ interface Tone { line?: string; text?: string; accent?: string; faint?: string; 
 const DEF: Required<Tone> = { line: 'var(--t1)', text: 'var(--t2)', accent: 'var(--em)', faint: 'var(--b2)', bg: 'var(--s0)' };
 
 /* ── Pressure control loop: PI gauge, PT transmitter → PIC controller → control valve ───────────────────── */
-export function LoopArt({ tone = {}, className = '', style, tag = '101' }: { tone?: Tone; className?: string; style?: React.CSSProperties; tag?: string }) {
+export function LoopArt({ tone = {}, className = '', style, tag = '101', controller = 'pic' }: { tone?: Tone; className?: string; style?: React.CSSProperties; tag?: string; controller?: 'pic' | 'plc' }) {
   const t = { ...DEF, ...tone };
+  if (controller === 'plc') return <PlcLoopArt t={t} className={className} style={style} tag={tag} />;
   const anim = !reducedMotion();
   const id = useId().replace(/:/g, '');
   const sig = `M170 112 V62 H430 V176`;            // PT → PIC → valve actuator (passes through the controller)
@@ -77,6 +78,123 @@ export function LoopArt({ tone = {}, className = '', style, tag = '101' }: { ton
           </circle>
         </>
       )}
+    </svg>
+  );
+}
+
+/* ── PLC loop: PIT → PLC (AI) → scan → PLC (AO) → PCV → ZT position feedback → PLC, one synced 6 s cycle ── */
+function PlcLoopArt({ t, className, style, tag }: { t: Required<Tone>; className: string; style?: React.CSSProperties; tag: string }) {
+  const anim = !reducedMotion();
+  const id = useId().replace(/:/g, '');
+  const draw = (d: number): React.CSSProperties => ({ ['--d' as any]: `${d}ms` });
+  const T = '6s', B = '1.8s';
+  // signal routes (ISA dashed electrical): transmitter → PLC AI, PLC AO → actuator, ZT → PLC DI/AI
+  const pIn = 'M170 112 V70 H252', pOut = 'M368 70 H430 V158', pFb = 'M520 134 V44 H368';
+  // one packet per leg; each travels only during its slice of the cycle
+  const legs: { d: string; k: string; kt: string; o: string; ot: string }[] = [
+    { d: pIn,  k: '0;1;1',   kt: '0;.26;1',      o: '0;1;1;0;0',   ot: '0;.03;.25;.27;1' },
+    { d: pOut, k: '0;0;1;1', kt: '0;.44;.70;1',  o: '0;0;1;1;0;0', ot: '0;.43;.45;.69;.71;1' },
+    { d: pFb,  k: '0;0;1;1', kt: '0;.74;.97;1',  o: '0;0;1;1;0;0', ot: '0;.73;.75;.96;.98;1' },
+  ];
+  const slots = ['CPU', 'AI', 'AO', 'DI'];
+  return (
+    <svg viewBox="0 0 640 290" className={`ia ${anim ? 'ia-anim' : ''} ${className}`} style={style} role="img"
+      aria-label={`Pressure control loop ${tag}: transmitter PIT ${tag} to PLC, PLC output to control valve PCV ${tag}, valve position feedback to PLC`}>
+      {/* process line + flow */}
+      <path className="ia-draw" style={draw(0)} pathLength={1} d="M14 232 H626" stroke={t.line} strokeWidth="2.4" fill="none" />
+      {anim && <path d="M14 232 H626" stroke={t.accent} strokeWidth="2.4" strokeDasharray="3 22" fill="none" opacity=".55" className="ia-flow" />}
+      <path className="ia-draw" style={draw(150)} pathLength={1} d="M40 224 L52 232 L40 240 M600 224 L612 232 L600 240" stroke={t.line} strokeWidth="1.6" fill="none" />
+      <text x="16" y="262" className="ia-t" fill={t.text}>RAW WATER</text>
+      <text x="626" y="262" className="ia-t" textAnchor="end" fill={t.text}>TO FILTRATION</text>
+
+      {/* PI · local dial gauge */}
+      <path className="ia-draw" style={draw(250)} pathLength={1} d="M92 232 V190" stroke={t.line} strokeWidth="1.4" fill="none" />
+      <circle className="ia-draw" style={draw(350)} pathLength={1} cx="92" cy="156" r="32" stroke={t.line} strokeWidth="1.6" fill="none" />
+      {Array.from({ length: 11 }, (_, i) => {
+        const a = (-135 + i * 27) * Math.PI / 180;
+        const r1 = i % 5 === 0 ? 22 : 25, r2 = 28;
+        return <line key={i} x1={92 + r1 * Math.sin(a)} y1={156 - r1 * Math.cos(a)} x2={92 + r2 * Math.sin(a)} y2={156 - r2 * Math.cos(a)} stroke={t.line} strokeWidth={i % 5 === 0 ? 1.4 : 0.9} className="ia-fade" style={draw(600)} />;
+      })}
+      <g className={anim ? 'ia-needle' : ''} style={{ transformOrigin: '92px 156px', transform: anim ? undefined : 'rotate(38deg)' }}>
+        <line x1="92" y1="156" x2="92" y2="133" stroke={t.accent} strokeWidth="2" strokeLinecap="round" />
+      </g>
+      <circle cx="92" cy="156" r="3" fill={t.accent} />
+      <text x="92" y="108" className="ia-t" textAnchor="middle" fill={t.text}>PI {tag}</text>
+
+      {/* PIT · pressure indicating transmitter */}
+      <path className="ia-draw" style={draw(450)} pathLength={1} d="M170 232 V156" stroke={t.line} strokeWidth="1.4" fill="none" />
+      <circle className="ia-draw" style={draw(550)} pathLength={1} cx="170" cy="134" r="22" stroke={t.line} strokeWidth="1.6" fill="none" />
+      <text x="170" y="131" className="ia-b" textAnchor="middle" fill={t.line}>PIT</text>
+      <text x="170" y="145" className="ia-s" textAnchor="middle" fill={t.text}>{tag}</text>
+
+      {/* PLC · control room rack: CPU + AI / AO / DI cards */}
+      <text x="310" y="22" className="ia-t" textAnchor="middle" fill={t.text}>CONTROL ROOM · PLC-01</text>
+      <rect className="ia-draw" style={draw(700)} pathLength={1} x="252" y="32" width="116" height="66" rx="5" stroke={t.line} strokeWidth="1.6" fill={t.bg} />
+      {anim && (
+        <rect x="252" y="32" width="116" height="66" rx="5" fill="none" stroke={t.accent} strokeWidth="1.6" opacity="0">
+          <animate attributeName="opacity" values="0;0;.9;.9;0;0" keyTimes="0;.25;.28;.40;.44;1" dur={T} begin={B} repeatCount="indefinite" />
+        </rect>
+      )}
+      {slots.map((s, i) => {
+        const x = 260 + i * 26;
+        // the LED that matters lights in its slice: AI on arrival, CPU while solving, AO on output, DI on feedback
+        const ledKT: Record<string, [string, string]> = {
+          CPU: ['.2;.2;1;.2;1;.2;.2', '0;.26;.29;.32;.36;.42;1'],
+          AI:  ['.2;.2;1;.2;.2', '0;.24;.27;.36;1'],
+          AO:  ['.2;.2;1;.2;.2', '0;.42;.45;.58;1'],
+          DI:  ['.2;.2;1;.2;.2', '0;.95;.98;.995;1'],
+        };
+        return (
+          <g key={s} className="ia-fade" style={draw(900 + i * 80)}>
+            <rect x={x} y="42" width="20" height="48" rx="2" fill="none" stroke={t.faint} strokeWidth="1.1" />
+            <circle cx={x + 10} cy="52" r="2.6" fill={t.accent} opacity={anim ? undefined : 0.9}>
+              {anim && <animate attributeName="opacity" values={ledKT[s][0]} keyTimes={ledKT[s][1]} dur={T} begin={B} repeatCount="indefinite" />}
+            </circle>
+            {[62, 68, 74].map((y) => <line key={y} x1={x + 5} x2={x + 15} y1={y} y2={y} stroke={t.faint} strokeWidth="1" />)}
+            <text x={x + 10} y="86" className="ia-s" textAnchor="middle" fill={t.text} style={{ fontSize: 7 }}>{s}</text>
+          </g>
+        );
+      })}
+
+      {/* signal lines (dashed, ISA electrical) with I/O labels */}
+      <path d={pIn} stroke={t.line} strokeWidth="1.2" strokeDasharray="6 5" fill="none" className="ia-fade" style={draw(1000)} />
+      <path d={pOut} stroke={t.line} strokeWidth="1.2" strokeDasharray="6 5" fill="none" className="ia-fade" style={draw(1100)} />
+      <path d={pFb} stroke={t.line} strokeWidth="1.2" strokeDasharray="6 5" fill="none" className="ia-fade" style={draw(1200)} />
+      <text x="178" y="64" className="ia-s" fill={t.text}>AI · 4-20 mA</text>
+      <text x="438" y="100" className="ia-s" fill={t.text}>AO</text>
+      <text x="438" y="111" className="ia-s" fill={t.text}>4-20 mA</text>
+      <text x="528" y="80" className="ia-s" fill={t.text}>POS FB</text>
+
+      {/* control valve with diaphragm actuator; strokes when the AO packet lands */}
+      <g>
+        {anim && <animateTransform attributeName="transform" type="translate" values="0 0;0 0;0 -3;0 -3;0 0" keyTimes="0;.68;.73;.95;1" dur={T} begin={B} repeatCount="indefinite" />}
+        <path className="ia-draw" style={draw(800)} pathLength={1} d="M412 176 A18 18 0 0 1 448 176 Z" stroke={t.line} strokeWidth="1.6" fill="none" />
+        <path className="ia-draw" style={draw(850)} pathLength={1} d="M430 176 V232" stroke={t.line} strokeWidth="1.6" fill="none" />
+        {/* ZT linkage on the stem */}
+        <path d="M430 200 H520 V166" stroke={t.line} strokeWidth="1.1" fill="none" className="ia-fade" style={draw(1000)} />
+      </g>
+      <path className="ia-draw" style={draw(650)} pathLength={1} d="M408 218 V246 L430 232 Z M452 218 V246 L430 232 Z" stroke={t.line} strokeWidth="1.6" fill={t.bg} />
+      <text x="378" y="196" className="ia-t" textAnchor="end" fill={t.text}>PCV {tag}</text>
+
+      {/* ZT · valve position transmitter */}
+      <circle className="ia-draw" style={draw(900)} pathLength={1} cx="520" cy="150" r="16" stroke={t.line} strokeWidth="1.5" fill={t.bg} />
+      <text x="520" y="148" className="ia-b" textAnchor="middle" fill={t.line} style={{ fontSize: 9.5 }}>ZT</text>
+      <text x="520" y="159" className="ia-s" textAnchor="middle" fill={t.text} style={{ fontSize: 7 }}>{tag}</text>
+
+      {/* live packets: measurement in, output out, feedback back */}
+      {anim && legs.map((l, i) => (
+        <g key={i}>
+          <path id={`plc${id}${i}`} d={l.d} fill="none" stroke="none" />
+          <circle r="9" fill={t.accent} opacity="0">
+            <animateMotion dur={T} begin={B} repeatCount="indefinite" keyPoints={l.k} keyTimes={l.kt} calcMode="linear"><mpath href={`#plc${id}${i}`} /></animateMotion>
+            <animate attributeName="opacity" values={l.o.replace(/1/g, '.16')} keyTimes={l.ot} dur={T} begin={B} repeatCount="indefinite" />
+          </circle>
+          <circle r="4.2" fill={t.accent} opacity="0">
+            <animateMotion dur={T} begin={B} repeatCount="indefinite" keyPoints={l.k} keyTimes={l.kt} calcMode="linear"><mpath href={`#plc${id}${i}`} /></animateMotion>
+            <animate attributeName="opacity" values={l.o} keyTimes={l.ot} dur={T} begin={B} repeatCount="indefinite" />
+          </circle>
+        </g>
+      ))}
     </svg>
   );
 }

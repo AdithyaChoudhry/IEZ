@@ -107,7 +107,7 @@ export default function DashboardPage() {
           </p>
         </div>
         <div className="hidden lg:flex justify-center items-center fade-up" style={{ animationDelay: '220ms' }}>
-          <div className="w-full max-w-[640px]"><LoopArt tag="101" tone={{ line: 'var(--t1)', text: 'var(--t2)' }} /></div>
+          <div className="w-full max-w-[640px]"><LoopArt tag="101" controller="plc" tone={{ line: 'var(--t1)', text: 'var(--t2)' }} /></div>
         </div>
       </section>
 

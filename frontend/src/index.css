@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Inter+Tight:wght@500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Inter+Tight:wght@500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Great+Vibes&display=swap');
 
 @tailwind base;
 @tailwind components;
@@ -392,4 +392,55 @@ main .border-teal-200   { border-color:color-mix(in srgb, var(--em) 28%, transpa
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration:.01ms !important; animation-iteration-count:1 !important; transition-duration:.01ms !important; scroll-behavior:auto !important; }
   .reveal { opacity:1; transform:none; }
+}
+
+/* ─── Brand intro (click the iEZ mark): ~3 s, then .bs-out ─── */
+.brand-btn { border-radius: 10px; transition: transform .35s var(--spring); }
+.brand-btn:hover { transform: rotate(-6deg) scale(1.06); }
+.brand-btn:active { transform: scale(.92); }
+.brand-btn:focus-visible { outline: 2px solid var(--em); outline-offset: 3px; }
+.bs { position: fixed; inset: 0; z-index: 9999; display: grid; place-items: center; overflow: hidden; cursor: pointer;
+  background: radial-gradient(120% 90% at 50% 45%, #1c1a17 0%, #0d0c0b 70%); color: #f6f5f2;
+  animation: bs-in .35s var(--out) backwards, bs-out .45s var(--ease) 2.65s forwards; }
+.bs-grid { position: absolute; inset: -2px; opacity: 0;
+  background-image: linear-gradient(rgba(255,248,235,.06) 1px, transparent 1px), linear-gradient(90deg, rgba(255,248,235,.06) 1px, transparent 1px);
+  background-size: 48px 48px; -webkit-mask-image: radial-gradient(60% 55% at 50% 48%, #000 0%, transparent 75%); mask-image: radial-gradient(60% 55% at 50% 48%, #000 0%, transparent 75%);
+  animation: bs-grid 2.4s var(--out) .1s forwards; }
+.bs-glow { position: absolute; width: 640px; height: 640px; border-radius: 50%; background: radial-gradient(circle, rgba(255,106,43,.22) 0%, transparent 62%);
+  opacity: 0; animation: bs-glow 2.2s var(--out) .55s forwards; }
+.bs-stage { position: relative; display: flex; flex-direction: column; align-items: center; text-align: center; padding: 0 16px; }
+.bs-markwrap { position: relative; width: 96px; height: 96px; display: grid; place-items: center; }
+.bs-mark { animation: bs-mark .9s var(--spring) .12s backwards; filter: drop-shadow(0 18px 40px rgba(255,106,43,.25)); }
+.bs-ring { position: absolute; left: 50%; top: 22px; width: 18px; height: 18px; margin-left: -9px; border-radius: 50%; border: 1.5px solid #ff6a2b; opacity: 0;
+  animation: bs-ring 1.5s var(--out) forwards; }
+.bs-spark { position: absolute; left: 50%; top: 50%; width: 4px; height: 4px; margin: -2px; border-radius: 50%; background: #ff6a2b; opacity: 0;
+  transform: rotate(var(--a)) translateX(0); animation: bs-spark 1.2s var(--out) forwards; }
+.bs-word { margin-top: 26px; font: 700 clamp(56px, 9vw, 104px)/1 var(--font-display); letter-spacing: -.05em; display: flex; }
+.bs-word span { display: inline-block; animation: bs-rise .8s var(--spring) backwards; }
+.bs-word .bs-dot { color: #ff6a2b; animation: bs-drop .7s cubic-bezier(.34,1.56,.64,1) backwards; }
+.bs-sigwrap { position: relative; margin-top: 10px; padding: 0 6px 14px; }
+.bs-sig { display: block; font: 400 clamp(40px, 6.4vw, 76px)/1.25 'Great Vibes', 'Snell Roundhand', 'Apple Chancery', cursive; color: #f6f5f2; white-space: nowrap;
+  clip-path: inset(-20% 100% -20% 0); animation: bs-write 1.25s cubic-bezier(.45,.05,.4,1) 1.05s forwards; }
+.bs-nib { position: absolute; top: 18%; left: 0; width: 7px; height: 7px; border-radius: 50%; background: #ff6a2b; box-shadow: 0 0 14px 4px rgba(255,106,43,.55); opacity: 0;
+  animation: bs-nib 1.25s cubic-bezier(.45,.05,.4,1) 1.05s forwards; }
+.bs-flourish { position: absolute; left: 4%; right: 4%; bottom: 0; width: 92%; height: 26px; overflow: visible; }
+.bs-flourish path { fill: none; stroke: #ff6a2b; stroke-width: 2; stroke-linecap: round; stroke-dasharray: 1; stroke-dashoffset: 1; animation: ia-draw .7s var(--out) 2.05s forwards; }
+.bs-cap { margin-top: 26px; display: flex; align-items: center; gap: 14px; font: 500 11px/1 var(--font-mono); letter-spacing: .22em; color: rgba(246,245,242,.6);
+  animation: fade .6s var(--ease) 1.7s backwards; }
+.bs-cap svg { width: 96px; height: 14px; }
+.bs-cap path { fill: none; stroke: #ff6a2b; stroke-width: 1.4; stroke-dasharray: 1; stroke-dashoffset: 1; animation: ia-draw 1s var(--out) 1.85s forwards; }
+@keyframes bs-in    { from { opacity: 0; } }
+@keyframes bs-out   { to { opacity: 0; transform: scale(1.04); filter: blur(6px); } }
+@keyframes bs-grid  { from { opacity: 0; transform: scale(1.08); } to { opacity: 1; transform: none; } }
+@keyframes bs-glow  { 0% { opacity: 0; transform: scale(.4); } 60% { opacity: 1; } 100% { opacity: .7; transform: scale(1); } }
+@keyframes bs-mark  { from { opacity: 0; transform: scale(.4) rotate(-14deg); } }
+@keyframes bs-ring  { 0% { opacity: .9; transform: scale(.4); } 100% { opacity: 0; transform: scale(9); } }
+@keyframes bs-spark { 0% { opacity: 0; transform: rotate(var(--a)) translateX(10px) scale(1.4); } 20% { opacity: 1; } 100% { opacity: 0; transform: rotate(var(--a)) translateX(var(--r)) scale(.4); } }
+@keyframes bs-rise  { from { opacity: 0; transform: translateY(60%) rotate(4deg); filter: blur(6px); } }
+@keyframes bs-drop  { from { opacity: 0; transform: translateY(-140%); } }
+@keyframes bs-write { to { clip-path: inset(-20% -2% -20% 0); } }
+@keyframes bs-nib   { 0% { opacity: 0; left: 0; } 8% { opacity: 1; } 90% { opacity: 1; } 100% { opacity: 0; left: 100%; top: 52%; } }
+@media (prefers-reduced-motion: reduce) {
+  .bs *, .bs *::before { animation-duration: .01ms !important; animation-delay: 0s !important; }
+  .bs-sig { clip-path: none; }
 }

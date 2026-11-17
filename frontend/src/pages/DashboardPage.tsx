@@ -87,7 +87,6 @@ export default function DashboardPage() {
 
   const figures: { label: string; val: number; suffix?: string; note: string }[] = [
     { label: 'Modules', val: MODULES.length, note: 'in one workspace' },
-    { label: 'Loop typicals', val: 42, note: '7 types × A/B/C × M/D' },
     { label: 'Generators', val: 6, note: 'IODB-driven outputs' },
     { label: 'Uptime', val: 100, suffix: '%', note: 'all systems operational' },
   ];
@@ -112,9 +111,9 @@ export default function DashboardPage() {
       </section>
 
       {/* ── Figures ── */}
-      <section className="reveal grid grid-cols-2 lg:grid-cols-4" style={{ borderTop: '1px solid var(--b2)', borderBottom: '1px solid var(--b1)' }}>
+      <section className="reveal grid grid-cols-1 sm:grid-cols-3" style={{ borderTop: '1px solid var(--b2)', borderBottom: '1px solid var(--b1)' }}>
         {figures.map((f, i) => (
-          <div key={f.label} className="relative py-7 pr-6 fade-up" style={{ paddingLeft: i % 4 === 0 ? 0 : 24, borderLeft: i % 4 === 0 ? 'none' : '1px solid var(--b1)', animationDelay: `${420 + i * 90}ms` }}>
+          <div key={f.label} className="relative py-7 pr-6 fade-up" style={{ paddingLeft: i === 0 ? 0 : 24, borderLeft: i === 0 ? 'none' : '1px solid var(--b1)', animationDelay: `${420 + i * 90}ms` }}>
             {f.label === 'Uptime' && <div className="absolute right-2 top-1/2 -translate-y-1/2"><Gauge value={f.val} size={78} label="Uptime %" /></div>}
             <p className="eyebrow">{f.label}</p>
             <p className="mt-3 font-semibold leading-none" style={{ fontFamily: 'var(--font-display)', fontSize: 46, letterSpacing: '-0.045em', color: 'var(--t0)' }}>

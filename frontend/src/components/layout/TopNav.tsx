@@ -3,10 +3,11 @@
  * "Generate" menu (and role-filtered Admin menu), and a full-screen sheet on small screens.
  */
 import { NavLink, Link, useLocation } from 'react-router-dom';
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ChevronDown, Menu, X, ArrowRight } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { visibleSections, isActive, NavSection } from './nav';
+import BrandSplash from './BrandSplash';
 
 /** The mark: a dotless "ı" whose dot is the signal lamp. */
 export function BrandMark({ ink = 'var(--ink)', fg = 'var(--ink-fg)', size = 32 }: { ink?: string; fg?: string; size?: number }) {
@@ -19,14 +20,19 @@ export function BrandMark({ ink = 'var(--ink)', fg = 'var(--ink-fg)', size = 32 
 }
 
 export function Brand() {
+  const [splash, setSplash] = useState(false);
+  const close = useCallback(() => setSplash(false), []);
   return (
-    <Link to="/" className="flex items-center gap-2.5 flex-shrink-0 group" aria-label="iEZ home">
-      <BrandMark />
-      <span className="leading-none hidden sm:block">
+    <div className="flex items-center gap-2.5 flex-shrink-0">
+      <button type="button" onClick={() => setSplash(true)} className="brand-btn" aria-label="Play the iEZ intro" title="iEZ">
+        <BrandMark />
+      </button>
+      <Link to="/" className="leading-none hidden sm:block" aria-label="iEZ home">
         <span className="block text-[17px] font-bold" style={{ fontFamily: 'var(--font-display)', color: 'var(--t0)', letterSpacing: '-0.035em' }}>iEZ</span>
         <span className="block mono text-[9.5px] mt-[3px] tracking-[.12em]" style={{ color: 'var(--t2)' }}>WABAG · INSTR</span>
-      </span>
-    </Link>
+      </Link>
+      {splash && <BrandSplash onDone={close} />}
+    </div>
   );
 }
 

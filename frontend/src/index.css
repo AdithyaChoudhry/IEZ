@@ -321,6 +321,37 @@ main .border-teal-200   { border-color:color-mix(in srgb, var(--em) 28%, transpa
 [data-theme='light'] main [style*="rgb(96, 165, 250)"]  { color:var(--em-lt) !important; }
 [data-theme='light'] main [style*="rgb(147, 197, 253)"] { color:var(--em-lt) !important; }
 
+/* ─── Spec Extraction page (scoped): legacy violet / emerald styling mapped onto Ink & Signal ─── */
+.sdie .iz-tile { background: var(--ink) !important; color: var(--ink-fg) !important; border-radius: 10px !important; }
+.sdie .iz-tile svg { color: var(--ink-fg) !important; }
+.sdie .iz-btn { background: var(--ink) !important; color: var(--ink-fg) !important; border-radius: 10px; }
+.sdie .iz-btn:hover:not(:disabled) { background: var(--ink-hover) !important; }
+.sdie .iz-btn svg, .sdie .iz-btn div { color: var(--ink-fg); border-color: color-mix(in srgb, var(--ink-fg) 35%, transparent); }
+.sdie .iz-btn-2 { background: var(--s2) !important; color: var(--t0) !important; border: 1px solid var(--b2); }
+.sdie .iz-btn-2:hover { border-color: var(--b3); }
+.sdie .iz-bar { background: var(--s1) !important; }
+.sdie .iz-bar-hover:hover { background: var(--s3) !important; }
+.sdie .iz-progress { background: var(--em) !important; }
+.sdie .iz-beam { background: linear-gradient(90deg, transparent, var(--em), transparent) !important; }
+.sdie .text-violet-400, .sdie .text-violet-500, .sdie .text-violet-700 { color: var(--em-lt) !important; }
+.sdie .bg-violet-50, .sdie .bg-violet-100, .sdie .bg-violet-50\/30, .sdie .bg-violet-50\/40,
+.sdie .hover\:bg-violet-50\/30:hover, .sdie .hover\:bg-violet-50\/40:hover { background: var(--em-dim) !important; }
+.sdie .border-violet-200, .sdie .border-violet-300, .sdie .border-violet-400, .sdie .hover\:border-violet-300:hover { border-color: color-mix(in srgb, var(--em) 38%, transparent) !important; }
+.sdie .text-emerald-500, .sdie .text-emerald-600, .sdie .text-emerald-700, .sdie .text-green-500, .sdie .text-green-700 { color: var(--ok) !important; }
+.sdie .bg-emerald-50, .sdie .bg-emerald-100, .sdie .bg-emerald-50\/20, .sdie .bg-emerald-50\/40, .sdie .bg-green-50 { background: color-mix(in srgb, var(--ok) 11%, transparent) !important; }
+.sdie .border-emerald-200, .sdie .border-emerald-300, .sdie .border-green-200 { border-color: color-mix(in srgb, var(--ok) 32%, transparent) !important; }
+.sdie .bg-emerald-400, .sdie .bg-emerald-500, .sdie .bg-green-500 { background: var(--ok) !important; }
+.sdie .bg-amber-400 { background: var(--warn) !important; }
+.sdie .text-amber-600, .sdie .text-yellow-400 { color: var(--warn) !important; }
+.sdie .bg-red-400 { background: var(--bad) !important; }
+.sdie .bg-blue-50\/30, .sdie .bg-blue-50\/40 { background: var(--s1) !important; }
+.sdie .border-blue-300 { border-color: var(--b3) !important; }
+.sdie .text-blue-400, .sdie .text-blue-500 { color: var(--t1) !important; }
+.sdie .bg-blue-100, .sdie .bg-blue-50, .sdie .group:hover .group-hover\:bg-blue-100 { background: var(--s3) !important; }
+.sdie .rounded-2xl { border-radius: 14px; }
+.sdie .rounded-3xl { border-radius: 18px; }
+.sdie .text-2xl.font-black { font-family: var(--font-display); font-weight: 600; letter-spacing: -0.03em; }
+
 /* ─── Reduced motion ─────────────────────────────────────────────────────────────────────── */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration:.01ms !important; animation-iteration-count:1 !important; transition-duration:.01ms !important; scroll-behavior:auto !important; }

@@ -1,3 +1,4 @@
+import PageHeader from '../ui/PageHeader';
 import { useState, useCallback, useEffect, useRef } from 'react';
 import {
   ScanSearch, Upload, FileSpreadsheet, Download,
@@ -194,7 +195,7 @@ function TemplatePrompt({ onConfirm, onSkip }: {
     <div className="fixed inset-0 bg-black/30 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-fade-in">
       <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md p-7 animate-fade-in-up">
         <div className="flex items-center gap-3 mb-4">
-          <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-violet-500 to-purple-600 flex items-center justify-center shadow-lg shadow-violet-200">
+          <div className="w-11 h-11 rounded-2xl iz-tile flex items-center justify-center">
             <FileSpreadsheet className="w-5 h-5 text-white" />
           </div>
           <div>
@@ -226,7 +227,7 @@ function TemplatePrompt({ onConfirm, onSkip }: {
             Skip — Extract All Fields
           </button>
           <button onClick={browse}
-            className="flex-1 py-2.5 px-4 rounded-xl bg-gradient-to-r from-violet-600 to-purple-700 text-white text-sm font-bold shadow-lg shadow-violet-200 hover:shadow-xl hover:-translate-y-0.5 transition-all">
+            className="flex-1 py-2.5 px-4 rounded-xl iz-btn text-white text-sm font-bold transition-all">
             Upload Template
           </button>
         </div>
@@ -266,7 +267,7 @@ function ProcessingVisualizer({ step, fileCount, currentFileIdx, fileName, elaps
 
   return (
     <div className="card-premium overflow-hidden animate-fade-in-up">
-      <div className="flex items-center justify-between px-5 py-3 bg-gradient-to-r from-slate-50 to-blue-50 border-b border-gray-100">
+      <div className="flex items-center justify-between px-5 py-3 iz-bar border-b border-gray-100">
         <div className="flex items-center gap-3">
           <div className="flex gap-1 items-center">
             {Array.from({ length: fileCount }).map((_, i) => (
@@ -287,13 +288,13 @@ function ProcessingVisualizer({ step, fileCount, currentFileIdx, fileName, elaps
       <div className="grid grid-cols-3 gap-5 p-5">
         <div className="space-y-2">
           <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest flex items-center gap-1.5"><Cpu className="w-3 h-3" /> OCR Engine</p>
-          <div className={`relative rounded-2xl overflow-hidden h-40 p-4 border-2 transition-all duration-500 ${step === 'ocr' ? 'border-blue-300 bg-blue-50/30 shadow-lg shadow-blue-100' : 'border-gray-100 bg-white'}`}>
+          <div className={`relative rounded-2xl overflow-hidden h-40 p-4 border-2 transition-all duration-500 ${step === 'ocr' ? 'border-blue-300 bg-blue-50/30' : 'border-gray-100 bg-white'}`}>
             <div className="space-y-2 mt-1">
               {[88, 72, 92, 58, 80, 66, 76, 84, 60].map((w, i) => (
                 <div key={i} className={`h-1.5 rounded-full transition-all duration-700 ${step === 'ocr' ? 'bg-blue-200' : cur > 1 ? 'bg-emerald-200' : 'bg-gray-100'}`} style={{ width: `${w}%` }} />
               ))}
             </div>
-            {step === 'ocr' && <div className="animate-scan-beam absolute left-0 right-0 h-0.5 bg-gradient-to-r from-transparent via-blue-500 to-transparent shadow-sm shadow-blue-400/60" />}
+            {step === 'ocr' && <div className="animate-scan-beam absolute left-0 right-0 h-0.5 iz-beam" />}
             {cur > 1 && (
               <div className="absolute inset-0 bg-emerald-50/60 flex items-center justify-center rounded-2xl">
                 <div className="flex flex-col items-center gap-1"><CheckCircle2 className="w-7 h-7 text-emerald-500" /><span className="text-[10px] font-bold text-emerald-600">Text Extracted</span></div>
@@ -304,7 +305,7 @@ function ProcessingVisualizer({ step, fileCount, currentFileIdx, fileName, elaps
 
         <div className="space-y-2">
           <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest flex items-center gap-1.5"><Brain className="w-3 h-3" /> Llama 3.3 70B</p>
-          <div className={`relative rounded-2xl overflow-hidden h-40 flex items-center justify-center border-2 transition-all duration-500 ${step === 'ai' ? 'border-violet-300 bg-violet-50/30 shadow-lg shadow-violet-100' : 'border-gray-100 bg-white'}`}>
+          <div className={`relative rounded-2xl overflow-hidden h-40 flex items-center justify-center border-2 transition-all duration-500 ${step === 'ai' ? 'border-violet-300 bg-violet-50/30' : 'border-gray-100 bg-white'}`}>
             {step === 'ai' ? (
               <div className="relative flex items-center justify-center w-24 h-24">
                 <div className="absolute inset-0 rounded-full border border-violet-200 animate-ping opacity-20" />
@@ -317,7 +318,7 @@ function ProcessingVisualizer({ step, fileCount, currentFileIdx, fileName, elaps
                     animation: `spin-slow ${3 + i * 0.2}s linear infinite ${i % 2 ? 'reverse' : ''}`,
                   }} />
                 ))}
-                <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-violet-500 to-purple-600 flex items-center justify-center shadow-xl shadow-violet-300 z-10">
+                <div className="w-12 h-12 rounded-2xl iz-tile flex items-center justify-center z-10">
                   <Brain className="w-6 h-6 text-white" />
                 </div>
               </div>
@@ -331,7 +332,7 @@ function ProcessingVisualizer({ step, fileCount, currentFileIdx, fileName, elaps
 
         <div className="space-y-2">
           <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest flex items-center gap-1.5"><Sparkles className="w-3 h-3" /> Live Discoveries</p>
-          <div className={`relative rounded-2xl overflow-hidden h-40 border-2 transition-all duration-500 ${step === 'mapping' ? 'border-emerald-300 bg-emerald-50/20 shadow-lg shadow-emerald-100' : 'border-gray-100 bg-white'}`}>
+          <div className={`relative rounded-2xl overflow-hidden h-40 border-2 transition-all duration-500 ${step === 'mapping' ? 'border-emerald-300 bg-emerald-50/20' : 'border-gray-100 bg-white'}`}>
             <div className="absolute inset-0 p-3 overflow-hidden flex flex-col gap-1">
               {discoveries.length === 0 ? (
                 <div className="h-full flex items-center justify-center"><p className="text-[10px] text-gray-300 font-medium">Scanning document…</p></div>
@@ -357,7 +358,7 @@ function ProcessingVisualizer({ step, fileCount, currentFileIdx, fileName, elaps
             const Icon = s.icon;
             return (
               <div key={s.key} className="flex items-center flex-1">
-                <div className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-bold whitespace-nowrap transition-all duration-500 ${done ? 'bg-emerald-100 text-emerald-700 border border-emerald-200' : active ? 'bg-blue-600 text-white shadow-md shadow-blue-200 animate-pulse' : 'bg-gray-100 text-gray-400'}`}>
+                <div className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-bold whitespace-nowrap transition-all duration-500 ${done ? 'bg-emerald-100 text-emerald-700 border border-emerald-200' : active ? 'bg-blue-600 text-white animate-pulse' : 'bg-gray-100 text-gray-400'}`}>
                   <Icon className="w-3 h-3" /><span className="hidden sm:inline">{s.label}</span>
                 </div>
                 {i < stages.length - 1 && <div className={`flex-1 h-px mx-1 rounded transition-all duration-700 ${done ? 'bg-emerald-300' : 'bg-gray-200'}`} />}
@@ -366,7 +367,7 @@ function ProcessingVisualizer({ step, fileCount, currentFileIdx, fileName, elaps
           })}
         </div>
         <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
-          <div className="h-full bg-gradient-to-r from-blue-500 via-violet-500 to-emerald-500 rounded-full transition-all duration-1000" style={{ width: `${progress}%` }} />
+          <div className="h-full iz-progress rounded-full transition-all duration-1000" style={{ width: `${progress}%` }} />
         </div>
       </div>
     </div>
@@ -429,7 +430,7 @@ function ReviewPanel({ fileResults, onConfirm, onBack }: {
       {/* Header bar */}
       <div className="card-premium p-5">
         <div className="flex items-start gap-4">
-          <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center shadow-lg shadow-emerald-200 animate-float flex-shrink-0">
+          <div className="w-11 h-11 rounded-2xl iz-tile flex items-center justify-center flex-shrink-0">
             <ListChecks className="w-5 h-5 text-white" />
           </div>
           <div className="flex-1">
@@ -448,7 +449,7 @@ function ReviewPanel({ fileResults, onConfirm, onBack }: {
             <button
               onClick={handleConfirm}
               disabled={selectedCount === 0}
-              className="flex items-center gap-2 px-5 py-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-700 text-white text-xs font-bold shadow-lg shadow-emerald-200 hover:shadow-xl hover:-translate-y-0.5 transition-all disabled:opacity-50 disabled:transform-none"
+              className="flex items-center gap-2 px-5 py-2 rounded-xl iz-btn text-white text-xs font-bold transition-all disabled:opacity-50 disabled:transform-none"
             >
               <CheckCircle2 className="w-3.5 h-3.5" /> Confirm &amp; Assign Templates ({selectedCount})
             </button>
@@ -477,9 +478,9 @@ function ReviewPanel({ fileResults, onConfirm, onBack }: {
                 {/* Section header */}
                 <button
                   onClick={() => setCollapsed(prev => ({ ...prev, [sectionKey]: !prev[sectionKey] }))}
-                  className="w-full flex items-center gap-3 px-5 py-3.5 bg-gradient-to-r from-slate-50 to-blue-50 border-b border-gray-100 hover:from-blue-50 hover:to-violet-50 transition-colors"
+                  className="w-full flex items-center gap-3 px-5 py-3.5 iz-bar border-b border-gray-100 iz-bar-hover transition-colors"
                 >
-                  <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-blue-500 to-violet-600 flex items-center justify-center flex-shrink-0">
+                  <div className="w-8 h-8 rounded-xl iz-tile flex items-center justify-center flex-shrink-0">
                     <Layers className="w-4 h-4 text-white" />
                   </div>
                   <div className="flex-1 text-left">
@@ -622,7 +623,7 @@ function TemplateAssignment({ sections, onDone }: {
     <div className="space-y-4 animate-fade-in-up">
       <div className="card-premium p-5">
         <div className="flex items-start gap-4">
-          <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-violet-500 to-purple-600 flex items-center justify-center shadow-lg shadow-violet-200 animate-float flex-shrink-0">
+          <div className="w-11 h-11 rounded-2xl iz-tile flex items-center justify-center flex-shrink-0">
             <FileSpreadsheet className="w-5 h-5 text-white" />
           </div>
           <div className="flex-1">
@@ -639,7 +640,7 @@ function TemplateAssignment({ sections, onDone }: {
         {sections.map((section, idx) => (
           <div key={idx} className="card-premium overflow-hidden">
             <div className="flex items-center gap-3 px-5 py-4 border-b border-gray-100">
-              <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-blue-500 to-violet-600 flex items-center justify-center flex-shrink-0">
+              <div className="w-9 h-9 rounded-xl iz-tile flex items-center justify-center flex-shrink-0">
                 <Layers className="w-4 h-4 text-white" />
               </div>
               <div className="flex-1">
@@ -679,7 +680,7 @@ function TemplateAssignment({ sections, onDone }: {
                 className={`flex items-center gap-2 px-5 py-3 rounded-xl font-bold text-sm transition-all flex-shrink-0 ${
                   generated[idx]
                     ? 'bg-emerald-50 text-emerald-700 border-2 border-emerald-200 hover:bg-emerald-100'
-                    : 'bg-gradient-to-r from-violet-600 to-purple-700 text-white shadow-lg shadow-violet-200 hover:shadow-xl hover:-translate-y-0.5 disabled:opacity-50 disabled:transform-none disabled:shadow-none'
+                    : 'iz-btn text-white disabled:opacity-50 disabled:transform-none disabled:shadow-none'
                 }`}
               >
                 {generating[idx]
@@ -704,7 +705,7 @@ function TemplateAssignment({ sections, onDone }: {
       <div className="flex justify-center">
         <button
           onClick={onDone}
-          className="flex items-center gap-2 px-8 py-3 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-700 text-white font-bold text-sm shadow-lg shadow-emerald-200 hover:shadow-xl hover:-translate-y-0.5 transition-all"
+          className="flex items-center gap-2 px-8 py-3 rounded-xl iz-btn text-white font-bold text-sm transition-all"
         >
           <CheckCircle2 className="w-4 h-4" /> Done — View Summary
         </button>
@@ -863,7 +864,7 @@ export default function SmartDatasheetExtractor() {
   const instrumentTypes = [...new Set(confirmedSections.map(s => s.instrument_type).filter(Boolean))];
 
   return (
-    <div className="space-y-5 animate-fade-in">
+    <div className="sdie space-y-5 animate-fade-in">
       {/* Template popup */}
       {showTemplatePrompt && (
         <TemplatePrompt
@@ -873,21 +874,10 @@ export default function SmartDatasheetExtractor() {
       )}
 
       {/* Header */}
-      <div className="flex items-start gap-4">
-        <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-violet-500 to-blue-600 flex items-center justify-center shadow-lg shadow-violet-200 animate-float flex-shrink-0">
-          <ScanSearch className="w-6 h-6 text-white" />
-        </div>
-        <div>
-          <h1 className="text-2xl font-black text-gray-900 leading-tight">
-            Smart <span className="text-gradient">Specification</span> Extraction
-          </h1>
-          <p className="text-sm text-gray-500 mt-0.5">
-            OCR → Llama 3.3 70B → Section-aware extraction → Review → Datasheet
-          </p>
-        </div>
-        <div className="ml-auto flex items-center gap-1.5 px-3 py-1.5 bg-green-50 border border-green-200 rounded-full flex-shrink-0">
-          <div className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
-          <span className="text-xs font-semibold text-green-700">AI Online</span>
+      <div className="flex items-start justify-between gap-4">
+        <PageHeader icon={ScanSearch} title="Smart Specification Extraction" description="OCR → Llama 3.3 70B → Section-aware extraction → Review → Datasheet" />
+        <div className="mt-10 hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-full flex-shrink-0 mono text-[11px] tracking-[.08em]" style={{ border: '1px solid var(--b2)', color: 'var(--t1)', background: 'var(--s2)' }}>
+          <span className="w-1.5 h-1.5 rounded-full" style={{ background: 'var(--ok)', animation: 'blink 2.2s ease-in-out infinite' }} />AI ONLINE
         </div>
       </div>
 
@@ -914,8 +904,7 @@ export default function SmartDatasheetExtractor() {
               onClick={startExtract}
               disabled={!files.length || isProcessing}
               className="w-full py-3 px-4 rounded-xl font-bold text-sm transition-all duration-200 flex items-center justify-center gap-2
-                bg-gradient-to-r from-blue-600 to-blue-700 text-white shadow-lg shadow-blue-200
-                hover:from-blue-700 hover:to-blue-800 hover:shadow-xl hover:-translate-y-0.5
+                iz-btn text-white
                 disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none disabled:shadow-none"
             >
               {isProcessing
@@ -966,8 +955,8 @@ export default function SmartDatasheetExtractor() {
               const Icon = stat.icon;
               return (
                 <div key={i} className={`card-premium p-4 animate-fade-in-up animation-delay-${(i + 1) * 100}`}>
-                  <div className={`w-8 h-8 rounded-xl mb-2 flex items-center justify-center bg-${stat.color}-100`}>
-                    <Icon className={`w-4 h-4 text-${stat.color}-600`} />
+                  <div className={`w-8 h-8 rounded-xl mb-2 flex items-center justify-center bg-[var(--s3)]`}>
+                    <Icon className={`w-4 h-4 text-[var(--t0)]`} />
                   </div>
                   <p className="text-2xl font-black text-gray-900">{stat.value}</p>
                   <p className="text-xs text-gray-500 font-medium">{stat.label}</p>
@@ -1008,12 +997,12 @@ export default function SmartDatasheetExtractor() {
               </div>
               <div className="flex gap-2">
                 <button onClick={() => downloadBlob('/sdie/extract/download', 'Extracted_Specs.xlsx')}
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 text-white rounded-lg text-xs font-bold hover:bg-emerald-700 transition-colors">
+                  className="flex items-center gap-1.5 px-3 py-1.5 iz-btn rounded-lg text-xs font-bold transition-colors">
                   <Download className="w-3.5 h-3.5" /> Export Excel
                 </button>
                 {generateResult && (
                   <button onClick={() => downloadBlob('/sdie/download', generateResult.filename)}
-                    className="flex items-center gap-1.5 px-3 py-1.5 bg-violet-600 text-white rounded-lg text-xs font-bold hover:bg-violet-700 transition-colors">
+                    className="flex items-center gap-1.5 px-3 py-1.5 iz-btn-2 rounded-lg text-xs font-bold transition-colors">
                     <Download className="w-3.5 h-3.5" /> Download Datasheet
                   </button>
                 )}
@@ -1024,7 +1013,7 @@ export default function SmartDatasheetExtractor() {
               <div className="overflow-auto max-h-[600px]">
                 {confirmedSections.map((sec, si) => (
                   <div key={si}>
-                    <div className="px-5 py-2.5 bg-gradient-to-r from-slate-50 to-blue-50 border-b border-gray-100 flex items-center gap-2 sticky top-0 z-10">
+                    <div className="px-5 py-2.5 iz-bar border-b border-gray-100 flex items-center gap-2 sticky top-0 z-10">
                       <Layers className="w-3.5 h-3.5 text-blue-500" />
                       <span className="text-xs font-black text-blue-800">{sec.heading}</span>
                       {sec.instrument_type && (

@@ -8,6 +8,7 @@ Flow:
 """
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, status
 from fastapi.responses import StreamingResponse
+from fastapi.concurrency import run_in_threadpool
 from dataclasses import asdict
 import io
 import json
@@ -48,6 +49,7 @@ from utils.sop_datasheet import (
     generate_with_report as generate_datasheets,
 )
 from utils import sop_consolidated as SC
+from utils import datasheet_library as DL
 
 logger = logging.getLogger(__name__)
 
@@ -202,12 +204,65 @@ async def tags(
     return TagsResponse(instrument_type=instrument_type, tags=tag_list, count=len(tag_list))
 
 
+def _warm_library():
+    """Parse the 11 library workbooks once in the background so the first wizard call is fast."""
+    try:
+        for t in DL.library():
+            DL.template_info(t)
+    except Exception:
+        logger.warning("Datasheet template library warm-up failed", exc_info=True)
+
+
+threading.Thread(target=_warm_library, daemon=True).start()
+
+
+@router.get("/library")
+async def library_list(current_user: User = Depends(get_current_user)):
+    """The standard datasheet template library."""
+    try:
+        return {"templates": [await run_in_threadpool(DL.template_info, t) for t in DL.library()]}
+    except DL.LibraryError as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc))
+
+
+@router.post("/library/analyze-iodb")
+async def library_analyze_iodb(iodb_file: UploadFile = File(...), current_user: User = Depends(get_current_user)):
+    """Instrument types in the IODB, their tags and the matching library template (with how sure the match is)."""
+    _check_ext(iodb_file.filename or "", ALLOWED_IODB_EXTENSIONS)
+    data = await iodb_file.read()
+    if not data:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="The IODB file is empty.")
+    try:
+        return await run_in_threadpool(DL.analyze_iodb, data)
+    except DL.LibraryError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
+
+@router.get("/library/{template_id}")
+async def library_template(template_id: str, field_scope: str = "", current_user: User = Depends(get_current_user)):
+    """Template details: sheet roles, field rules from the Engineering Guide, annexure columns."""
+    try:
+        t = DL.entry(template_id)
+        scope = _json_obj(field_scope, "field scope") if field_scope else None
+        fields, info = await run_in_threadpool(DL.fields_for, t, scope)
+        tinfo = await run_in_threadpool(DL.template_info, t)
+    except DL.LibraryError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    return {"template": tinfo, "fields": [f.to_dict() for f in fields], "notes": info["notes"],
+            "header_fields": DL.HEADER_FIELDS}
+
+
 def _run_generate_job(job_id, sop_bytes, sop_filename, datasheet_sheet,
                       iodb_bytes, instrument_type, selected_tags, overrides, user_id,
-                      generation_format=SC.INDIVIDUAL, annexure_mapping=None, approval_id=None):
-    """Generate the datasheet package in a background thread (individual: one file per tag; consolidated: one workbook)."""
+                      generation_format=SC.INDIVIDUAL, annexure_mapping=None, approval_id=None,
+                      template_id=None, header=None, field_scope=None):
+    """Generate the datasheet package in a background thread (individual: one file per tag; consolidated: one workbook;
+    library template: one consolidated workbook from the standard template library)."""
     try:
-        if generation_format == SC.INDIVIDUAL:
+        if template_id:
+            zip_bytes, filename, err, failed = DL.generate(template_id, iodb_bytes, selected_tags, overrides,
+                                                           annexure_mapping, header, field_scope)
+        elif generation_format == SC.INDIVIDUAL:
             zip_bytes, filename, err, failed = generate_datasheets(
                 sop_bytes, sop_filename, datasheet_sheet,
                 iodb_bytes, instrument_type, selected_tags, overrides,
@@ -255,7 +310,8 @@ def _run_generate_job(job_id, sop_bytes, sop_filename, datasheet_sheet,
         generation_jobs[job_id] = {"status": "error", "error": str(exc)}
 
 
-def _approved_package(db: Session, approval_id: int, fmt: str, tags: list, datasheet_sheet: str) -> tuple[dict, dict | None]:
+def _approved_package(db: Session, approval_id: int, fmt: str, tags: list, datasheet_sheet: str,
+                      template_id: str | None = None, meta_out: dict | None = None) -> tuple[dict, dict | None]:
     """The approved request must cover exactly this package; returns (approved overrides + approval stamps, approved mapping)."""
     req = db.get(ApprovalRequest, approval_id)
     if req is None or req.request_type != "spec":
@@ -277,6 +333,13 @@ def _approved_package(db: Session, approval_id: int, fmt: str, tags: list, datas
     if sorted({str(t).strip() for t in approved_tags}) != sorted({str(t).strip() for t in tags}):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT,
                             detail=f"The selected tags differ from the tags approved in request #{approval_id}. Raise a new approval.")
+    if (meta.get("template_id") or None) != (template_id or None):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                            detail=f"Request #{approval_id} was approved for a different datasheet template. "
+                                   "Changing the template needs a new approval.")
+    if meta_out is not None:
+        meta_out.update(header=meta.get("header") if isinstance(meta.get("header"), dict) else {},
+                        field_scope=meta.get("field_scope") if isinstance(meta.get("field_scope"), dict) else {})
     if meta.get("datasheet") and meta["datasheet"] != datasheet_sheet:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT,
                             detail=f"Request #{approval_id} was approved for datasheet '{meta['datasheet']}', not '{datasheet_sheet}'.")
@@ -291,21 +354,34 @@ def _approved_package(db: Session, approval_id: int, fmt: str, tags: list, datas
     return overrides, (mapping if isinstance(mapping, dict) else None)
 
 
+def _json_obj(raw: str, what: str) -> dict:
+    try:
+        v = json.loads(raw) if raw else {}
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Invalid {what}.")
+    if not isinstance(v, dict):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Invalid {what}.")
+    return v
+
+
 @router.post("/validate")
 async def validate_package(
-    sop_file: UploadFile = File(...),
+    sop_file: UploadFile | None = File(None),
     iodb_file: UploadFile = File(...),
-    datasheet_sheet: str = Form(...),
+    datasheet_sheet: str = Form(""),
     instrument_type: str = Form(""),
     selected_tags: str = Form(...),
     generation_format: str = Form(SC.INDIVIDUAL),
     overrides: str = Form("{}"),
     annexure_mapping: str = Form("{}"),
+    template_id: str = Form(""),                     # standard template library (no SOP upload)
+    header: str = Form("{}"),
+    field_scope: str = Form("{}"),
+    ai_confidence: str = Form("{}"),
     current_user: User = Depends(get_current_user),
 ):
     """Engineering checks before approval: tags in the IODB, duplicates, mandatory values, common specs that differ per tag,
     unresolved placeholders (individual), annexure mapping / blank tag data (consolidated). Nothing is corrected."""
-    _check_ext(sop_file.filename or "", ALLOWED_SOP_EXTENSIONS)
     _check_ext(iodb_file.filename or "", ALLOWED_IODB_EXTENSIONS)
     try:
         tags_list = json.loads(selected_tags)
@@ -313,6 +389,16 @@ async def validate_package(
         mapping_dict = json.loads(annexure_mapping) if annexure_mapping else {}
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Invalid request data: {exc}")
+    if template_id:
+        try:
+            return await run_in_threadpool(DL.validate, template_id, await iodb_file.read(), tags_list, overrides_dict,
+                                           mapping_dict, instrument_type, _json_obj(header, "document header"),
+                                           _json_obj(field_scope, "field scope"), _json_obj(ai_confidence, "AI confidence"))
+        except DL.LibraryError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    if sop_file is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Select a datasheet template.")
+    _check_ext(sop_file.filename or "", ALLOWED_SOP_EXTENSIONS)
     try:
         ctx = SC.load_context(await sop_file.read(), sop_file.filename or "", datasheet_sheet, await iodb_file.read())
     except ValueError as exc:
@@ -322,15 +408,16 @@ async def validate_package(
 
 @router.post("/generate", response_model=GenerateJobResponse, status_code=status.HTTP_202_ACCEPTED)
 async def generate(
-    sop_file: UploadFile = File(...),
+    sop_file: UploadFile | None = File(None),
     iodb_file: UploadFile = File(...),
-    datasheet_sheet: str = Form(...),
+    datasheet_sheet: str = Form(""),
     instrument_type: str = Form(...),
     selected_tags: str = Form(...),   # JSON array
     overrides: str = Form("{}"),      # JSON object: {label: [values]}
     generation_format: str = Form(SC.INDIVIDUAL),   # INDIVIDUAL | CONSOLIDATED
     approval_id: int | None = Form(None),           # Lead Engineer approval of exactly this package
     annexure_mapping: str = Form("{}"),             # consolidated: {annexure column: IODB column}
+    template_id: str = Form(""),                    # standard template library: consolidated only, approval required
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -340,7 +427,16 @@ async def generate(
     CONSOLIDATED - one workbook: main datasheet + tag-wise annexure. Requires an approved request; the approved values are used.
     When an approval_id is given, the package must match what was approved (format, tags, datasheet) and the approved
     specification values are used instead of the ones sent by the browser."""
-    _check_ext(sop_file.filename or "", ALLOWED_SOP_EXTENSIONS)
+    if template_id:
+        try:
+            DL.entry(template_id)
+        except DL.LibraryError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+        generation_format = SC.CONSOLIDATED                       # the library always produces the consolidated document
+    elif sop_file is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Select a datasheet template.")
+    else:
+        _check_ext(sop_file.filename or "", ALLOWED_SOP_EXTENSIONS)
     _check_ext(iodb_file.filename or "", ALLOWED_IODB_EXTENSIONS)
 
     try:
@@ -358,12 +454,14 @@ async def generate(
     if fmt == SC.CONSOLIDATED and approval_id is None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT,
                             detail="The consolidated datasheet needs an approved request - raise it for Lead Engineer approval first.")
+    approved_meta: dict = {}
     if approval_id is not None:
-        overrides_dict, approved_mapping = _approved_package(db, approval_id, fmt, tags_list, datasheet_sheet)
+        overrides_dict, approved_mapping = _approved_package(db, approval_id, fmt, tags_list, datasheet_sheet,
+                                                             template_id or None, approved_meta)
         if approved_mapping is not None:
             mapping_dict = approved_mapping
 
-    sop_bytes = await sop_file.read()
+    sop_bytes = await sop_file.read() if sop_file is not None else b""
     iodb_bytes = await iodb_file.read()
 
     job_id = str(uuid.uuid4())
@@ -371,9 +469,10 @@ async def generate(
 
     threading.Thread(
         target=_run_generate_job,
-        args=(job_id, sop_bytes, sop_file.filename or "", datasheet_sheet,
+        args=(job_id, sop_bytes, (sop_file.filename if sop_file else "") or "", datasheet_sheet,
               iodb_bytes, instrument_type, tags_list, overrides_dict, current_user.id,
-              fmt, mapping_dict, approval_id),
+              fmt, mapping_dict, approval_id, template_id or None,
+              approved_meta.get("header") or {}, approved_meta.get("field_scope") or {}),
         daemon=True,
     ).start()
 

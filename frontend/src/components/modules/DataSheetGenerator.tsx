@@ -44,6 +44,22 @@ interface FieldSpec {
 }
 interface DatasheetInfo { sheet: string; eg_sheet: string | null; title: string; annexure_sheet?: string | null; annexure_capacity?: number; missing_annexures?: string[]; }
 type GenFormat = 'INDIVIDUAL' | 'CONSOLIDATED';
+/* Standard template library (backend: /sop-datasheet/library) */
+interface LibField extends FieldSpec { key: string; scope: 'tag' | 'annexure2' | 'common'; origin: string; example: string[]; unit: string }
+interface IodbGroup { instrument_type: string; tag_count: number; tags: string[]; duplicates: string[]; template_id: string | null;
+  template_name: string | null; status: string; candidates: { id: string; name: string }[]; reason: string; matched_on: string; descriptions: string[] }
+interface IodbAnalysis { groups: IodbGroup[]; rows: number; supported: number; unsupported: string[]; columns: Record<string, string | null> }
+interface TemplateInfo { id: string; code: string; display_name: string; category: string; version: string; original_filename: string; title: string;
+  sheets: { role: string; label: string; sheet: string; in_output: boolean }[]; annexure: { sheet: string; columns: number; capacity: number; generated: boolean };
+  field_counts: { total: number; tag: number; common: number; vendor: number }; has_guide: boolean; output_filename: string }
+const MATCH_BADGE: Record<string, [string, string]> = {
+  exact: ['Exact', 'var(--ok)'], alias: ['Alias', 'var(--ok)'], keyword: ['Keywords - confirm', 'var(--gold)'],
+  description: ['From description - confirm', 'var(--gold)'], ambiguous: ['Ambiguous', 'var(--rose)'], unmatched: ['No template', 'var(--rose)'], manual: ['Chosen by you', 'var(--t1)'],
+};
+const SRC_LABEL: Record<string, [string, string]> = {
+  template: ['Engineering Guide', 'var(--t1)'], input: ['Manual', 'var(--em-lt)'], user: ['Manual', 'var(--em-lt)'], ai: ['AI', 'var(--gold)'],
+  vendor: ['Vendor (later)', 'var(--t2)'], computed: ['Computed', 'var(--t1)'], optional: ['If tender asks', 'var(--gold)'],
+};
 /** Template fields are keyed "SECTION::Label": labels such as "Type" repeat in several sections of one datasheet. */
 const fieldKey = (f: { section: string; label: string }) => `${f.section}::${f.label}`;
 const keyLabel = (k: string) => k.includes('::') ? k.split('::').filter(Boolean).join(' · ') : k;
@@ -51,14 +67,14 @@ const FORMAT_INFO: Record<GenFormat, { label: string; desc: string }> = {
   CONSOLIDATED: { label: 'Consolidated Datasheet with Annexure', desc: 'One common instrument datasheet with a tag-wise engineering annexure (one row per selected tag).' },
   INDIVIDUAL: { label: 'Individual Datasheet for Each Tag', desc: 'A separate instrument datasheet for every selected tag, packaged as Datasheets.zip.' },
 };
-interface VIssue { severity: 'ERROR' | 'REVIEW'; code: string; message: string; tag?: string; field?: string }
+interface VIssue { severity: 'ERROR' | 'REVIEW' | 'INFO'; code: string; message: string; tag?: string; field?: string }
 interface VResult { format: string; issues: VIssue[]; counts: { ERROR: number; REVIEW: number }; iodb_columns?: string[];
   annexure?: { sheet: string; capacity: number; rows: number; preview: Record<string, any>[];
     columns: { col: number; label: string; kind: string; hidden: boolean; iodb_column: string | null }[] } }
 interface ApprovalInfo { approved_by: string; employee_id: string; role: string; date: string; time_log: string; }
 interface GenStatus { job_id: string; status: 'processing' | 'done' | 'error'; result?: { filename: string; tag_count: number; message: string; requested_count?: number; failed_tags?: { tag: string; reason: string }[]; format?: GenFormat }; error?: string; }
 
-type SpecSource = 'iodb' | 'ai' | 'user';
+type SpecSource = 'iodb' | 'ai' | 'user' | string;
 
 // ── Outer Step Bar (9 steps) ───────────────────────────────────────────────────
 const ALL_STEPS = ['IODB & Type', 'Tags', 'Template', 'Spec Input', 'Review', 'Approval', 'Vendor Match', 'Vendor Select', 'Generate'];
@@ -100,22 +116,9 @@ function StepBar({ current }: { current: number }) {
   );
 }
 
-// ── Drop Zone ──────────────────────────────────────────────────────────────────
-function DropZone({ file, onChange, accept, label }: { file: File | null; onChange: (f: File | null) => void; accept: string; label: string }) {
-  return (
-    <label className="flex items-center gap-3 rounded-xl cursor-pointer px-4 py-3 transition-all"
-      style={{ background: file ? 'rgba(16,185,129,0.06)' : 'var(--s1)', border: `1.5px dashed ${file ? 'var(--em)' : 'var(--b2)'}` }}>
-      {file
-        ? <><CheckCircle2 className="w-4 h-4 flex-shrink-0" style={{ color: 'var(--em)' }} /><span className="text-xs font-medium truncate" style={{ color: 'var(--em-lt)' }}>{file.name}</span><span className="ml-auto text-[10px]" style={{ color: 'var(--t2)' }}>Replace</span></>
-        : <><Upload className="w-4 h-4 flex-shrink-0" style={{ color: 'var(--t2)' }} /><span className="text-xs" style={{ color: 'var(--t1)' }}>{label}</span><span className="ml-auto text-[10px]" style={{ color: 'var(--t2)' }}>{accept}</span></>}
-      <input type="file" accept={accept} className="hidden" onChange={e => onChange(e.target.files?.[0] || null)} />
-    </label>
-  );
-}
-
 // ── Card helper ────────────────────────────────────────────────────────────────
 const card = (children: React.ReactNode, cls = '') => (
-  <div className={`rounded-2xl p-6 ${cls}`} style={{ background: 'var(--s2)', border: '1px solid var(--b1)' }}>{children}</div>
+  <div className={`rounded-2xl p-4 sm:p-6 ${cls}`} style={{ background: 'var(--s2)', border: '1px solid var(--b1)' }}>{children}</div>
 );
 
 // ── Approval Modal ─────────────────────────────────────────────────────────────
@@ -477,9 +480,20 @@ export default function DataSheetGenerator() {
 
   // Step 3
   const [sopFile, setSopFile] = useState<File | null>(null);
-  const [datasheets, setDatasheets] = useState<DatasheetInfo[]>([]);
+  const [, setDatasheets] = useState<DatasheetInfo[]>([]);
   const [selectedDatasheet, setSelectedDatasheet] = useState('');
   const [fields, setFields] = useState<FieldSpec[]>([]);
+
+  // Template library
+  const [iodbAnalysis, setIodbAnalysis] = useState<IodbAnalysis | null>(null);
+  const [typeTemplate, setTypeTemplate] = useState<Record<string, string>>({});      // user corrections: type -> template id
+  const [libraryList, setLibraryList] = useState<{ id: string; display_name: string }[]>([]);
+  const [templateId, setTemplateId] = useState('');
+  const [templateInfo, setTemplateInfo] = useState<TemplateInfo | null>(null);
+  const [headerFields, setHeaderFields] = useState<Record<string, string>>({});
+  const [header, setHeader] = useState<Record<string, string>>({});
+  const [fieldScope, setFieldScope] = useState<Record<string, 'tag' | 'common'>>({});
+  const [aiConf, setAiConf] = useState<Record<string, number>>({});
 
   // Step 4 — spec input
   const [specMode, setSpecMode] = useState<'ai' | 'manual' | null>(null);
@@ -557,6 +571,13 @@ export default function DataSheetGenerator() {
         if (s.aiResults) setAiResults(s.aiResults);
         if (s.requestedFp) setRequestedFp(s.requestedFp);
         if (s.approvedFp) setApprovedFp(s.approvedFp);
+        if (s.templateId) setTemplateId(s.templateId);
+        if (s.templateInfo) setTemplateInfo(s.templateInfo);
+        if (s.headerFields) setHeaderFields(s.headerFields);
+        if (s.header) setHeader(s.header);
+        if (s.fieldScope) setFieldScope(s.fieldScope);
+        if (s.aiConf) setAiConf(s.aiConf);
+        if (s.typeTemplate) setTypeTemplate(s.typeTemplate);
       }
     } catch { /* ignore */ }
     return () => {
@@ -575,70 +596,60 @@ export default function DataSheetGenerator() {
         kbValues, iodbGreen, iodbConfirmed, overrides,
         vendorScores, selectedVS, approval, pendingReqId, reqStatus, genStatus,
         genFormat, annexMap, aiResults, requestedFp, approvedFp,
+        templateId, templateInfo, headerFields, header, fieldScope, aiConf, typeTemplate,
       }));
     } catch { /* ignore */ }
   }, [step, instrumentTypes, selectedType, tags, selectedTags, selectedDatasheet,
       fields, specValues, specSources, kbValues, iodbGreen, iodbConfirmed, overrides,
       vendorScores, selectedVS, approval, pendingReqId, reqStatus, genStatus,
-      genFormat, annexMap, aiResults, requestedFp, approvedFp]);
+      genFormat, annexMap, aiResults, requestedFp, approvedFp,
+      templateId, templateInfo, headerFields, header, fieldScope, aiConf, typeTemplate]);
 
-  const filteredTypes = useMemo(() => instrumentTypes.filter(t => t.toLowerCase().includes(typeSearch.toLowerCase())), [instrumentTypes, typeSearch]);
   const filteredTags = useMemo(() => tags.filter(t => t.toLowerCase().includes(tagSearch.toLowerCase())), [tags, tagSearch]);
   const iodbFields = useMemo(() => fields.filter(f => f.input_type === 'iodb'), [fields]);
   const userFields = useMemo(() => fields.filter(f => f.input_type !== 'iodb'), [fields]);
 
-  // ── Step 1: load instrument types ────────────────────────────────────────────
-  const loadTypes = async () => {
+  // ── Template library ─────────────────────────────────────────────────────────
+  useEffect(() => {
+    api.get('/sop-datasheet/library').then(r => setLibraryList((r.data.templates || []).map((t: any) => ({ id: t.id, display_name: t.display_name })))).catch(() => {});
+  }, []);
+  const analyseIodb = async () => {
     if (!iodbFile) return;
+    if (!libraryList.length) api.get('/sop-datasheet/library').then(r => setLibraryList((r.data.templates || []).map((t: any) => ({ id: t.id, display_name: t.display_name })))).catch(() => {});
     setBusy(true); clearError();
     try {
       const fd = new FormData(); fd.append('iodb_file', iodbFile);
-      const res = await api.post('/sop-datasheet/instrument-types', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
-      setInstrumentTypes(res.data.instrument_types || []);
-      setSelectedType('');
-    } catch (e: any) { setError(e?.response?.data?.detail || 'Failed to read IODB'); }
+      const res = await api.post('/sop-datasheet/library/analyze-iodb', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      setIodbAnalysis(res.data); setInstrumentTypes(res.data.groups.map((g: IodbGroup) => g.instrument_type));
+      setSelectedType(''); setTypeTemplate({});
+    } catch (e: any) { setIodbAnalysis(null); setError(e?.response?.data?.detail || 'The IODB could not be analysed.'); }
     finally { setBusy(false); }
   };
-
-  // ── Step 2: load tags for selected type ──────────────────────────────────────
-  const loadTags = async (type: string) => {
-    if (!iodbFile) return;
+  const templateFor = (g: IodbGroup) => typeTemplate[g.instrument_type] ?? g.template_id ?? '';
+  const loadTemplate = async (id: string, scope?: Record<string, string>) => {
+    setTemplateId(id); setTemplateInfo(null); setFields([]); setOverrides({}); setAiConf({});
+    if (!id) return;
     setBusy(true); clearError();
     try {
-      const fd = new FormData(); fd.append('iodb_file', iodbFile); fd.append('instrument_type', type);
-      const res = await api.post('/sop-datasheet/tags', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
-      setTags(res.data.tags || []); setSelectedTags([]);
-    } catch (e: any) { setError(e?.response?.data?.detail || 'Failed to load tags'); }
+      const res = await api.get(`/sop-datasheet/library/${id}`, { params: scope && Object.keys(scope).length ? { field_scope: JSON.stringify(scope) } : {} });
+      const f: LibField[] = res.data.fields || [];
+      setFields(f); setTemplateInfo(res.data.template); setHeaderFields(res.data.header_fields || {});
+      setSelectedDatasheet(res.data.template.sheets.find((x: any) => x.role === 'main')?.sheet || '');
+      setGenFormat('CONSOLIDATED');
+      const init: Record<string, string[]> = {}; const src: Record<string, SpecSource> = {};
+      f.filter(x => x.scope === 'common').forEach(x => { init[x.key] = [...x.defaults]; src[x.key] = (x.origin as SpecSource); });
+      setOverrides(init); setSpecSources(src);
+      if (res.data.notes?.length) setNotice(res.data.notes.join(' '));
+    } catch (e: any) { setError(e?.response?.data?.detail || 'The datasheet template could not be loaded.'); }
     finally { setBusy(false); }
   };
-
-  // ── Step 3: load datasheets from SOP ────────────────────────────────────────
-  const loadDatasheets = async (file: File) => {
-    setSopFile(file); setDatasheets([]); setSelectedDatasheet(''); setFields([]);
-    setBusy(true); clearError();
-    try {
-      const fd = new FormData(); fd.append('sop_file', file);
-      const res = await api.post('/sop-datasheet/datasheets', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
-      setDatasheets(res.data.datasheets || []);
-    } catch (e: any) { setError(e?.response?.data?.detail || 'Failed to read template'); }
-    finally { setBusy(false); }
+  const chooseGroup = (g: IodbGroup) => {
+    if (selectedType !== g.instrument_type) invalidateApproval('The instrument type was changed.');
+    setSelectedType(g.instrument_type); setTags(g.tags); setSelectedTags([]); setValidation(null);
+    const tid = templateFor(g);
+    if (tid !== templateId || !templateInfo) loadTemplate(tid);
   };
-
-  const loadFields = async (sheet: string) => {
-    if (!sopFile) return;
-    setSelectedDatasheet(sheet); setFields([]); setOverrides({});
-    setBusy(true); clearError();
-    try {
-      const fd = new FormData(); fd.append('sop_file', sopFile); fd.append('datasheet_sheet', sheet);
-      const res = await api.post('/sop-datasheet/fields', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
-      const f: FieldSpec[] = res.data.fields || [];
-      setFields(f);
-      const init: Record<string, string[]> = {};
-      f.forEach(spec => { init[fieldKey(spec)] = [...spec.defaults]; });
-      setOverrides(init);
-    } catch (e: any) { setError(e?.response?.data?.detail || 'Failed to load fields'); }
-    finally { setBusy(false); }
-  };
+  const libFields = fields as LibField[];
 
   // ── Step 4: IODB green-field pre-load ────────────────────────────────────────
   useEffect(() => {
@@ -682,6 +693,19 @@ export default function DataSheetGenerator() {
 
   // ── Build review data ─────────────────────────────────────────────────────────
   const buildReview = () => {
+    if (templateId) {
+      // AI values are proposals: they fill the review table (marked AI, with confidence) and stay editable
+      const ov = { ...overrides }; const src = { ...specSources }; const conf = { ...aiConf };
+      const common = new Set(libFields.filter(f => f.scope === 'common').map(f => f.key));
+      aiResults.forEach(r => { if (r.value && common.has(r.label) && src[r.label] !== 'user') {
+        const f = libFields.find(x => x.key === r.label)!;
+        ov[r.label] = f.value_cols.length > 1 ? [r.value, ...Array(f.value_cols.length - 1).fill('')] : [r.value];
+        src[r.label] = 'ai'; conf[r.label] = r.confidence; } });
+      setOverrides(ov); setSpecSources(src); setAiConf(conf);
+      setSpecValues(Object.fromEntries(libFields.filter(f => f.scope === 'common').map(f => [f.key, (ov[f.key] || []).filter(Boolean).join(' / ')])));
+      setStep(5);
+      return;
+    }
     const vals: Record<string, string> = {};
     const srcs: Record<string, SpecSource> = {};
 
@@ -719,6 +743,11 @@ export default function DataSheetGenerator() {
 
   // ── Reviewed values -> overrides (exactly what is approved and generated) ──────
   const effectiveOverrides = (): Record<string, string[]> => {
+    if (templateId) {                                         // library: the reviewed common specifications, keyed SECTION::Label
+      const o: Record<string, string[]> = {};
+      libFields.filter(f => f.scope === 'common').forEach(f => { o[f.key] = (overrides[f.key] || f.defaults).map(v => String(v ?? '')); });
+      return o;
+    }
     const out: Record<string, string[]> = { ...overrides };
     Object.entries(specValues).forEach(([label, val]) => {
       if (specSources[label] === 'iodb' || !val || val === '—') return;
@@ -732,24 +761,23 @@ export default function DataSheetGenerator() {
     return m;
   };
   const fingerprint = () => JSON.stringify({ f: genFormat, t: [...selectedTags].sort(), d: selectedDatasheet, o: effectiveOverrides(),
-    m: genFormat === 'CONSOLIDATED' ? currentMapping() : {} });
+    m: genFormat === 'CONSOLIDATED' ? currentMapping() : {}, tid: templateId, h: header, sc: fieldScope });
   const invalidateApproval = (why: string) => {
     if (!approval && reqStatus === 'idle' && !pendingReqId) return;
     if (reqPollRef.current) clearInterval(reqPollRef.current);
     setApproval(null); setReqStatus('idle'); setPendingReqId(null); setRequestedFp(null); setApprovedFp(null); setGenStatus(null);
     setNotice(`${why} The previous approval no longer applies - raise a new approval request.`);
   };
-  const chooseFormat = (f: GenFormat) => {
-    if (f === genFormat) return;
-    if (genFormat) invalidateApproval('The datasheet generation format was changed.');
-    setGenFormat(f); setValidation(null);
-  };
   const runValidation = async (mapping?: Record<string, string>) => {
-    if (!sopFile || !iodbFile || !selectedDatasheet || !genFormat) return;
+    if (!iodbFile || !selectedDatasheet || !genFormat || (!sopFile && !templateId)) return;
     setValidating(true);
     try {
       const fd = new FormData();
-      fd.append('sop_file', sopFile); fd.append('iodb_file', iodbFile);
+      if (templateId) {
+        fd.append('template_id', templateId); fd.append('header', JSON.stringify(header)); fd.append('field_scope', JSON.stringify(fieldScope));
+        fd.append('ai_confidence', JSON.stringify(Object.fromEntries(Object.entries(aiConf).filter(([k]) => specSources[k] === 'ai'))));
+      } else fd.append('sop_file', sopFile!);
+      fd.append('iodb_file', iodbFile);
       fd.append('datasheet_sheet', selectedDatasheet); fd.append('instrument_type', selectedType);
       fd.append('selected_tags', JSON.stringify(selectedTags)); fd.append('generation_format', genFormat);
       fd.append('overrides', JSON.stringify(effectiveOverrides()));
@@ -760,7 +788,7 @@ export default function DataSheetGenerator() {
     } catch (e: any) { setError(e?.response?.data?.detail || e?.message || 'Validation failed'); }
     finally { setValidating(false); }
   };
-  useEffect(() => { if (step === 5 && sopFile && iodbFile) runValidation(); }, [step, genFormat]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (step === 5 && (sopFile || templateId) && iodbFile) runValidation(); }, [step, genFormat]); // eslint-disable-line react-hooks/exhaustive-deps
   // A pending approval keeps being checked after a page refresh
   useEffect(() => {
     if (reqStatus !== 'pending' || !pendingReqId || reqPollRef.current) return;
@@ -793,7 +821,7 @@ export default function DataSheetGenerator() {
 
   // ── Generate ──────────────────────────────────────────────────────────────────
   const startGenerate = async () => {
-    if (!sopFile || !iodbFile || !selectedDatasheet || !selectedTags.length) return;
+    if ((!sopFile && !templateId) || !iodbFile || !selectedDatasheet || !selectedTags.length) return;
     if (!genFormat) { setError('Select the datasheet generation format first.'); return; }
     if (!pendingReqId || reqStatus !== 'approved' || !approvedFp) { setError('Lead Engineer approval is required before generation.'); return; }
     if (approvedFp !== fingerprint()) {
@@ -817,12 +845,12 @@ export default function DataSheetGenerator() {
       if (purchaseNotes) out['Purchase Notes'] = [purchaseNotes];
 
       const fd = new FormData();
-      fd.append('sop_file', sopFile);
+      if (templateId) fd.append('template_id', templateId); else fd.append('sop_file', sopFile!);
       fd.append('iodb_file', iodbFile);
       fd.append('datasheet_sheet', selectedDatasheet);
       fd.append('instrument_type', selectedType);
       fd.append('selected_tags', JSON.stringify(selectedTags));
-      fd.append('overrides', JSON.stringify({ ...out, ...effectiveOverrides() }));
+      fd.append('overrides', JSON.stringify(templateId ? effectiveOverrides() : { ...out, ...effectiveOverrides() }));
       fd.append('generation_format', genFormat);
       fd.append('approval_id', String(pendingReqId));
       if (genFormat === 'CONSOLIDATED') fd.append('annexure_mapping', JSON.stringify(currentMapping()));
@@ -841,7 +869,7 @@ export default function DataSheetGenerator() {
   const downloadZip = async () => {
     try {
       const res = await api.get('/sop-datasheet/download', { responseType: 'blob' });
-      const fname = genStatus?.result?.filename || 'Datasheets.zip';
+      const fname = genStatus?.result?.filename || templateInfo?.output_filename || 'Datasheets.zip';
       const url = URL.createObjectURL(new Blob([res.data], { type: String(res.headers['content-type'] || 'application/octet-stream') }));
       const a = document.createElement('a');
       a.href = url; a.download = fname;
@@ -862,63 +890,93 @@ export default function DataSheetGenerator() {
   return (
     <div className="sm:p-6 max-w-5xl mx-auto space-y-6">
       <PageHeader icon={FileSpreadsheet} title="Smart Datasheet Generator"
-        description="IODB-assisted · AI spec extraction · Engineering approval workflow" />
+        description="IODB → standard template library → consolidated datasheet with tag-wise annexure · AI spec extraction · Lead Engineer approval" />
 
       <StepBar current={step} />
       {error && <Alert variant="error" onClose={clearError}>{error}</Alert>}
       {notice && <Alert variant="warning" onClose={() => setNotice('')}>{notice}</Alert>}
-      {genFormat && step >= 3 && (
+      {genFormat && step >= 3 && !templateId && (
         <div className="flex items-center gap-2 text-xs" data-testid="format-badge">
           <span className="eyebrow">Format</span>
           <span className="px-2.5 py-1 rounded-full font-semibold" style={{ background: 'var(--s3)', color: 'var(--t0)', border: '1px solid var(--b2)' }}>{FORMAT_INFO[genFormat].label}</span>
         </div>
       )}
 
-      {/* ── STEP 1: IODB Upload + Instrument Type ── */}
+      {/* ── STEP 1: IODB Upload + Instrument Type → template ── */}
       {step === 1 && (
         <div className="space-y-4">
           {card(<>
-            <div className="flex items-center gap-2 mb-4">
+            <div className="flex items-center gap-2 mb-3">
               <FileSpreadsheet className="w-4 h-4" style={{ color: 'var(--em)' }} />
               <span className="text-sm font-bold" style={{ color: 'var(--t0)' }}>Upload IODB</span>
             </div>
             <p className="text-xs mb-3" style={{ color: 'var(--t2)' }}>
-              Only records with <strong>SIGNAL I/O TYPE = AI</strong> and <strong>SUB SYSTEM containing "-"</strong> are considered.
+              iEZ reads every instrument row (tag, instrument type, name / description) and matches each instrument type to the
+              standard datasheet template library ({libraryList.length || 11} templates). The IODB is only read.
             </p>
-            <SharedIodbPanel compact file={iodbFile} onChange={f => { setIodbFile(f); setInstrumentTypes([]); setSelectedType(''); }} />
-            {iodbFile && instrumentTypes.length === 0 && (
-              <Button onClick={loadTypes} loading={busy} fullWidth className="mt-3">
+            <SharedIodbPanel compact file={iodbFile} onChange={f => { setIodbFile(f); setIodbAnalysis(null); setInstrumentTypes([]); setSelectedType(''); }} />
+            {iodbFile && !iodbAnalysis && (
+              <Button onClick={analyseIodb} loading={busy} fullWidth className="mt-3">
                 <Search className="w-3.5 h-3.5" /> Analyse IODB
               </Button>
             )}
-            {instrumentTypes.length > 0 && (
-              <Alert variant="info" className="mt-3">Found <strong>{instrumentTypes.length}</strong> instrument types</Alert>
+            {iodbAnalysis && (
+              <p className="text-xs mt-3" style={{ color: 'var(--t2)' }}>
+                {iodbAnalysis.rows} rows · {iodbAnalysis.groups.length} instrument type(s) · <b style={{ color: 'var(--ok)' }}>{iodbAnalysis.supported} with a template</b>
+                {iodbAnalysis.unsupported.length > 0 && <> · <b style={{ color: 'var(--rose)' }}>{iodbAnalysis.unsupported.length} without</b></>}
+                {' '}· columns: {Object.entries(iodbAnalysis.columns).filter(([, v]) => v).map(([k, v]) => `${k} "${v}"`).join(', ')}
+              </p>
             )}
           </>)}
 
-          {instrumentTypes.length > 0 && card(<>
+          {iodbAnalysis && card(<>
             <div className="flex items-center gap-2 mb-3">
               <SlidersHorizontal className="w-4 h-4" style={{ color: 'var(--gold)' }} />
-              <span className="text-sm font-bold" style={{ color: 'var(--gold)' }}>Select Instrument Type</span>
+              <span className="text-sm font-bold" style={{ color: 'var(--t0)' }}>Select the instrument type</span>
+              <div className="relative ml-auto w-48">
+                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3 h-3" style={{ color: 'var(--t2)' }} />
+                <input value={typeSearch} onChange={e => setTypeSearch(e.target.value)} placeholder="Filter types…"
+                  className="w-full pl-7 pr-2 py-1.5 rounded-lg text-xs" style={{ background: 'var(--s1)', border: '1px solid var(--b2)', color: 'var(--t0)', outline: 'none' }} />
+              </div>
             </div>
-            <div className="relative mb-3">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5" style={{ color: 'var(--t2)' }} />
-              <input value={typeSearch} onChange={e => setTypeSearch(e.target.value)} placeholder="Search types…"
-                className="w-full pl-9 pr-4 py-2 rounded-lg text-sm"
-                style={{ background: 'var(--s1)', border: '1px solid var(--b2)', color: 'var(--t0)', outline: 'none' }} />
+            <div className="overflow-x-auto rounded-xl" style={{ border: '1px solid var(--b1)' }}>
+              <table className="w-full text-xs min-w-[640px]">
+                <thead style={{ background: 'var(--s2)' }}><tr className="text-left" style={{ color: 'var(--t2)' }}>
+                  <th className="px-3 py-2 w-8" /><th className="px-3">Instrument type (IODB)</th><th className="px-3">Tags</th><th className="px-3">Datasheet template</th><th className="px-3">Match</th>
+                </tr></thead>
+                <tbody>
+                  {iodbAnalysis.groups.filter(g => g.instrument_type.toLowerCase().includes(typeSearch.toLowerCase())).map(g => {
+                    const tid = templateFor(g); const manual = typeTemplate[g.instrument_type] !== undefined && typeTemplate[g.instrument_type] !== g.template_id;
+                    const badge = MATCH_BADGE[manual ? 'manual' : (tid ? g.status : (g.status === 'ambiguous' ? 'ambiguous' : 'unmatched'))];
+                    const active = selectedType === g.instrument_type;
+                    return (
+                      <tr key={g.instrument_type} className="align-top" style={{ borderTop: '1px solid var(--b1)', background: active ? 'var(--em-dim)' : undefined }}>
+                        <td className="px-3 py-2"><input type="radio" checked={active} disabled={!tid} onChange={() => chooseGroup(g)} aria-label={`Select ${g.instrument_type}`} /></td>
+                        <td className="px-3 py-2"><span className="font-semibold" style={{ color: 'var(--t0)' }}>{g.instrument_type}</span>
+                          {g.duplicates.length > 0 && <span className="block text-[10px]" style={{ color: 'var(--gold)' }}>{g.duplicates.length} tag(s) on several IODB rows</span>}
+                          {g.matched_on === 'description' && <span className="block text-[10px]" style={{ color: 'var(--t2)' }}>matched from the description</span>}</td>
+                        <td className="px-3 py-2 font-mono">{g.tag_count}</td>
+                        <td className="px-3 py-2">
+                          <select value={tid} onChange={e => {
+                            const v = e.target.value; setTypeTemplate(m => ({ ...m, [g.instrument_type]: v }));
+                            if (active) { invalidateApproval('The datasheet template was changed.'); loadTemplate(v); }
+                          }} className="w-full px-2 py-1 rounded-md text-xs" style={{ background: 'var(--s1)', border: `1px solid ${tid ? 'var(--b2)' : 'var(--rose)'}`, color: 'var(--t0)' }}>
+                            <option value="">- no template -</option>
+                            {tid && !libraryList.some(t => t.id === tid) && <option value={tid}>{g.template_name || tid}</option>}
+                            {libraryList.map(t => <option key={t.id} value={t.id}>{t.display_name}</option>)}
+                          </select>
+                          {!tid && g.candidates.length > 0 && <span className="block text-[10px] mt-0.5" style={{ color: 'var(--t2)' }}>Closest: {g.candidates.map(c => c.name).join(', ')}</span>}
+                        </td>
+                        <td className="px-3 py-2"><span className="text-[11px] font-semibold" style={{ color: badge[1] }} title={g.reason}>{badge[0]}</span></td>
+                      </tr>);
+                  })}
+                </tbody>
+              </table>
             </div>
-            <div className="space-y-1.5 max-h-64 overflow-y-auto pr-1">
-              {filteredTypes.map(t => (
-                <button key={t} onClick={() => { setSelectedType(t); loadTags(t); }}
-                  className="w-full text-left px-3 py-2.5 rounded-xl text-sm transition-all"
-                  style={{ background: selectedType === t ? 'var(--em-dim)' : 'var(--s3)', border: `1px solid ${selectedType === t ? 'var(--em)' : 'var(--b1)'}`, color: selectedType === t ? 'var(--em-lt)' : 'var(--t1)' }}>
-                  {t}
-                </button>
-              ))}
-            </div>
-            {selectedType && (
-              <Button onClick={() => setStep(2)} className="mt-4 w-full">
-                Continue to Tag Selection <ChevronRight className="w-3.5 h-3.5" />
+            <p className="text-[11px] mt-2" style={{ color: 'var(--t2)' }}>A type without a template cannot be generated until you pick its template. Matches made by key words or from the description are listed for you to confirm - nothing is assigned silently.</p>
+            {selectedType && templateId && (
+              <Button onClick={() => setStep(2)} className="mt-4 w-full" disabled={busy || !templateInfo}>
+                Continue - {tags.length} tag(s) of {selectedType} <ChevronRight className="w-3.5 h-3.5" />
               </Button>
             )}
           </>)}
@@ -974,78 +1032,72 @@ export default function DataSheetGenerator() {
           <div className="flex gap-3">
             <Button variant="secondary" onClick={() => setStep(1)}>← Back</Button>
             <Button onClick={() => setStep(3)} disabled={selectedTags.length === 0} className="flex-1">
-              Upload Template <ChevronRight className="w-3.5 h-3.5" />
+              Datasheet template <ChevronRight className="w-3.5 h-3.5" />
             </Button>
           </div>
         </div>
       )}
 
-      {/* ── STEP 3: Template Upload + Sheet Selection ── */}
+      {/* ── STEP 3: Template from the library (loaded automatically) ── */}
       {step === 3 && (
         <div className="space-y-4">
           {card(<>
-            <label htmlFor="gen-format" className="eyebrow block mb-2">Datasheet generation format</label>
-            <select id="gen-format" value={genFormat} onChange={e => chooseFormat(e.target.value as GenFormat)}
-              className="w-full px-3 py-2.5 rounded-xl text-sm font-medium"
-              style={{ background: 'var(--s1)', border: `1px solid ${genFormat ? 'var(--b2)' : 'var(--em)'}`, color: 'var(--t0)', outline: 'none' }}>
-              <option value="" disabled>Select a format…</option>
-              <option value="CONSOLIDATED">{FORMAT_INFO.CONSOLIDATED.label}</option>
-              <option value="INDIVIDUAL">{FORMAT_INFO.INDIVIDUAL.label}</option>
-            </select>
-            <div className="grid sm:grid-cols-2 gap-2 mt-3">
-              {(['CONSOLIDATED', 'INDIVIDUAL'] as GenFormat[]).map(f => (
-                <button key={f} type="button" onClick={() => chooseFormat(f)} className="text-left rounded-xl px-3 py-2.5 transition-all"
-                  style={{ background: genFormat === f ? 'var(--em-dim)' : 'var(--s3)', border: `1px solid ${genFormat === f ? 'var(--em)' : 'var(--b1)'}` }}>
-                  <p className="text-xs font-semibold" style={{ color: 'var(--t0)' }}>{FORMAT_INFO[f].label}</p>
-                  <p className="text-[11px] mt-0.5 leading-snug" style={{ color: 'var(--t2)' }}>{FORMAT_INFO[f].desc}</p>
-                </button>
-              ))}
-            </div>
-            {!genFormat && <p className="text-[11px] mt-2" style={{ color: 'var(--t2)' }}>Choose a format to continue. Both use the same IODB, specification input, validation and approval.</p>}
-          </>)}
-          {card(<>
-            <div className="flex items-center gap-2 mb-4">
+            <div className="flex flex-wrap items-center gap-2 mb-4">
               <FileText className="w-4 h-4" style={{ color: 'var(--gold)' }} />
-              <span className="text-sm font-bold" style={{ color: 'var(--gold)' }}>Upload SOP Datasheet Template</span>
+              <span className="text-sm font-bold" style={{ color: 'var(--t0)' }}>Datasheet template</span>
+              <span className="text-xs ml-auto" style={{ color: 'var(--t2)' }}>Consolidated datasheet: main datasheet + tag-wise Annexure-I</span>
             </div>
-            <p className="text-xs mb-3" style={{ color: 'var(--t2)' }}>
-              Sheets named <strong>Cover Sheet, Index, Checklist, Spare</strong> are automatically ignored.
-              All other sheets are analyzed for spec fields.
-            </p>
-            <DropZone file={sopFile} onChange={f => f && loadDatasheets(f)} accept=".xlsx,.xls" label="Upload SOP template workbook" />
-
-            {datasheets.length > 0 && (
-              <div className="mt-4 space-y-2">
-                <p className="text-xs font-semibold mb-2" style={{ color: 'var(--t2)' }}>Select datasheet sheet:</p>
-                {datasheets.map(d => (
-                  <button key={d.sheet} onClick={() => loadFields(d.sheet)}
-                    className="w-full text-left px-3 py-2.5 rounded-xl text-xs transition-all"
-                    style={{ background: selectedDatasheet === d.sheet ? 'rgba(245,158,11,0.08)' : 'var(--s3)', border: `1px solid ${selectedDatasheet === d.sheet ? 'rgba(245,158,11,0.4)' : 'var(--b1)'}`, color: selectedDatasheet === d.sheet ? 'var(--gold)' : 'var(--t1)' }}>
-                    <span className="font-semibold">{d.title || d.sheet}</span>
-                    {d.eg_sheet && <span className="ml-2 opacity-60">{d.sheet}</span>}
-                  </button>
-                ))}
-                {fields.length > 0 && (
-                  <Alert variant="success">
-                    Loaded <strong>{fields.length}</strong> spec fields — {iodbFields.length} auto (green), {userFields.length} manual
-                  </Alert>
-                )}
-                {fields.length > 0 && genFormat === 'CONSOLIDATED' && (() => {
-                  const d = datasheets.find(x => x.sheet === selectedDatasheet);
-                  return d?.annexure_sheet
-                    ? <Alert variant="info">Annexure <strong>{d.annexure_sheet}</strong> found ({d.annexure_capacity} template row(s)) - it expands to one row per selected tag ({selectedTags.length}).</Alert>
-                    : <Alert variant="error">This SOP workbook has no tag-wise annexure for this datasheet. Upload the consolidated SOP workbook (datasheet that refers to an annexure sheet such as ANNEXURE-I, with a TAG NO column), or choose the individual format.</Alert>;
-                })()}
+            {!templateInfo && <p className="text-xs" style={{ color: 'var(--t2)' }}>{busy ? 'Loading the template…' : 'Select an instrument type with a template in step 1.'}</p>}
+            {templateInfo && (<>
+              <dl className="grid grid-cols-[auto,1fr] gap-x-4 gap-y-1 text-xs mb-4" style={{ color: 'var(--t1)' }}>
+                <dt style={{ color: 'var(--t2)' }}>Instrument type</dt><dd className="font-semibold" style={{ color: 'var(--t0)' }}>{selectedType}</dd>
+                <dt style={{ color: 'var(--t2)' }}>Template</dt><dd className="font-semibold" style={{ color: 'var(--t0)' }}>{templateInfo.display_name}
+                  <span className="font-normal" style={{ color: 'var(--t2)' }}> · {templateInfo.version} · {templateInfo.original_filename}</span></dd>
+                {templateInfo.title && <><dt style={{ color: 'var(--t2)' }}>Datasheet title</dt><dd>{templateInfo.title}</dd></>}
+                <dt style={{ color: 'var(--t2)' }}>Fields</dt><dd>{templateInfo.field_counts.common} common specifications · {templateInfo.field_counts.tag} tag-wise (Annexure-I){templateInfo.field_counts.vendor ? ` · ${templateInfo.field_counts.vendor} vendor` : ''}</dd>
+                <dt style={{ color: 'var(--t2)' }}>Annexure-I</dt><dd>{templateInfo.annexure.generated
+                  ? <span style={{ color: 'var(--gold)' }}>not in this template - iEZ builds it from the tag-wise rows ({templateInfo.annexure.columns} columns)</span>
+                  : <>{templateInfo.annexure.columns} columns · {templateInfo.annexure.capacity} formatted row(s) - expands to {selectedTags.length} tag row(s)</>}</dd>
+                <dt style={{ color: 'var(--t2)' }}>Output</dt><dd className="font-mono">{templateInfo.output_filename}</dd>
+              </dl>
+              <div className="flex flex-wrap gap-1.5">
+                {templateInfo.sheets.map(sh => (
+                  <span key={sh.role} className="text-[11px] px-2 py-0.5 rounded-full" title={sh.in_output ? 'Included in the generated workbook' : 'Used by iEZ, not part of the document'}
+                    style={{ border: '1px solid var(--b2)', color: sh.in_output ? 'var(--t0)' : 'var(--t2)', background: sh.in_output ? 'var(--s1)' : undefined }}>
+                    {sh.label}: "{sh.sheet}"{sh.in_output ? '' : ' · reference'}</span>))}
               </div>
-            )}
+              {!templateInfo.has_guide && (
+                <div className="mt-4">
+                  <p className="text-xs font-semibold mb-1" style={{ color: 'var(--t0)' }}>Tag-wise or common? <span className="font-normal" style={{ color: 'var(--t2)' }}>This template has no Engineering Guide - confirm where each field belongs.</span></p>
+                  <div className="max-h-56 overflow-y-auto rounded-lg" style={{ border: '1px solid var(--b1)' }}>
+                    {libFields.map(f => (
+                      <div key={f.key} className="flex items-center gap-2 px-3 py-1.5 text-xs" style={{ borderTop: '1px solid var(--b1)' }}>
+                        <span className="flex-1" style={{ color: 'var(--t1)' }}>{keyLabel(f.key)}</span>
+                        {(['tag', 'common'] as const).map(v => (
+                          <label key={v} className="flex items-center gap-1" style={{ color: 'var(--t2)' }}>
+                            <input type="radio" checked={(fieldScope[f.key] || f.scope) === v} onChange={() => {
+                              const sc = { ...fieldScope, [f.key]: v }; setFieldScope(sc); invalidateApproval('A field was moved between the datasheet and the annexure.'); loadTemplate(templateId, sc);
+                            }} />{v === 'tag' ? 'Annexure (per tag)' : 'Datasheet (common)'}</label>))}
+                      </div>))}
+                  </div>
+                </div>)}
+            </>)}
+          </>)}
+          {templateInfo && card(<>
+            <p className="text-sm font-bold mb-1" style={{ color: 'var(--t0)' }}>Document header</p>
+            <p className="text-xs mb-3" style={{ color: 'var(--t2)' }}>Replaces the template's XXXXXX placeholders (cover, index, datasheet, annexures). Leave a field empty to keep the placeholder.</p>
+            <div className="grid gap-2 sm:grid-cols-3">
+              {Object.entries(headerFields).map(([k, label]) => (
+                <label key={k} className="text-xs space-y-1" style={{ color: 'var(--t2)' }}>{label}
+                  <input value={header[k] || ''} onChange={e => setHeader(h => ({ ...h, [k]: e.target.value }))} className="w-full px-2.5 py-1.5 rounded-lg text-sm"
+                    style={{ background: 'var(--s1)', border: '1px solid var(--b2)', color: 'var(--t0)', outline: 'none' }} /></label>))}
+            </div>
           </>)}
 
           <div className="flex gap-3">
             <Button variant="secondary" onClick={() => setStep(2)}>← Back</Button>
-            <Button onClick={() => setStep(4)} className="flex-1"
-              disabled={!genFormat || !selectedDatasheet || fields.length === 0 ||
-                (genFormat === 'CONSOLIDATED' && !datasheets.find(x => x.sheet === selectedDatasheet)?.annexure_sheet)}>
-              Select Input Mode <ChevronRight className="w-3.5 h-3.5" />
+            <Button onClick={() => setStep(4)} className="flex-1" disabled={!templateInfo || fields.length === 0 || busy}>
+              Specifications <ChevronRight className="w-3.5 h-3.5" />
             </Button>
           </div>
         </div>
@@ -1111,7 +1163,7 @@ export default function DataSheetGenerator() {
               </div>
               <p className="text-sm font-bold mb-1.5" style={{ color: 'var(--t0)' }}>Manual Entry</p>
               <p className="text-xs leading-relaxed" style={{ color: 'var(--t1)' }}>
-                Select from predefined engineering values. Spec popup opens automatically with validated dropdown options for all fields.
+                {templateId ? 'Enter or confirm each specification yourself in the review table - the template values are pre-filled.' : 'Select from predefined engineering values. Spec popup opens automatically with validated dropdown options for all fields.'}
               </p>
             </button>
           </div>
@@ -1166,8 +1218,13 @@ export default function DataSheetGenerator() {
             </div>
           )}
 
+          {specMode === 'manual' && templateId && (
+            <div className="rounded-2xl p-5 text-xs" style={{ background: 'var(--s2)', border: '1px solid var(--b1)', color: 'var(--t1)' }}>
+              Every common specification of the template is listed in the review step with its Engineering Guide value pre-filled - type or change any value there.
+            </div>
+          )}
           {/* Manual mode — spec popup trigger */}
-          {specMode === 'manual' && (
+          {specMode === 'manual' && !templateId && (
             <div className="rounded-2xl p-5" style={{ background: 'var(--s2)', border: '1px solid var(--b1)' }}>
               {Object.keys(kbValues).filter(k => kbValues[k]).length > 0 ? (
                 <>
@@ -1208,7 +1265,7 @@ export default function DataSheetGenerator() {
           <div className="flex gap-3">
             <Button variant="secondary" onClick={() => setStep(3)}>← Back</Button>
             <Button onClick={buildReview}
-              disabled={specMode === null || (specMode === 'ai' && aiResults.length === 0) || (specMode === 'manual' && Object.values(kbValues).every(v => !v))}
+              disabled={specMode === null || (specMode === 'ai' && aiResults.length === 0) || (!templateId && specMode === 'manual' && Object.values(kbValues).every(v => !v))}
               className="flex-1">
               Review Specifications <ChevronRight className="w-3.5 h-3.5" />
             </Button>
@@ -1219,7 +1276,50 @@ export default function DataSheetGenerator() {
       {/* ── STEP 5: Review Specifications ── */}
       {step === 5 && (
         <div className="space-y-4">
-          {card(<>
+          {templateId && templateInfo && card(<>
+            <div className="flex flex-wrap items-center gap-2 mb-3">
+              <Eye className="w-4 h-4" style={{ color: 'var(--em)' }} />
+              <span className="text-sm font-bold" style={{ color: 'var(--t0)' }}>Review - {templateInfo.display_name}</span>
+              <span className="text-xs ml-auto" style={{ color: 'var(--t2)' }}>{selectedType} · {selectedTags.length} tag(s) · {templateInfo.output_filename}</span>
+            </div>
+            <div className="flex flex-wrap gap-1 mb-4 max-h-16 overflow-y-auto">{selectedTags.map(t => <span key={t} className="text-[10px] font-mono px-1.5 py-0.5 rounded" style={{ background: 'var(--s3)', color: 'var(--t1)' }}>{t}</span>)}</div>
+            <p className="text-[11px] mb-2" style={{ color: 'var(--t2)' }}>Main datasheet - common specifications. These exact values go for approval and into the datasheet; tag-wise rows show "REFER ANNEXURE-I".</p>
+            <div className="overflow-x-auto rounded-xl" style={{ border: '1px solid var(--b1)' }}>
+              <table className="w-full text-xs sm:min-w-[640px]">
+                <thead style={{ background: 'var(--s2)' }}><tr className="text-left" style={{ color: 'var(--t2)' }}>
+                  <th className="px-3 py-2 w-40 hidden sm:table-cell">Section</th><th className="px-3 py-2">Field</th><th className="px-3">Value</th><th className="px-3 w-32">Source</th></tr></thead>
+                <tbody>
+                  {libFields.map((f, i) => {
+                    const newSec = i === 0 || libFields[i - 1].section !== f.section;
+                    const vals = overrides[f.key] || f.defaults;
+                    const src = specSources[f.key] || f.origin;
+                    const [sl, sc] = SRC_LABEL[src] || [src, 'var(--t1)'];
+                    const empty = f.scope === 'common' && f.origin !== 'computed' && vals.every(v => !String(v || '').trim());
+                    return (
+                      <tr key={f.key} className="align-top" style={{ borderTop: newSec ? '1px solid var(--b2)' : '1px solid var(--b0, var(--b1))', opacity: f.scope === 'common' ? 1 : 0.7 }}>
+                        <td className="px-3 py-1.5 font-semibold hidden sm:table-cell" style={{ color: 'var(--t2)' }}>{newSec ? f.section : ''}</td>
+                        <td className="px-3 py-1.5" style={{ color: 'var(--t0)' }}>{newSec && <span className="sm:hidden block eyebrow mb-0.5">{f.section}</span>}{f.label}{f.source_note && <span className="block text-[10px]" style={{ color: 'var(--t2)' }} title="Engineering Guide source note">{f.source_note}</span>}</td>
+                        <td className="px-3 py-1.5">
+                          {f.scope !== 'common' ? <span className="font-mono text-[11px]" style={{ color: 'var(--t2)' }}>{f.scope === 'tag' ? 'REFER ANNEXURE-I (per tag)' : 'REFER ANNEXURE-II (spares)'}</span> : (
+                            <div className={f.value_cols.length > 1 ? 'grid grid-cols-3 gap-1' : ''}>
+                              {f.value_cols.map((_, k) => (
+                                <input key={k} value={vals[k] ?? ''} placeholder={f.sub_labels[k] || (f.origin === 'vendor' ? `e.g. ${f.example[0] || ''}` : f.origin === 'computed' ? `auto: ${selectedTags.length} NOS` : '')}
+                                  list={f.options?.length ? `opt-${i}` : undefined}
+                                  onChange={e => { const v = [...(overrides[f.key] || f.defaults)]; v[k] = e.target.value; setOverrides(o => ({ ...o, [f.key]: v })); setSpecSources(s2 => ({ ...s2, [f.key]: 'user' })); }}
+                                  className="w-full px-2 py-1 rounded-md text-xs" style={{ background: 'var(--s1)', border: `1px solid ${empty && f.origin !== 'vendor' ? 'var(--gold)' : 'var(--b2)'}`, color: 'var(--t0)', outline: 'none' }} />))}
+                              {f.options?.length > 0 && <datalist id={`opt-${i}`}>{f.options.filter(o => o !== 'Custom Value').map(o => <option key={o} value={o} />)}</datalist>}
+                            </div>)}
+                          {empty && <span className="text-[10px]" style={{ color: f.origin === 'vendor' ? 'var(--t2)' : 'var(--gold)' }}>{f.origin === 'vendor' ? 'filled after vendor selection' : 'missing - enter it or leave blank on purpose'}</span>}
+                        </td>
+                        <td className="px-3 py-1.5"><span className="text-[10px] font-bold" style={{ color: f.scope === 'common' ? sc : 'var(--ok)' }}>
+                          {f.scope === 'common' ? sl : 'IODB → Annexure'}{src === 'ai' && aiConf[f.key] !== undefined ? ` ${Math.round(aiConf[f.key] * 100)}%` : ''}</span></td>
+                      </tr>);
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </>)}
+          {!templateId && card(<>
             <div className="flex items-center gap-2 mb-4">
               <Eye className="w-4 h-4" style={{ color: 'var(--sky)' }} />
               <span className="text-sm font-bold" style={{ color: 'var(--sky)' }}>Review Specifications</span>
@@ -1276,18 +1376,18 @@ export default function DataSheetGenerator() {
             <div className="flex items-center gap-2 mb-3">
               <Shield className="w-4 h-4" style={{ color: 'var(--em)' }} />
               <span className="text-sm font-bold" style={{ color: 'var(--t0)' }}>Engineering validation</span>
-              {validation && <span className="text-xs ml-2" style={{ color: validation.counts.ERROR ? 'var(--rose)' : 'var(--t2)' }}>{validation.counts.ERROR} error(s) · {validation.counts.REVIEW} review item(s)</span>}
+              {validation && <span className="text-xs ml-2" style={{ color: validation.counts.ERROR ? 'var(--rose)' : 'var(--t2)' }}>{validation.counts.ERROR} error(s) · {validation.counts.REVIEW} review item(s){(validation.counts as any).INFO ? ` · ${(validation.counts as any).INFO} info` : ''}</span>}
               <button onClick={() => runValidation()} className="ml-auto text-xs px-3 py-1.5 rounded-lg flex items-center gap-1.5" style={{ background: 'var(--s3)', border: '1px solid var(--b2)', color: 'var(--t0)' }}>
                 {validating ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />} Re-check
               </button>
             </div>
-            {!validation && <p className="text-xs" style={{ color: 'var(--t2)' }}>{validating ? 'Checking tags, IODB data and template…' : (!sopFile || !iodbFile)
+            {!validation && <p className="text-xs" style={{ color: 'var(--t2)' }}>{validating ? 'Checking tags, IODB data and template…' : ((!sopFile && !templateId) || !iodbFile)
               ? 'The IODB and the SOP workbook have to be selected again after a page refresh (steps 1 and 3) - files are not kept by the browser.' : 'Not checked yet.'}</p>}
             {validation && validation.issues.length === 0 && <p className="text-xs" style={{ color: 'var(--ok)' }}>All checks passed.</p>}
             {validation && validation.issues.length > 0 && (
               <ul className="space-y-1 max-h-56 overflow-y-auto">
                 {validation.issues.map((i, k) => (
-                  <li key={k} className="text-xs flex gap-2" style={{ color: i.severity === 'ERROR' ? 'var(--rose)' : 'var(--gold)' }}>
+                  <li key={k} className="text-xs flex gap-2" style={{ color: i.severity === 'ERROR' ? 'var(--rose)' : i.severity === 'REVIEW' ? 'var(--gold)' : 'var(--t2)' }}>
                     <span className="font-semibold flex-shrink-0">{i.severity}</span><span style={{ color: 'var(--t1)' }}>{i.message}</span>
                   </li>))}
               </ul>
@@ -1317,6 +1417,19 @@ export default function DataSheetGenerator() {
                     </tbody>
                   </table>
                 </div>
+                {validation.annexure.preview.length > 0 && (<>
+                  <p className="text-xs font-semibold mt-4 mb-1" style={{ color: 'var(--t0)' }}>Annexure preview - first {validation.annexure.preview.length} of {validation.annexure.rows} tag row(s)</p>
+                  <div className="overflow-auto max-h-72 rounded-lg" style={{ border: '1px solid var(--b1)' }}>
+                    <table className="text-[11px] whitespace-nowrap">
+                      <thead style={{ background: 'var(--s2)' }}><tr>{validation.annexure.columns.map(c => <th key={c.col} className="text-left px-2 py-1.5 font-semibold" style={{ color: 'var(--t2)' }}>{c.label}</th>)}</tr></thead>
+                      <tbody>{validation.annexure.preview.map((r, k) => (
+                        <tr key={k} style={{ borderTop: '1px solid var(--b1)' }}>{validation.annexure!.columns.map(c => {
+                          const v = r[String(c.col)];
+                          return <td key={c.col} className="px-2 py-1 font-mono" style={{ color: v === null || v === undefined || v === '' ? 'var(--gold)' : 'var(--t0)' }}>{v === null || v === undefined || v === '' ? (c.kind === 'data' ? '—' : '') : String(v)}</td>;
+                        })}</tr>))}</tbody>
+                    </table>
+                  </div>
+                </>)}
               </div>
             )}
           </>)}
@@ -1580,7 +1693,7 @@ export default function DataSheetGenerator() {
             <p className="text-xs font-semibold mb-2" style={{ color: 'var(--t2)' }}>Output files:</p>
             {genFormat === 'CONSOLIDATED' ? (
               <div className="space-y-1">
-                <p className="text-xs font-mono" style={{ color: 'var(--em-lt)' }}>📄 {selectedDatasheet.replace(/[^A-Za-z0-9_-]+/g, '_')}_CONSOLIDATED_DATASHEET.xlsx</p>
+                <p className="text-xs font-mono" style={{ color: 'var(--em-lt)' }}>📄 {templateInfo?.output_filename || `${selectedDatasheet.replace(/[^A-Za-z0-9_-]+/g, '_')}_CONSOLIDATED_DATASHEET.xlsx`}</p>
                 <p className="text-xs" style={{ color: 'var(--t2)' }}>Main datasheet (common specifications) + annexure with {selectedTags.length} tag row(s)</p>
               </div>
             ) : (
@@ -1598,7 +1711,7 @@ export default function DataSheetGenerator() {
               {genStatus?.status === 'processing' && (
                 <>
                   <Loader2 className="w-10 h-10 animate-spin mx-auto mb-3" style={{ color: 'var(--em-lt)' }} />
-                  <p className="text-base font-bold" style={{ color: 'var(--t0)' }}>Generating {selectedTags.length} datasheet(s)…</p>
+                  <p className="text-base font-bold" style={{ color: 'var(--t0)' }}>{genFormat === 'CONSOLIDATED' ? `Generating the consolidated datasheet for ${selectedTags.length} tag(s)…` : `Generating ${selectedTags.length} datasheet(s)…`}</p>
                   <p className="text-xs mt-1" style={{ color: 'var(--t2)' }}>Filling templates with IODB + approved specs + vendor data</p>
                 </>
               )}
@@ -1608,7 +1721,7 @@ export default function DataSheetGenerator() {
                   <p className="text-base font-bold mb-1" style={{ color: '#4ade80' }}>
                     {(genStatus.result?.failed_tags?.length ?? 0) > 0
                       ? `${genStatus.result?.tag_count} of ${(genStatus.result?.tag_count ?? 0) + (genStatus.result?.failed_tags?.length ?? 0)} Datasheets Generated`
-                      : (genStatus.result?.tag_count ?? 0) === 1 ? '1 Datasheet Ready!' : `${genStatus.result?.tag_count ?? ''} Datasheets Ready!`}
+                      : genStatus.result?.format === 'CONSOLIDATED' ? `Consolidated datasheet ready - ${genStatus.result?.tag_count} tag(s)` : (genStatus.result?.tag_count ?? 0) === 1 ? '1 Datasheet Ready!' : `${genStatus.result?.tag_count ?? ''} Datasheets Ready!`}
                   </p>
                   <p className="text-xs mb-5" style={{ color: 'var(--t2)' }}>{genStatus.result?.message}</p>
                   {(genStatus.result?.failed_tags?.length ?? 0) > 0 && (
@@ -1619,7 +1732,7 @@ export default function DataSheetGenerator() {
                             <li key={f.tag}><span className="font-mono">{f.tag}</span> — {f.reason}</li>
                           ))}
                         </ul>
-                        <p className="text-xs mt-2">The ZIP below contains only the successful datasheets. Download it before retrying.</p>
+                        <p className="text-xs mt-2">{genFormat === 'CONSOLIDATED' ? 'These tags are not in the datasheet. Download it before retrying.' : 'The ZIP below contains only the successful datasheets. Download it before retrying.'}</p>
                         <Button variant="secondary" size="sm" className="mt-2" onClick={() => {
                           setSelectedTags(genStatus.result!.failed_tags!.map(f => f.tag));
                           setGenStatus(null);
@@ -1630,7 +1743,7 @@ export default function DataSheetGenerator() {
                     </div>
                   )}
                   <Button onClick={downloadZip} size="lg">
-                    <Download className="w-4 h-4" /> {(genStatus.result?.tag_count ?? 0) === 1 ? 'Download Datasheet (ZIP)' : 'Download Datasheets (ZIP)'}
+                    <Download className="w-4 h-4" /> {genStatus.result?.filename?.endsWith('.xlsx') ? `Download ${genStatus.result.filename}` : (genStatus.result?.tag_count ?? 0) === 1 ? 'Download Datasheet (ZIP)' : 'Download Datasheets (ZIP)'}
                   </Button>
                 </>
               )}
@@ -1639,7 +1752,7 @@ export default function DataSheetGenerator() {
               )}
               {!genStatus && (
                 <Button onClick={startGenerate} loading={busy} size="lg" className="mx-auto">
-                  <Download className="w-4 h-4" /> Generate {selectedTags.length} Datasheet(s)
+                  <Download className="w-4 h-4" /> {genFormat === 'CONSOLIDATED' ? `Generate consolidated datasheet (${selectedTags.length} tag(s))` : `Generate ${selectedTags.length} Datasheet(s)`}
                 </Button>
               )}
             </div>
@@ -1656,6 +1769,7 @@ export default function DataSheetGenerator() {
                 setSpecValues({}); setSpecSources({}); setApproval(null); setLocked(false);
                 setVendorScores(null); setSelectedVS(null); setGenStatus(null);
                 setGenFormat(''); setAnnexMap({}); setValidation(null); setRequestedFp(null); setApprovedFp(null); setPendingReqId(null); setReqStatus('idle');
+                setIodbAnalysis(null); setTypeTemplate({}); setTemplateId(''); setTemplateInfo(null); setHeader({}); setFieldScope({}); setAiConf({}); setOverrides({});
               }}>
                 New Datasheet
               </Button>
@@ -1675,11 +1789,14 @@ export default function DataSheetGenerator() {
       )}
       {showRaiseModal && (
         <RaiseRequestModal
-          tags={selectedTags} instrumentType={selectedType} specValues={specValues}
+          tags={selectedTags} instrumentType={selectedType}
+          specValues={templateId ? Object.fromEntries(libFields.filter(f => f.scope === 'common').map(f => [f.key, (overrides[f.key] || f.defaults).filter(Boolean).join(' / ')])) : specValues}
           extra={{
             display: { 'Datasheet Format': genFormat ? FORMAT_INFO[genFormat].label : '', 'Datasheet': selectedDatasheet,
+                       ...(templateInfo ? { 'Template': `${templateInfo.display_name} (${templateInfo.version})`, 'Output': templateInfo.output_filename } : {}),
                        'Validation': validation ? `${validation.counts.ERROR} error(s), ${validation.counts.REVIEW} review item(s)` : 'not run' },
             machine: { format: genFormat, datasheet: selectedDatasheet, overrides: effectiveOverrides(),
+                       template_id: templateId || null, instrument_type: selectedType, header, field_scope: fieldScope,
                        annexure_mapping: genFormat === 'CONSOLIDATED' ? currentMapping() : null,
                        review_items: (validation?.issues || []).map(i => i.message) },
           }}

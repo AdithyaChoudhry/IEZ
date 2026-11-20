@@ -890,6 +890,11 @@ def add_extra_sheets(out_wb, df, selected: list[str], schedule_sheet: Optional[s
         ref_wb = openpyxl.load_workbook(REFERENCE_PATH)
         ws, st = build_sheet(ref_wb, key, parts[key], info)
         copy_sheet(ws, out_wb, titles[key], index=at, drop_col=st.pop("drop_col", None))
+        from .cable_schedule_layout import EXTRA_SHEETS, extra_layout
+        if key in EXTRA_SHEETS:              # reference layout: red columns removed, Cable Length (M) before Remarks
+            lay = extra_layout(out_wb[titles[key]], SHEETS[key]["hdr"][0])
+            st["layout"] = {k: v for k, v in lay.items() if k != "warnings"}
+            st.setdefault("warnings", []).extend(lay.get("warnings", []))
         at += 1
         names.append(titles[key])
         st["sheet"] = titles[key]

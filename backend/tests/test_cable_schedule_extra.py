@@ -5,6 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import openpyxl
+from openpyxl.utils import get_column_letter
 import pandas as pd
 import pytest
 
@@ -184,25 +185,25 @@ def test_mcc_cable_shared_across_motors_is_one_block():
 
 # ── generated workbook ───────────────────────────────────────────────────────
 def test_generated_sheets_follow_the_reference_layout():
+    """MOV keeps the reference layout. MCC DI / MCC DO / VFD follow the 'Cable_Schedule-12' mark-up: the red columns
+    (PLC (To), CONTROL DESK TERMINALS, Signal Type) are removed and Cable Length (M) sits just before Remarks."""
     out, err, rep = run(["mcc_di", "mcc_do", "vfd", "mov"])
     assert err is None, err
     ref = openpyxl.load_workbook(X.REFERENCE_PATH)
-    for key, name in (("mcc_di", "MCC DI"), ("mcc_do", "MCC DO"), ("mov", "MOV")):
-        ws, rws = sheet(out, name), ref[X.SHEETS[key]["ref"]]
-        r1, r2 = X.SHEETS[key]["hdr"]
-        for r in range(8, r2 + 1):                                                  # header hierarchy
-            ref_row = [rws.cell(r, c).value for c in range(1, 40)]
-            if key.startswith("mcc"):                                                # "New Tag No" column removed
-                assert "new tag no" not in [str(v).lower() for v in [ws.cell(r, c).value for c in range(1, 40)]]
-                ref_row = [v for v in ref_row if str(v).lower() != "new tag no"]
-                assert [ws.cell(r, c).value for c in range(1, 40) if ws.cell(r, c).value is not None] == [v for v in ref_row if v is not None], (name, r)
-            else:
-                assert [ws.cell(r, c).value for c in range(1, 40)] == ref_row, (name, r)
+    ws, rws = sheet(out, "MOV"), ref[X.SHEETS["mov"]["ref"]]
+    for r in range(8, X.SHEETS["mov"]["hdr"][1] + 1):
+        assert [ws.cell(r, c).value for c in range(1, 40)] == [rws.cell(r, c).value for c in range(1, 40)], ("MOV", r)
+    for name in ("MCC DI", "MCC DO", "VFD (iEZ)"):
+        ws = sheet(out, name)
+        heads = [ws.cell(9, c).value for c in range(1, 40) if ws.cell(9, c).value and not ws.column_dimensions[get_column_letter(c)].hidden]
+        assert heads[-2:] == ["Cable Length (M)", "Remarks"], (name, heads)
+        assert not {"PLC (To)", "PLC  (To)", "CONTROL DESK TERMINALS", "Signal Type"} & set(heads), (name, heads)
+        assert "new tag no" not in [str(v).lower() for v in heads]
         assert len(ws._images) == 1                                                  # logo kept
     ws = sheet(out, "MCC DI")
     assert ws.print_area and ws["A11"].value == 1
     merged = {str(m) for m in ws.merged_cells.ranges}
-    assert "A11:A15" in merged and "E11:E15" in merged                              # one shared cable = one block (New Tag No column removed)
+    assert "A11:A15" in merged and "E11:E15" in merged                              # one shared cable = one block
 
 
 def test_all_existing_template_sheets_are_kept_and_names_never_collide():
@@ -272,10 +273,12 @@ def test_mcc_formulas_follow_the_removed_column():
     out, err, rep = run(["mcc_di"])
     ws = sheet(out, "MCC DI")
     refs = {c.coordinate: c.value for c in ws[11] if isinstance(c.value, str) and c.value.startswith("=")}
-    assert refs and all("#REF" not in v for v in refs.values())
+    assert refs and all("#REF" not in v and '""' not in v for v in refs.values())
     ref = openpyxl.load_workbook(X.REFERENCE_PATH)["MCC-DI"]
-    # reference: M11 reads separator AJ and PLC column O; after the removed column E they sit one column left
-    assert ref["M12"].value.startswith("=D12&AJ12&O12") and ws["L12"].value.startswith("=D12&AI12&N12")
+    assert ref["M12"].value.startswith("=D12&AJ12&O12")
+    # the ferrule no longer joins the removed PLC (To) / RIO PANEL / MAIN TB NAME columns: TAG/MCC NO-MTB-core
+    assert ws["L12"].value == '=D12&"/"&H12&"−"&I12&"−"&J12'
+    assert ws.max_column == [c.column for c in ws[9] if c.value == "Remarks"][0]      # Remarks is the last column
 
 
 def test_one_cable_per_pump_even_when_every_row_carries_its_own_tag():
@@ -292,11 +295,12 @@ def test_one_cable_per_pump_even_when_every_row_carries_its_own_tag():
     assert any("different" in w for w in rep["warnings"])
 
 
-def test_vfd_supports_di_do_ai_ao_and_keeps_signal_type():
+def test_vfd_supports_di_do_ai_ao_signal_rows():
     out, err, rep = run(["vfd"])
     ws = sheet(out, "VFD (iEZ)")
-    types = [ws.cell(r, 28).value for r in range(11, 17)]
-    assert sorted(types) == ["AI", "AO", "DI", "DI", "DI", "DO"]
+    tags = [ws.cell(r, 4).value for r in range(11, 17)]
+    assert len([t for t in tags if t]) == 6                                         # DI, DI, DI, DO, AI, AO rows all kept
+    assert "Signal Type" not in [ws.cell(9, c).value for c in range(1, 40)]         # removed per the reference mark-up
 
 
 def test_lcp_generated_only_when_data_exists():

@@ -517,6 +517,7 @@ def _run_generator(module: str, src: bytes, tmpl: bytes | None, params: dict
         out, name, err = process_cable_schedule(
             io.BytesIO(src), io.BytesIO(tmpl),
             params.get("jb_column") or "JUNCTION BOX", params.get("tag_column") or "TAG NO",
+            selected_jbs=params.get("selected_jbs") or None,
         )
         return out, name, err, None
     if module == "loop_wiring":

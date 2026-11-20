@@ -519,9 +519,13 @@ def generate_cable_schedule(
     extra_sheets: list | None = None,
     extra_report: dict | None = None,
     include_schedule: bool = True,
+    selected_jbs: list | None = None,
 ) -> tuple[bytes | None, str | None, str | None]:
     """
     Generate a Cable Schedule from IODB data using the uploaded template.
+
+    `selected_jbs` (optional): only these junction boxes; every tag of each selected JB is written, consecutively
+    and in IODB order. The finished sheets get the reference layout of utils.cable_schedule_layout.
 
     `extra_sheets` (optional, default None = exactly the behaviour before it existed): keys of the additional
     MCC DI / MCC DO / VFD / MOV / LCP sheets (utils.cable_schedule_extra) added after the schedule sheet.
@@ -649,6 +653,13 @@ def generate_cable_schedule(
                     break
         if tag_number_col_idx is not None:
             col_match[tag_column] = tag_number_col_idx
+        # ── the selected Junction Box column always fills the template's JB column (e.g. "JB TAG No.")
+        for h_txt, h_col in rev_hdr.items():
+            h_key = re.sub(r"[^a-z0-9]", "", h_txt)
+            if h_key in ("jbtagno", "jbtagnumber", "jbno", "junctionboxno", "junctionbox", "junctionboxtagno"):
+                if jb_column and jb_column in df.columns:
+                    col_match[jb_column] = h_col
+                break
 
         # ── Snapshot prototype block (template rows 9-11, ALL columns) ───────
         # proto[row_offset][col_idx] = cell_value_or_formula_string
@@ -671,6 +682,12 @@ def generate_cable_schedule(
             )
         work_df = df[valid].copy()
         work_df[jb_column] = work_df[jb_column].astype(str).str.strip()
+        if selected_jbs:
+            wanted = {str(j).strip() for j in selected_jbs if str(j).strip()}
+            missing = sorted(wanted - set(work_df[jb_column]))
+            if missing:
+                return None, None, f"Junction box(es) not found in the IODB: {', '.join(missing[:10])}."
+            work_df = work_df[work_df[jb_column].isin(wanted)]
 
         # Natural sort by JB column (ascending, handles mixed alpha-numeric)
         try:
@@ -678,7 +695,7 @@ def generate_cable_schedule(
                 lambda x: [int(t) if t.isdigit() else t.lower()
                            for t in re.split(r'(\d+)', x)]
             )
-            work_df = work_df.sort_values("_jb_key").drop(columns=["_jb_key"])
+            work_df = work_df.sort_values("_jb_key", kind="mergesort").drop(columns=["_jb_key"])   # stable: IODB order per JB
         except Exception:
             work_df = work_df.sort_values(jb_column)
 
@@ -736,6 +753,7 @@ def generate_cable_schedule(
         jb_order     = list(dict.fromkeys(work_df[jb_column]))  # preserves sort order, deduped
         total        = len(jb_order)
         seen_tags: dict[str, int] = {}   # tag_value → first output row (dedup log)
+        block_jbs: list[str] = []        # junction box of every written entry, in output order (TB numbering)
         tag_warnings: list[str]   = []   # empty-TAG-NO warnings
 
         for jb_idx, jb_name in enumerate(jb_order):
@@ -821,6 +839,7 @@ def generate_cable_schedule(
                     except Exception:
                         continue
 
+                block_jbs.append(str(jb_name))
                 sl_no      += 1
                 current_row += ROWS_PER_TAG
 
@@ -881,6 +900,14 @@ def generate_cable_schedule(
         except Exception:
             # non-fatal
             pass
+
+        # ── Reference layout: red columns removed, 3-row entries, TB 1-2-3 per tag, combined ferrule ──
+        if include_schedule:
+            from utils.cable_schedule_layout import instrument_layout
+            _layout = instrument_layout(out_ws, CABLE_SCHEDULE_HEADER_ROW, CABLE_SCHEDULE_FIRST_DATA_ROW, ROWS_PER_TAG,
+                                        block_jbs=block_jbs)
+            if extra_report is not None:
+                extra_report["layout"] = _layout
 
         # ── Apply full-cell borders to the generated schedule sheet ONLY ───
         # (the template's other sheets - cover, document control, ... - stay exactly as supplied)

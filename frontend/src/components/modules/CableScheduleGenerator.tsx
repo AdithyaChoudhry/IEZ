@@ -26,6 +26,7 @@ interface ColumnsResponse {
 interface JBSummaryRow {
   junction_box: string;
   tag_count: number;
+  tags?: string[];          // every tag of the JB, in IODB order (written consecutively in the schedule)
 }
 
 interface JBSummaryResponse {
@@ -50,6 +51,8 @@ export default function CableScheduleGenerator() {
   const [jbColumn, setJbColumn] = useState('');
   const [tagColumn, setTagColumn] = useState('');
   const [jbSummary, setJbSummary] = useState<JBSummaryRow[] | null>(null);
+  const [selectedJbs, setSelectedJbs] = useState<string[]>([]);
+  const [openJb, setOpenJb] = useState<string | null>(null);
   const [result, setResult] = useState<GenerateResponse | null>(null);
   // Instrument Cable Schedule group: the schedule (default on) + optional MCC DI / MCC DO / VFD / MOV / LCP sheets
   const [view, setView] = useState<'schedule' | 'drum' | 'gland' | 'lug' | 'complete'>('schedule');
@@ -108,6 +111,8 @@ export default function CableScheduleGenerator() {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
       setJbSummary(response.data.rows);
+      setSelectedJbs(response.data.rows.map(r => r.junction_box));
+      setOpenJb(null);
     } catch (err: any) {
       setError(err.response?.data?.detail || 'Failed to build junction box summary');
     } finally {
@@ -137,6 +142,7 @@ export default function CableScheduleGenerator() {
     formData.append('output_mode', cableOutputMode);
     formData.append('extra_sheets', extraSheets.join(','));
     formData.append('include_schedule', String(includeSchedule));
+    if (includeSchedule && jbSummary && selectedJbs.length < jbSummary.length) formData.append('selected_jbs', JSON.stringify(selectedJbs));
 
     try {
       const response = await api.post<GenerateResponse>('/cable-schedule/generate', formData, {
@@ -353,22 +359,40 @@ export default function CableScheduleGenerator() {
 
       {/* JB Summary */}
       {includeSchedule && jbSummary && (
-        <Card title={`Junction Box Summary (${jbSummary.length} JBs, ${totalTags} tags)`}>
+        <Card title={`Junction Boxes (${selectedJbs.length} of ${jbSummary.length} selected · ${jbSummary.filter(r => selectedJbs.includes(r.junction_box)).reduce((n, r) => n + r.tag_count, 0)} of ${totalTags} tags)`}>
+          <p className="text-xs mb-2" style={{ color: 'var(--t2)' }}>
+            Every tag of a selected junction box is written, one after another (IODB order), each with TB 1-2-3, 4-5-6, ... at that JB.
+          </p>
+          <div className="flex gap-3 mb-2 text-xs">
+            <button className="underline" style={{ color: 'var(--t1)' }} onClick={() => { setSelectedJbs(jbSummary.map(r => r.junction_box)); setResult(null); }}>Select all</button>
+            <button className="underline" style={{ color: 'var(--t1)' }} onClick={() => { setSelectedJbs([]); setResult(null); }}>Clear</button>
+          </div>
           <div className="border border-gray-200 rounded-lg overflow-auto max-h-96">
             <table className="w-full text-sm">
               <thead className="bg-gray-50 sticky top-0">
                 <tr>
+                  <th className="px-3 py-2 w-8" />
                   <th className="px-3 py-2 text-left font-medium text-gray-700">Junction Box</th>
-                  <th className="px-3 py-2 text-left font-medium text-gray-700">Tag Count</th>
+                  <th className="px-3 py-2 text-left font-medium text-gray-700">Tags</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-200">
-                {jbSummary.map((row, idx) => (
-                  <tr key={idx} className="hover:bg-gray-50">
-                    <td className="px-3 py-2 text-gray-900 font-medium">{row.junction_box}</td>
-                    <td className="px-3 py-2 text-gray-700">{row.tag_count}</td>
-                  </tr>
-                ))}
+                {jbSummary.map((row) => {
+                  const on = selectedJbs.includes(row.junction_box);
+                  const open = openJb === row.junction_box;
+                  return (
+                    <tr key={row.junction_box} className="align-top hover:bg-gray-50">
+                      <td className="px-3 py-2"><input type="checkbox" checked={on} aria-label={`Include ${row.junction_box}`}
+                        onChange={() => { setSelectedJbs(s => on ? s.filter(x => x !== row.junction_box) : [...s, row.junction_box]); setResult(null); }} /></td>
+                      <td className="px-3 py-2 text-gray-900 font-medium">{row.junction_box}</td>
+                      <td className="px-3 py-2 text-gray-700">
+                        <button className="underline" onClick={() => setOpenJb(open ? null : row.junction_box)}>{row.tag_count} tag{row.tag_count === 1 ? '' : 's'}</button>
+                        {open && row.tags && <div className="mt-1 flex flex-wrap gap-1">{row.tags.map((t, i) => (
+                          <span key={`${t}-${i}`} className="font-mono text-[11px] px-1.5 py-0.5 rounded" style={{ background: 'var(--s3)' }}>{t} · TB {3 * i + 1}-{3 * i + 3}</span>))}</div>}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -376,7 +400,7 @@ export default function CableScheduleGenerator() {
           {/* Generate */}
           <Button
             onClick={handleGenerate}
-            disabled={!templateFile}
+            disabled={!templateFile || selectedJbs.length === 0}
             loading={generating}
             size="lg"
             fullWidth

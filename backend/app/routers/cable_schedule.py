@@ -5,6 +5,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, status
 from fastapi.responses import StreamingResponse
 import io
+import json
 
 from ..deps import get_current_user
 from ..auth.models import User
@@ -20,7 +21,7 @@ from ..models.cable_schedule import (
 # Import existing business logic
 import sys
 sys.path.insert(0, '/app')
-from utils.template_processor import get_iodb_columns, get_jb_summary, process_cable_schedule
+from utils.template_processor import get_iodb_columns, process_cable_schedule
 from utils import workbook_assembly as wa
 from utils.cable_summary import CABLE_SUMMARY_SHEET
 
@@ -52,13 +53,17 @@ async def preview_jb_summary(
     tag_column: str = Form(...),
     current_user: User = Depends(get_current_user),
 ):
-    """Return a junction box → tag count summary for the IODB file."""
+    """Junction boxes with ALL their tags (IODB order) - exactly the rows the Instrument Cable Schedule writes."""
+    from utils.file_handler import read_iodb
+    from utils.cable_schedule_layout import jb_groups
     file_bytes = await file.read()
-    rows, err = get_jb_summary(io.BytesIO(file_bytes), jb_column, tag_column)
-
+    df, err = read_iodb(io.BytesIO(file_bytes))
     if err:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=err)
-
+    try:
+        rows = jb_groups(df, jb_column, tag_column)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     return JBSummaryResponse(rows=rows)
 
 
@@ -167,6 +172,7 @@ async def generate_cable_schedule(
     output_mode: str = Form(wa.WITH_SUMMARY),  # WITHOUT_SUMMARY | WITH_SUMMARY
     extra_sheets: str = Form(""),              # optional: "MCC DI,MCC DO,VFD,MOV,LCP"
     include_schedule: bool = Form(True),       # False: only the extra sheets (needs extra_sheets)
+    selected_jbs: str = Form(""),              # optional JSON list / comma list of junction boxes (default: all)
     current_user: User = Depends(get_current_user),
 ):
     try:
@@ -180,6 +186,15 @@ async def generate_cable_schedule(
     if not include_schedule and not extras:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
                             detail="Select the Instrument Cable Schedule or at least one of MCC DI / MCC DO / VFD / MOV / LCP.")
+    jbs = None
+    if selected_jbs.strip():
+        try:
+            jbs = json.loads(selected_jbs) if selected_jbs.strip().startswith("[") else [x for x in selected_jbs.split(",")]
+            jbs = [str(x).strip() for x in jbs if str(x).strip()]
+        except ValueError:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid junction box selection.")
+        if not jbs:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Select at least one junction box.")
     iodb_bytes = await iodb_file.read()
     template_bytes = await template_file.read()
 
@@ -193,9 +208,12 @@ async def generate_cable_schedule(
         extra_sheets=extras or None,
         extra_report=extra_report,
         include_schedule=include_schedule,
+        selected_jbs=jbs,
     )
 
     reg_params = {"jb_column": jb_column, "tag_column": tag_column, "output_mode": output_mode}
+    if jbs:
+        reg_params["selected_jbs"] = jbs
     if extras:
         reg_params["extra_sheets"] = extras
         reg_params["include_schedule"] = include_schedule

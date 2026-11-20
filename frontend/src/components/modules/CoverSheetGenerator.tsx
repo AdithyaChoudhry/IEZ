@@ -24,6 +24,7 @@ import PageHeader from '../ui/PageHeader';
 import ConnectedDocuments, { type DocInfo } from './coversheet/ConnectedDocuments';
 import MdlSelector, { type MdlSelection, type MdlSummary } from './coversheet/MdlSelector';
 import TemplateCoverSheet from './coversheet/TemplateCoverSheet';
+import CoversheetBuilder from './coversheet/CoversheetBuilder';
 import { getCurrentProject } from '@/services/projectContext';
 import Button from '../ui/Button';
 import Alert from '../ui/Alert';
@@ -319,7 +320,7 @@ function CSRaiseRequestModal({
 // ── Main Component ─────────────────────────────────────────────────────────────
 export default function CoverSheetGenerator() {
   // 'existing' = the standard iEZ workflow (default, unchanged); 'template' = use an uploaded Excel coversheet.
-  const [mode, setMode] = useState<'existing' | 'template'>('existing');
+  const [mode, setMode] = useState<'existing' | 'template' | 'builder'>('existing');
   const [projectInfo, setProjectInfo] = useState<ProjectInfo>(emptyProjectInfo);
   const [revisions, setRevisions] = useState<RevisionEntry[]>([emptyRevision()]);
   const setPI = (k: keyof ProjectInfo, v: string) => setProjectInfo(p => ({ ...p, [k]: v }));
@@ -577,7 +578,7 @@ export default function CoverSheetGenerator() {
 
   const modeSelector = (
     <div className="flex flex-wrap gap-2" role="radiogroup" aria-label="Coversheet workflow">
-      {([['existing', 'Existing iEZ Coversheet Workflow'], ['template', 'Use Uploaded Excel Coversheet Template']] as const).map(([k, label]) => (
+      {([['existing', 'Existing iEZ Coversheet Workflow'], ['template', 'Use Uploaded Excel Coversheet Template'], ['builder', 'MDL-Driven Coversheet (Excel / PDF Template)']] as const).map(([k, label]) => (
         <button key={k} role="radio" aria-checked={mode === k} onClick={() => setMode(k)}
           className="px-4 py-2 rounded-xl text-sm font-semibold"
           style={mode === k
@@ -588,6 +589,18 @@ export default function CoverSheetGenerator() {
       ))}
     </div>
   );
+
+  if (mode === 'builder') {
+    return (
+      <div className="sm:p-6 max-w-6xl mx-auto space-y-5">
+        <PageHeader icon={FileSpreadsheet} title="Cover Sheet Generator"
+          description="MDL (Excel or PDF) defines which document · your Excel or PDF template defines how it looks · you add revision, approvals and signatures" />
+        {modeSelector}
+        <CoversheetBuilder authorized={!!authInfo} requestAuth={() => setShowAuthModal(true)} />
+        {showAuthModal && <AdminVerifyModal onSuccess={handleAuthSuccess} onClose={() => setShowAuthModal(false)} />}
+      </div>
+    );
+  }
 
   if (mode === 'template') {
     return (

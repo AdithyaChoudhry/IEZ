@@ -64,7 +64,7 @@ function ConfBadge({ c }: { c: Confidence }) {
 }
 
 /** Draws the layout model the server built from the generated workbook (the same model the fallback PDF uses). */
-function ModelPreview({ model }: { model: Model }) {
+export function ModelPreview({ model }: { model: Model }) {
   const wrap = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(1);
   useEffect(() => {

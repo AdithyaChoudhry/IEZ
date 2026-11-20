@@ -31,6 +31,7 @@ pytesseract>=0.3.10
 pdf2image>=1.17.0
 Pillow>=10.0.0
 pdfplumber>=0.11.0
+pypdf>=4.0.0               # Coversheet Builder: PDF templates are filled with an overlay
 
 # IODB comparison PDF report
 reportlab>=4.0.0

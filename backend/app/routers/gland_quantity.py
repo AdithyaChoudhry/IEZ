@@ -14,6 +14,7 @@ import time
 import uuid
 from typing import Optional
 
+from utils.xlsx_trim import trim_empty_tail
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import StreamingResponse
 
@@ -42,7 +43,7 @@ def _bad(msg: str, code: int = status.HTTP_400_BAD_REQUEST):
 
 
 async def _read(upload: UploadFile, what: str) -> bytes:
-    data = await upload.read()
+    data = trim_empty_tail(await upload.read())
     if not data:
         _bad(f"The {what} file is empty.")
     if len(data) > MAX_BYTES:

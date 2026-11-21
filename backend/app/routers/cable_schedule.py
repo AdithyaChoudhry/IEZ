@@ -2,6 +2,7 @@
 Cable Schedule Generator router.
 """
 from typing import Optional
+from utils.xlsx_trim import trim_empty_tail
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, status
 from fastapi.responses import StreamingResponse
 import io
@@ -37,7 +38,7 @@ async def get_columns(
     current_user: User = Depends(get_current_user),
 ):
     """Read the IODB file and return its column names for JB/Tag column mapping."""
-    file_bytes = await file.read()
+    file_bytes = trim_empty_tail(await file.read())
     columns, err = get_iodb_columns(io.BytesIO(file_bytes))
 
     if err:
@@ -56,7 +57,7 @@ async def preview_jb_summary(
     """Junction boxes with ALL their tags (IODB order) - exactly the rows the Instrument Cable Schedule writes."""
     from utils.file_handler import read_iodb
     from utils.cable_schedule_layout import jb_groups
-    file_bytes = await file.read()
+    file_bytes = trim_empty_tail(await file.read())
     df, err = read_iodb(io.BytesIO(file_bytes))
     if err:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=err)
@@ -116,7 +117,7 @@ async def extra_sheet_availability(
 ):
     """Which of MCC DI / MCC DO / VFD / MOV / LCP can be built from this IODB (counts, warnings, reasons)."""
     from utils.cable_schedule_extra import ExtraSheetError, availability
-    df = _extra_frame(await iodb_file.read())
+    df = _extra_frame(trim_empty_tail(await iodb_file.read()))
     try:
         return availability(df)
     except ExtraSheetError as e:
@@ -132,7 +133,7 @@ async def extra_sheet_preview(
     """Real preview of the selected extra sheets (rows come from the IODB, nothing is stored)."""
     from utils.cable_schedule_extra import ExtraSheetError, preview
     extras = _parse_extras(extra_sheets)
-    df = _extra_frame(await iodb_file.read())
+    df = _extra_frame(trim_empty_tail(await iodb_file.read()))
     try:
         return preview(df, extras)
     except ExtraSheetError as e:
@@ -151,7 +152,7 @@ async def cable_schedule_composition(
     try:
         mode = wa.normalize_mode(output_mode)
         extras = _parse_extras(extra_sheets)
-        data = await template_file.read()
+        data = trim_empty_tail(await template_file.read())
         return CompositionResponse(output_mode=mode, sheets=[CompositionSheet(**s)
                                    for s in _composition(data, mode, extras, include_schedule or not extras)])
     except ValueError as e:
@@ -195,8 +196,8 @@ async def generate_cable_schedule(
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid junction box selection.")
         if not jbs:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Select at least one junction box.")
-    iodb_bytes = await iodb_file.read()
-    template_bytes = await template_file.read()
+    iodb_bytes = trim_empty_tail(await iodb_file.read())
+    template_bytes = trim_empty_tail(await template_file.read())
 
     extra_report: dict = {}
     out_bytes, filename, err = process_cable_schedule(

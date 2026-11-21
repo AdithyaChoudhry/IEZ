@@ -220,6 +220,37 @@ def _clean(v: Any) -> str:
     return "" if s.lower() in ("nan", "none") else re.sub(r"\s+", " ", s)
 
 
+# ── instrument vs. non-instrument IODB entries ──────────────────────────────────────────────────────────────────
+# The IODB lists every I/O point: motors (commands, feedbacks, speed), valves (open / close commands, status),
+# DCS soft points (alarms, indications, fault flags) and the field instruments. Only field instruments get a
+# datasheet, so only they are offered for selection.
+_NOT_INSTRUMENT = {
+    "motor", "motors", "pump", "blower", "agitator", "compressor", "conveyor", "chute", "loading", "button", "lamp",
+    "electromagnet", "command", "cmd", "feedback", "status", "permissive", "start", "stop", "strat", "trip", "ready",
+    "running", "run", "speed", "setpoint", "reference", "valve", "valves", "positioner", "postioner", "mov", "xv", "vfd",
+    "mcc", "starter", "alarm", "alatm", "alarms", "fault", "indication", "indidation", "totaliser", "totalizer",
+    "current", "profibus", "modbus", "local", "remote", "interlock", "heater", "fan", "damper", "actuator", "solenoid",
+}
+_INSTRUMENT = {
+    "transmitter", "element", "switch", "swtich", "gauge", "indicator", "indicatoe", "rotameter", "rota", "analyzer",
+    "analyser", "meter", "orifice", "flume", "sensor", "probe", "thermocouple", "rtd", "thermowell", "venturi",
+    "detector", "glass", "radar", "ultrasonic", "manometer", "thermometer", "hygrometer", "density", "conductivity",
+}
+
+
+def is_instrument_type(text: Any) -> bool:
+    """True for a field instrument type (transmitter, switch, gauge, element ...), False for motors, valves,
+    commands / feedbacks and DCS soft points (alarms, indications, fault flags)."""
+    toks = set(norm_type(text).replace("/", " ").split())
+    expanded = type_tokens(text)
+    if toks & _NOT_INSTRUMENT:
+        return False
+    if (toks | expanded) & _INSTRUMENT:
+        return True
+    m = match_type(text)
+    return m["status"] in ("exact", "alias")
+
+
 def analyze_iodb(iodb_bytes: bytes) -> dict:
     df, err = _load_iodb_df(iodb_bytes)
     if err or df is None:
@@ -232,6 +263,7 @@ def analyze_iodb(iodb_bytes: bytes) -> dict:
     if not cols["type"] and not cols["name"] and not cols["description"]:
         raise LibraryError("The IODB has no INSTRUMENT TYPE, INSTRUMENT NAME or DESCRIPTION column.")
     groups: dict[str, dict] = {}
+    hidden: dict[str, set] = {}
     for _, row in df.iterrows():
         tag = _clean(row.get(cols["tag"]))
         if not tag:
@@ -241,6 +273,10 @@ def analyze_iodb(iodb_bytes: bytes) -> dict:
                                     _clean(row.get(cols["description"])) if cols["description"] else "") if x)
         key = typ or (f"(no type) {desc}" if desc else "")
         if not key:
+            continue
+        if not is_instrument_type(typ or desc):
+            h = hidden.setdefault(typ or desc, set())
+            h.add(tag)
             continue
         g = groups.setdefault(key, {"instrument_type": typ or desc, "type_blank": not typ, "tags": [], "seen": {},
                                     "descriptions": {}})
@@ -274,7 +310,10 @@ def analyze_iodb(iodb_bytes: bytes) -> dict:
                     "descriptions": sorted(g["descriptions"], key=g["descriptions"].get, reverse=True)[:3]})
     out.sort(key=lambda g: (g["template_id"] is None, g["instrument_type"].lower()))
     return {"columns": cols, "rows": int(len(df)), "groups": out,
-            "supported": sum(1 for g in out if g["template_id"]), "unsupported": [g["instrument_type"] for g in out if not g["template_id"]]}
+            "supported": sum(1 for g in out if g["template_id"]), "unsupported": [g["instrument_type"] for g in out if not g["template_id"]],
+            "hidden": sorted(({"instrument_type": k, "tag_count": len(v)} for k, v in hidden.items()),
+                             key=lambda x: x["instrument_type"].lower()),
+            "hidden_tags": sum(len(v) for v in hidden.values())}
 
 
 # ── field rules from the Example / Engineering Guide ─────────────────────────────────────────────────────────────
@@ -321,7 +360,79 @@ def _learned_tag_labels(mtime: float) -> frozenset:
     return frozenset(out)
 
 
-def fields_for(t: dict, field_scope: Optional[dict] = None) -> tuple[list[LibField], dict]:
+# ── manual-entry dropdown options ───────────────────────────────────────────────────────────────────────────────
+# Options come only from engineering sources: the template's own Engineering Guide value, the values the OTHER library
+# templates' Engineering Guides use for the same field, and the generic datasheet_kb.json lists. The kb lists for
+# "type", "sensor type", accuracy etc. are radar-specific, so they are offered only on radar templates.
+_RADAR_ONLY_KB = {"type", "sensor type", "frequency range", "beam angle", "accuracy", "repeatability",
+                  "temperature compensation", "mounting position", "process connection moc"}
+_GENERIC_LABELS = {"type", "material", "size", "rating", "range", "model", "model no", "connection", "mounting", "service"}
+_NOT_A_VALUE = re.compile(r"refer\s*annexure|^\s*[xX]+\s*$|^\s*-+\s*$|^\s*$")
+
+
+def _opt_key(label: str) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"\(.*?\)", "", str(label or "")).lower().replace("&", " and ")).strip(" :.-")
+
+
+@lru_cache(maxsize=4)
+def _guide_values(mtime: float) -> dict[str, dict[str, list[str]]]:
+    """{label key: {template id: [Engineering Guide values]}} across the library (common, non-vendor fields)."""
+    out: dict[str, dict[str, list[str]]] = {}
+    for t in library():
+        try:
+            lf, info = fields_for(t, _with_options=False)
+        except Exception:                                         # pragma: no cover - a broken template is reported elsewhere
+            continue
+        if info.get("derived"):
+            continue
+        for f in lf:
+            if f.scope != "common" or f.origin in ("vendor", "computed"):
+                continue
+            vals = [re.sub(r"\s+", " ", str(v)).strip() for v in f.example if not _NOT_A_VALUE.search(str(v or ""))]
+            if vals:
+                for k in {_opt_key(f.spec.label), f"{_opt_key(f.spec.section)}|{_opt_key(f.spec.label)}"}:
+                    bucket = out.setdefault(k, {}).setdefault(t["id"], [])
+                    bucket.extend(v for v in vals if v not in bucket)
+    return out
+
+
+def field_options(t: dict, f: "LibField") -> list[str]:
+    from .sop_datasheet import load_kb as _load_kb, normalize as _kbnorm, CUSTOM_VALUE
+    if f.scope != "common" or f.origin == "computed":
+        return []
+    key = _opt_key(f.spec.label)
+    opts: list[str] = []
+
+    def add(v):
+        v = re.sub(r"\s+", " ", str(v or "")).strip()
+        if v and not _NOT_A_VALUE.search(v) and v != CUSTOM_VALUE and v.lower() not in {o.lower() for o in opts}:
+            opts.append(v)
+    for v in f.spec.defaults:
+        add(v)
+    for v in f.example:
+        add(v)
+    if f.origin != "vendor":
+        same_cat = {x["id"] for x in library() if x.get("category") == t.get("category")}
+        if key in _GENERIC_LABELS:                                # "Type", "Material" ... mean different things per section
+            gv = {i: v for i, v in _guide_values(_lib_path().stat().st_mtime).get(f"{_opt_key(f.spec.section)}|{key}", {}).items()
+                  if i in same_cat}
+        else:
+            gv = _guide_values(_lib_path().stat().st_mtime).get(key, {})
+        for tid in sorted(gv, key=lambda i: (i != t["id"], i not in same_cat, i)):
+            for v in gv[tid]:
+                add(v)
+    try:
+        kb = _load_kb()
+    except Exception:                                             # pragma: no cover
+        kb = {}
+    kb_key = _kbnorm(f.spec.label)
+    if kb_key in kb and (kb_key not in _RADAR_ONLY_KB or "radar" in t["id"]):
+        for v in kb[kb_key]:
+            add(v)
+    return opts + [CUSTOM_VALUE] if opts else []
+
+
+def fields_for(t: dict, field_scope: Optional[dict] = None, _with_options: bool = True) -> tuple[list[LibField], dict]:
     """Field rules of a template. `field_scope` ({key: tag|common}) corrects tag-wise/common for templates without a guide."""
     sheets = sheets_of(t)
     roles = roles_for(t)
@@ -408,6 +519,11 @@ def fields_for(t: dict, field_scope: Optional[dict] = None) -> tuple[list[LibFie
                                input_type=spec.input_type if spec.input_type != "iodb" else "text")
                 origin = "input" if not any(spec.defaults) else "template"
         out.append(LibField(spec, scope, origin, note, example, _unit(f.label)))
+    if _with_options:
+        for lf in out:
+            opts = field_options(t, lf)
+            lf.spec = replace(lf.spec, options=opts,
+                              input_type="dropdown" if opts else ("iodb" if lf.scope != "common" else "text"))
     return out, info
 
 
@@ -597,9 +713,41 @@ def output_filename(t: dict) -> str:
     return f"{code}_CONSOLIDATED_DATASHEET.xlsx"
 
 
+_SKIP_ASK = re.compile(r"remark", re.I)
+
+
+def apply_annexure_values(ann: SC.AnnexureSpec, tags: list[str], recs: list[dict[int, Any]],
+                          values: Optional[dict]) -> int:
+    """Fill annexure cells the IODB left blank with the values the engineer typed ({tag: {column: value}}).
+    An IODB value is never replaced. -> number of cells filled."""
+    n = 0
+    data_cols = {ac.col for ac in ann.columns if ac.kind == "data"}
+    for tag, rec in zip(tags, recs):
+        for col, v in ((values or {}).get(tag) or {}).items():
+            try:
+                c = int(col)
+            except (TypeError, ValueError):
+                continue
+            v = str(v if v is not None else "").strip()
+            if c in data_cols and v and rec.get(c) is None:
+                rec[c] = v
+                n += 1
+    return n
+
+
+def annexure_gaps(ann: SC.AnnexureSpec, tags: list[str], recs: list[dict[int, Any]]) -> list[dict]:
+    """Annexure cells still blank (remarks excepted): what the engineer is asked to enter."""
+    out = []
+    for tag, rec in zip(tags, recs):
+        for ac in ann.columns:
+            if ac.kind == "data" and not _SKIP_ASK.search(ac.label) and rec.get(ac.col) is None:
+                out.append({"tag": tag, "col": ac.col, "label": ac.label})
+    return out
+
+
 def generate(template_id: str, iodb_bytes: bytes, tags: list[str], overrides: Optional[dict] = None,
-             user_mapping: Optional[dict] = None, header: Optional[dict] = None, field_scope: Optional[dict] = None
-             ) -> tuple[Optional[bytes], str, Optional[str], list[dict]]:
+             user_mapping: Optional[dict] = None, header: Optional[dict] = None, field_scope: Optional[dict] = None,
+             annexure_values: Optional[dict] = None) -> tuple[Optional[bytes], str, Optional[str], list[dict]]:
     """One consolidated workbook from a copy of the library template. -> (bytes, filename, error, failed)."""
     from openpyxl import load_workbook
     from openpyxl.cell.cell import MergedCell
@@ -619,6 +767,7 @@ def generate(template_id: str, iodb_bytes: bytes, tags: list[str], overrides: Op
         return None, filename, "No datasheet generated - none of the selected tags is in the IODB.", failed
     mapping = SC.normalize_mapping(ctx.annexure, [str(c) for c in ctx.df.columns], user_mapping)
     recs = SC.annexure_records(ctx, present, mapping, rows)
+    apply_annexure_values(ctx.annexure, present, recs, annexure_values)
     src = template_bytes(t)
     wb = load_workbook(io.BytesIO(src))                           # an in-memory copy - the library file is only read
     keep = [lc.roles[r] for r in OUTPUT_ROLES if lc.roles.get(r)]
@@ -655,13 +804,32 @@ def generate(template_id: str, iodb_bytes: bytes, tags: list[str], overrides: Op
 # ── library-specific validation (added to sop_consolidated.validate) ─────────────────────────────────────────────
 def validate(template_id: str, iodb_bytes: bytes, tags: list[str], overrides: dict, user_mapping: Optional[dict],
              instrument_type: str = "", header: Optional[dict] = None, field_scope: Optional[dict] = None,
-             ai_confidence: Optional[dict] = None) -> dict:
+             ai_confidence: Optional[dict] = None, annexure_values: Optional[dict] = None) -> dict:
     lc = load_context(template_id, iodb_bytes, field_scope)
     res = SC.validate(lc.ctx, SC.CONSOLIDATED, tags, overrides, user_mapping)
     issues = res["issues"]
 
     def add(sev, code, msg, **kw):
         issues.append({"severity": sev, "code": code, "message": msg, **kw})
+
+    # Annexure data the IODB does not give is asked from the engineer: the blank cells are listed, typed values fill them.
+    if res.get("annexure") is not None:
+        a = lc.ctx.annexure
+        amap = SC.normalize_mapping(a, [str(c) for c in lc.ctx.df.columns], user_mapping)
+        arows, _, _ = SC._rows_for(lc.ctx, SC._unique(tags)[0])
+        present = [x for x in SC._unique(tags)[0] if x in arows]
+        recs = SC.annexure_records(lc.ctx, present, amap, arows)
+        filled = apply_annexure_values(a, present, recs, annexure_values)
+        gaps = annexure_gaps(a, present, recs)
+        issues[:] = [i for i in issues if i["code"] not in ("MISSING_TAG_DATA", "UNMAPPED_COLUMN")]
+        by_col: dict[str, list[str]] = {}
+        for g in gaps:
+            by_col.setdefault(g["label"], []).append(g["tag"])
+        for lab, ts in by_col.items():
+            add("REVIEW", "MISSING_TAG_DATA", f"'{lab}' is not in the IODB for {len(ts)} tag(s): {', '.join(ts[:8])}"
+                f"{' …' if len(ts) > 8 else ''} - enter it in the annexure table below or leave it blank on purpose.", field=lab)
+        res["annexure"].update(preview=[{str(k): v for k, v in r.items()} for r in recs[:10]], missing=gaps[:3000],
+                               missing_total=len(gaps), manual_filled=filled)
 
     t = lc.t
     if instrument_type:

@@ -48,7 +48,8 @@ type GenFormat = 'INDIVIDUAL' | 'CONSOLIDATED';
 interface LibField extends FieldSpec { key: string; scope: 'tag' | 'annexure2' | 'common'; origin: string; example: string[]; unit: string }
 interface IodbGroup { instrument_type: string; tag_count: number; tags: string[]; duplicates: string[]; template_id: string | null;
   template_name: string | null; status: string; candidates: { id: string; name: string }[]; reason: string; matched_on: string; descriptions: string[] }
-interface IodbAnalysis { groups: IodbGroup[]; rows: number; supported: number; unsupported: string[]; columns: Record<string, string | null> }
+interface IodbAnalysis { groups: IodbGroup[]; rows: number; supported: number; unsupported: string[]; columns: Record<string, string | null>;
+  hidden?: { instrument_type: string; tag_count: number }[]; hidden_tags?: number }
 interface TemplateInfo { id: string; code: string; display_name: string; category: string; version: string; original_filename: string; title: string;
   sheets: { role: string; label: string; sheet: string; in_output: boolean }[]; annexure: { sheet: string; columns: number; capacity: number; generated: boolean };
   field_counts: { total: number; tag: number; common: number; vendor: number }; has_guide: boolean; output_filename: string }
@@ -70,7 +71,8 @@ const FORMAT_INFO: Record<GenFormat, { label: string; desc: string }> = {
 interface VIssue { severity: 'ERROR' | 'REVIEW' | 'INFO'; code: string; message: string; tag?: string; field?: string }
 interface VResult { format: string; issues: VIssue[]; counts: { ERROR: number; REVIEW: number }; iodb_columns?: string[];
   annexure?: { sheet: string; capacity: number; rows: number; preview: Record<string, any>[];
-    columns: { col: number; label: string; kind: string; hidden: boolean; iodb_column: string | null }[] } }
+    columns: { col: number; label: string; kind: string; hidden: boolean; iodb_column: string | null }[];
+    missing?: { tag: string; col: number; label: string }[]; missing_total?: number; manual_filled?: number } }
 interface ApprovalInfo { approved_by: string; employee_id: string; role: string; date: string; time_log: string; }
 interface GenStatus { job_id: string; status: 'processing' | 'done' | 'error'; result?: { filename: string; tag_count: number; message: string; requested_count?: number; failed_tags?: { tag: string; reason: string }[]; format?: GenFormat }; error?: string; }
 
@@ -460,6 +462,144 @@ function validateSpecs(vals: Record<string, string>): string[] {
   return errs;
 }
 
+// ── Library templates: manual entry with dropdowns + checks ─────────────────────
+const CUSTOM = 'Custom Value';
+const isNA = (v: string) => /^\s*(n\.?a\.?|not applicable|-)\s*$/i.test(v);
+/** Format and consistency checks of the common specifications ({field key: error}). Blank values are not errors here -
+ *  they are flagged as "missing" in the review table and in the engineering validation. */
+function libSpecErrors(fields: LibField[], vals: Record<string, string[]>): Record<string, string> {
+  const errs: Record<string, string> = {};
+  const live = fields.filter(f => f.scope === 'common' && f.origin !== 'computed');
+  const valueOf = (f: LibField) => (vals[f.key] || f.defaults || []).map(v => String(v ?? '').trim());
+  const find = (re: RegExp) => live.find(f => re.test(f.label.toLowerCase()));
+  for (const f of live) {
+    const vs = valueOf(f);
+    const v = vs.filter(Boolean).join(' / ');
+    const lab = f.label.toLowerCase().replace(/\s+/g, ' ');
+    if (vs.some(x => x === CUSTOM)) { errs[f.key] = 'Enter the custom value.'; continue; }
+    if (!v || isNA(v)) continue;
+    if (/protection class|enclosure class|ingress|^enclosure$|ip rating/.test(lab) && !/\bIP\s?[0-6X][0-9X]\b|NEMA/i.test(v))
+      errs[f.key] = 'Enter an IP rating, e.g. IP 66 / IP 67 / IP 68.';
+    else if (/power supply|supply voltage/.test(lab) && !/\d\s*(-|–|to)?\s*\d*\s*V|loop\s*powered|battery/i.test(v))
+      errs[f.key] = 'A power supply needs a voltage, e.g. 24 VDC or 230 VAC.';
+    else if (/^output( signal)?$/.test(lab) && !/mA|HART|field\s*bus|profibus|modbus|pulse|relay|contact|digital|ethernet|profinet|SPDT|DPDT|\bNO\b|\bNC\b/i.test(v))
+      errs[f.key] = 'Output should be a signal, e.g. 4-20 mA HART, Foundation Fieldbus, Profibus PA or a relay contact.';
+    else if (/^(accuracy|repeatability)$/.test(lab) && !/\d/.test(v))
+      errs[f.key] = `${f.label} needs a number, e.g. ± 0.075% of span or ± 2 mm.`;
+    else if (/^(qty|quantity|spare qty|spare quantity)$/.test(lab) && !/^\d+(\.\d+)?\s*(nos?\.?|sets?|pcs)?$/i.test(v))
+      errs[f.key] = 'Quantity must be a number.';
+    else if (/frequency/.test(lab) && !/\d\s*(G|M|k)?Hz/i.test(v))
+      errs[f.key] = 'Frequency needs a value with its unit, e.g. 80 GHz.';
+    else if (/cable entry/.test(lab) && !/NPT|M\s?\d|PG\s?\d|"|inch|ET/i.test(v))
+      errs[f.key] = 'Cable entry should be a thread size, e.g. 1/2" NPT(F) or M20 x 1.5.';
+    else if (f.unit && !/\d/.test(v))
+      errs[f.key] = `Enter a number in ${f.unit}.`;
+  }
+  // consistency rules (kept from the original specification entry)
+  const proto = find(/communication|protocol/), out = find(/^output( signal)?$/);
+  if (proto && out && !errs[out.key]) {
+    const pv = valueOf(proto).join(' '), ov = valueOf(out).join(' ');
+    if (/hart/i.test(pv) && ov && !/hart/i.test(ov)) errs[out.key] = 'The HART protocol needs a HART output (e.g. 4-20 mA HART).';
+  }
+  const freq = find(/frequency/), ant = find(/antenna/);
+  if (freq && ant && !errs[ant.key]) {
+    const fv = valueOf(freq).join(' '), av = valueOf(ant).join(' ');
+    if (/80\s*GHz/i.test(fv) && av && !/horn|lens|planar/i.test(av)) errs[ant.key] = '80 GHz radar needs a horn, lens or planar antenna.';
+  }
+  const area = find(/area (certification|classification)|hazardous/);
+  if (area && !errs[area.key]) {
+    const v = valueOf(area).join(' ');
+    if (/zone\s*[0-2]|hazard|div(ision)?\s*[12]/i.test(v) && !/ex\s*[a-z]|atex|iecex|ccoe|peso|\bfm\b|csa|certif/i.test(v))
+      errs[area.key] = 'A hazardous area needs its certification (e.g. Ex ia IIC T4, ATEX, IECEx, CCOE).';
+  }
+  return errs;
+}
+
+/** One specification value: a dropdown of engineering options with "Custom Value" for anything else. */
+function SpecInput({ field, value, onChange, error, placeholder, compact }: {
+  field: LibField; value: string; onChange: (v: string) => void; error?: string; placeholder?: string; compact?: boolean;
+}) {
+  const opts = (field.options || []).filter(o => o !== CUSTOM);
+  const inList = !value || opts.some(o => o === value);
+  const [custom, setCustom] = useState(!inList || value === CUSTOM);
+  const border = error ? 'var(--rose)' : 'var(--b2)';
+  const cls = compact ? 'w-full px-2 py-1 rounded-md text-xs' : 'w-full px-3 py-2 rounded-xl text-sm';
+  const style = { background: 'var(--s1)', border: `1px solid ${border}`, color: 'var(--t0)', outline: 'none' } as const;
+  if (!opts.length) return <input value={value} placeholder={placeholder} onChange={e => onChange(e.target.value)} className={cls} style={style} />;
+  return (
+    <div className="space-y-1">
+      <select value={custom ? CUSTOM : value} className={cls} style={style}
+        onChange={e => { const v = e.target.value; if (v === CUSTOM) { setCustom(true); onChange(inList ? '' : value); } else { setCustom(false); onChange(v); } }}>
+        <option value="">Select…</option>
+        {opts.map(o => <option key={o} value={o}>{o.length > 90 ? `${o.slice(0, 88)}…` : o}</option>)}
+        <option value={CUSTOM}>Custom Value…</option>
+      </select>
+      {custom && <input value={value === CUSTOM ? '' : value} autoFocus placeholder={`Enter ${field.label.toLowerCase()}…`}
+        onChange={e => onChange(e.target.value)} className={cls} style={{ ...style, border: `1px solid ${error ? 'var(--rose)' : 'var(--gold)'}` }} />}
+    </div>
+  );
+}
+
+function LibSpecPopup({ fields, initial, onClose, onConfirm, title }: {
+  fields: LibField[]; initial: Record<string, string[]>; title: string;
+  onClose: () => void; onConfirm: (vals: Record<string, string[]>, changed: string[]) => void;
+}) {
+  const live = fields.filter(f => f.scope === 'common' && f.origin !== 'computed');
+  const [vals, setVals] = useState<Record<string, string[]>>(() =>
+    Object.fromEntries(live.map(f => [f.key, [...(initial[f.key] || f.defaults).map(v => String(v ?? ''))]])));
+  const [touched, setTouched] = useState<Set<string>>(new Set());
+  const errs = useMemo(() => libSpecErrors(live, vals), [vals]); // eslint-disable-line react-hooks/exhaustive-deps
+  const nErr = Object.keys(errs).length;
+  const set = (k: string, i: number, v: string) => {
+    setVals(p => { const a = [...(p[k] || [])]; a[i] = v; return { ...p, [k]: a }; });
+    setTouched(t => new Set(t).add(k));
+  };
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3">
+      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
+      <div className="relative w-full max-w-3xl rounded-2xl overflow-hidden max-h-[92vh] flex flex-col" style={{ background: 'var(--s1)', border: '1px solid var(--b2)' }}>
+        <div className="px-5 py-4 flex items-center gap-3 flex-shrink-0" style={{ borderBottom: '1px solid var(--b1)' }}>
+          <SlidersHorizontal className="w-4 h-4" style={{ color: 'var(--gold)' }} />
+          <div className="min-w-0">
+            <p className="text-sm font-bold" style={{ color: 'var(--t0)' }}>Specification Entry - {title}</p>
+            <p className="text-[11px]" style={{ color: 'var(--t2)' }}>Select from the engineering values or choose "Custom Value". Tag-wise data comes from the IODB (Annexure-I).</p>
+          </div>
+          <button onClick={onClose} className="ml-auto opacity-50 hover:opacity-90" style={{ color: 'var(--t1)' }} aria-label="Close"><X className="w-4 h-4" /></button>
+        </div>
+        <div className="flex-1 overflow-y-auto p-5 space-y-5">
+          {[...new Set(live.map(f => f.section))].map(sec => (
+            <div key={sec}>
+              <p className="eyebrow mb-2">{sec}</p>
+              <div className="grid sm:grid-cols-2 gap-x-4 gap-y-3">
+                {live.filter(f => f.section === sec).map(f => (
+                  <div key={f.key}>
+                    <label className="block text-[11px] font-semibold mb-1" style={{ color: 'var(--t1)' }}>
+                      {f.label}{f.origin === 'vendor' && <span className="font-normal" style={{ color: 'var(--t2)' }}> · vendor (optional now)</span>}
+                      {f.origin === 'optional' && <span className="font-normal" style={{ color: 'var(--gold)' }}> · only if the tender asks</span>}
+                    </label>
+                    {f.value_cols.length > 1
+                      ? <div className="grid grid-cols-3 gap-1">{f.value_cols.map((_, i) => (
+                          <input key={i} value={vals[f.key]?.[i] ?? ''} placeholder={f.sub_labels[i] || ''} onChange={e => set(f.key, i, e.target.value)}
+                            className="w-full px-2 py-2 rounded-xl text-xs" style={{ background: 'var(--s1)', border: `1px solid ${errs[f.key] ? 'var(--rose)' : 'var(--b2)'}`, color: 'var(--t0)', outline: 'none' }} />))}</div>
+                      : <SpecInput field={f} value={vals[f.key]?.[0] ?? ''} error={errs[f.key]} onChange={v => set(f.key, 0, v)}
+                          placeholder={f.origin === 'vendor' && f.example[0] ? `e.g. ${f.example[0]}` : ''} />}
+                    {errs[f.key] && <p className="text-[10px] mt-0.5" style={{ color: 'var(--rose)' }}><AlertTriangle className="inline w-2.5 h-2.5 mr-0.5" />{errs[f.key]}</p>}
+                  </div>))}
+              </div>
+            </div>))}
+        </div>
+        <div className="px-5 py-4 flex flex-wrap items-center gap-3 flex-shrink-0" style={{ borderTop: '1px solid var(--b1)' }}>
+          {nErr > 0 && <p className="text-xs w-full" style={{ color: 'var(--rose)' }}>{nErr} value(s) need correcting before they can be applied.</p>}
+          <Button variant="secondary" onClick={onClose} className="flex-1">Cancel</Button>
+          <Button disabled={nErr > 0} onClick={() => onConfirm(vals, [...touched])} className="flex-1">
+            <CheckCircle2 className="w-3.5 h-3.5" /> Apply Specifications
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Main Component ─────────────────────────────────────────────────────────────
 export default function DataSheetGenerator() {
   const [step, setStep] = useState(1);
@@ -517,6 +657,8 @@ export default function DataSheetGenerator() {
   const [specValues, setSpecValues] = useState<Record<string, string>>({});
   const [specSources, setSpecSources] = useState<Record<string, SpecSource>>({});
   const [validErrs, setValidErrs] = useState<string[]>([]);
+  const [showLibPopup, setShowLibPopup] = useState(false);
+  const [annexValues, setAnnexValues] = useState<Record<string, Record<string, string>>>({});
   const [overrides, setOverrides] = useState<Record<string, string[]>>({});
 
   // Step 6 — approval
@@ -576,6 +718,7 @@ export default function DataSheetGenerator() {
         if (s.headerFields) setHeaderFields(s.headerFields);
         if (s.header) setHeader(s.header);
         if (s.fieldScope) setFieldScope(s.fieldScope);
+        if (s.annexValues) setAnnexValues(s.annexValues);
         if (s.aiConf) setAiConf(s.aiConf);
         if (s.typeTemplate) setTypeTemplate(s.typeTemplate);
       }
@@ -596,14 +739,14 @@ export default function DataSheetGenerator() {
         kbValues, iodbGreen, iodbConfirmed, overrides,
         vendorScores, selectedVS, approval, pendingReqId, reqStatus, genStatus,
         genFormat, annexMap, aiResults, requestedFp, approvedFp,
-        templateId, templateInfo, headerFields, header, fieldScope, aiConf, typeTemplate,
+        templateId, templateInfo, headerFields, header, fieldScope, aiConf, typeTemplate, annexValues,
       }));
     } catch { /* ignore */ }
   }, [step, instrumentTypes, selectedType, tags, selectedTags, selectedDatasheet,
       fields, specValues, specSources, kbValues, iodbGreen, iodbConfirmed, overrides,
       vendorScores, selectedVS, approval, pendingReqId, reqStatus, genStatus,
       genFormat, annexMap, aiResults, requestedFp, approvedFp,
-      templateId, templateInfo, headerFields, header, fieldScope, aiConf, typeTemplate]);
+      templateId, templateInfo, headerFields, header, fieldScope, aiConf, typeTemplate, annexValues]);
 
   const filteredTags = useMemo(() => tags.filter(t => t.toLowerCase().includes(tagSearch.toLowerCase())), [tags, tagSearch]);
   const iodbFields = useMemo(() => fields.filter(f => f.input_type === 'iodb'), [fields]);
@@ -627,7 +770,7 @@ export default function DataSheetGenerator() {
   };
   const templateFor = (g: IodbGroup) => typeTemplate[g.instrument_type] ?? g.template_id ?? '';
   const loadTemplate = async (id: string, scope?: Record<string, string>) => {
-    setTemplateId(id); setTemplateInfo(null); setFields([]); setOverrides({}); setAiConf({});
+    setTemplateId(id); setTemplateInfo(null); setFields([]); setOverrides({}); setAiConf({}); setAnnexValues({});
     if (!id) return;
     setBusy(true); clearError();
     try {
@@ -650,6 +793,8 @@ export default function DataSheetGenerator() {
     if (tid !== templateId || !templateInfo) loadTemplate(tid);
   };
   const libFields = fields as LibField[];
+  const libErrs = useMemo(() => (templateId ? libSpecErrors(libFields, overrides) : {}), [templateId, fields, overrides]); // eslint-disable-line react-hooks/exhaustive-deps
+  const annexValuesClean = () => Object.fromEntries(Object.entries(annexValues).map(([t, m]) => [t, Object.fromEntries(Object.entries(m).filter(([, v]) => String(v).trim()))]).filter(([, m]) => Object.keys(m as object).length));
 
   // ── Step 4: IODB green-field pre-load ────────────────────────────────────────
   useEffect(() => {
@@ -761,7 +906,7 @@ export default function DataSheetGenerator() {
     return m;
   };
   const fingerprint = () => JSON.stringify({ f: genFormat, t: [...selectedTags].sort(), d: selectedDatasheet, o: effectiveOverrides(),
-    m: genFormat === 'CONSOLIDATED' ? currentMapping() : {}, tid: templateId, h: header, sc: fieldScope });
+    m: genFormat === 'CONSOLIDATED' ? currentMapping() : {}, tid: templateId, h: header, sc: fieldScope, av: annexValuesClean() });
   const invalidateApproval = (why: string) => {
     if (!approval && reqStatus === 'idle' && !pendingReqId) return;
     if (reqPollRef.current) clearInterval(reqPollRef.current);
@@ -776,6 +921,7 @@ export default function DataSheetGenerator() {
       if (templateId) {
         fd.append('template_id', templateId); fd.append('header', JSON.stringify(header)); fd.append('field_scope', JSON.stringify(fieldScope));
         fd.append('ai_confidence', JSON.stringify(Object.fromEntries(Object.entries(aiConf).filter(([k]) => specSources[k] === 'ai'))));
+        fd.append('annexure_values', JSON.stringify(annexValuesClean()));
       } else fd.append('sop_file', sopFile!);
       fd.append('iodb_file', iodbFile);
       fd.append('datasheet_sheet', selectedDatasheet); fd.append('instrument_type', selectedType);
@@ -923,6 +1069,7 @@ export default function DataSheetGenerator() {
             {iodbAnalysis && (
               <p className="text-xs mt-3" style={{ color: 'var(--t2)' }}>
                 {iodbAnalysis.rows} rows · {iodbAnalysis.groups.length} instrument type(s) · <b style={{ color: 'var(--ok)' }}>{iodbAnalysis.supported} with a template</b>
+                {(iodbAnalysis.hidden?.length ?? 0) > 0 && <> · <span title={iodbAnalysis.hidden!.map(h => `${h.instrument_type} (${h.tag_count})`).join('\n')}>{iodbAnalysis.hidden!.length} non-instrument type(s) hidden (motors, valves, alarms, commands)</span></>}
                 {iodbAnalysis.unsupported.length > 0 && <> · <b style={{ color: 'var(--rose)' }}>{iodbAnalysis.unsupported.length} without</b></>}
                 {' '}· columns: {Object.entries(iodbAnalysis.columns).filter(([, v]) => v).map(([k, v]) => `${k} "${v}"`).join(', ')}
               </p>
@@ -1154,7 +1301,7 @@ export default function DataSheetGenerator() {
               </p>
             </button>
 
-            <button onClick={() => setSpecMode('manual')}
+            <button onClick={() => { setSpecMode('manual'); if (templateId && libFields.length) setShowLibPopup(true); }}
               className="rounded-2xl p-6 text-left transition-all"
               style={{ background: specMode === 'manual' ? 'rgba(59,130,246,0.08)' : 'var(--s2)', border: `1.5px solid ${specMode === 'manual' ? 'var(--em)' : 'var(--b1)'}` }}>
               <div className="w-10 h-10 rounded-xl flex items-center justify-center mb-4"
@@ -1163,7 +1310,7 @@ export default function DataSheetGenerator() {
               </div>
               <p className="text-sm font-bold mb-1.5" style={{ color: 'var(--t0)' }}>Manual Entry</p>
               <p className="text-xs leading-relaxed" style={{ color: 'var(--t1)' }}>
-                {templateId ? 'Enter or confirm each specification yourself in the review table - the template values are pre-filled.' : 'Select from predefined engineering values. Spec popup opens automatically with validated dropdown options for all fields.'}
+                {templateId ? 'Select each specification from predefined engineering values (dropdowns with Custom Value). Wrong entries are flagged before they are applied.' : 'Select from predefined engineering values. Spec popup opens automatically with validated dropdown options for all fields.'}
               </p>
             </button>
           </div>
@@ -1218,11 +1365,23 @@ export default function DataSheetGenerator() {
             </div>
           )}
 
-          {specMode === 'manual' && templateId && (
-            <div className="rounded-2xl p-5 text-xs" style={{ background: 'var(--s2)', border: '1px solid var(--b1)', color: 'var(--t1)' }}>
-              Every common specification of the template is listed in the review step with its Engineering Guide value pre-filled - type or change any value there.
-            </div>
-          )}
+          {specMode === 'manual' && templateId && (() => {
+            const live = libFields.filter(f => f.scope === 'common' && f.origin !== 'computed');
+            const filled = live.filter(f => (overrides[f.key] || f.defaults).some(v => String(v || '').trim())).length;
+            const nErr = Object.keys(libErrs).length;
+            return (
+              <div className="rounded-2xl p-5 flex flex-wrap items-center gap-3" style={{ background: 'var(--s2)', border: '1px solid var(--b1)' }}>
+                <div className="text-xs" style={{ color: 'var(--t1)' }}>
+                  <p><CheckCircle2 className="inline w-3 h-3 mr-1" style={{ color: 'var(--ok)' }} />{filled} of {live.length} specifications have a value</p>
+                  {nErr > 0 && <p className="mt-1" style={{ color: 'var(--rose)' }}><AlertTriangle className="inline w-3 h-3 mr-1" />{nErr} value(s) are wrongly entered - open the entry to correct them.</p>}
+                  <p className="mt-1" style={{ color: 'var(--t2)' }}>Tag-wise values (Annexure-I) come from the IODB; anything missing there is asked in the review step.</p>
+                </div>
+                <button onClick={() => setShowLibPopup(true)} className="ml-auto px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2"
+                  style={{ background: 'linear-gradient(135deg,var(--em),#1d4ed8)', color: '#fff' }}>
+                  <SlidersHorizontal className="w-3.5 h-3.5" /> {filled ? 'Edit Specifications' : 'Open Specification Entry'}
+                </button>
+              </div>);
+          })()}
           {/* Manual mode — spec popup trigger */}
           {specMode === 'manual' && !templateId && (
             <div className="rounded-2xl p-5" style={{ background: 'var(--s2)', border: '1px solid var(--b1)' }}>
@@ -1283,6 +1442,11 @@ export default function DataSheetGenerator() {
               <span className="text-xs ml-auto" style={{ color: 'var(--t2)' }}>{selectedType} · {selectedTags.length} tag(s) · {templateInfo.output_filename}</span>
             </div>
             <div className="flex flex-wrap gap-1 mb-4 max-h-16 overflow-y-auto">{selectedTags.map(t => <span key={t} className="text-[10px] font-mono px-1.5 py-0.5 rounded" style={{ background: 'var(--s3)', color: 'var(--t1)' }}>{t}</span>)}</div>
+            {validErrs.length > 0 && (
+              <div className="rounded-xl p-3 mb-3" style={{ background: 'rgba(244,63,94,0.08)', border: '1px solid rgba(244,63,94,0.3)' }}>
+                <p className="text-xs font-semibold mb-1 flex items-center gap-1.5" style={{ color: 'var(--rose)' }}><AlertTriangle className="w-3.5 h-3.5" /> Correct these values before raising the approval</p>
+                {validErrs.map((e, k) => <p key={k} className="text-xs" style={{ color: 'var(--rose)' }}>• {e}</p>)}
+              </div>)}
             <p className="text-[11px] mb-2" style={{ color: 'var(--t2)' }}>Main datasheet - common specifications. These exact values go for approval and into the datasheet; tag-wise rows show "REFER ANNEXURE-I".</p>
             <div className="overflow-x-auto rounded-xl" style={{ border: '1px solid var(--b1)' }}>
               <table className="w-full text-xs sm:min-w-[640px]">
@@ -1302,13 +1466,16 @@ export default function DataSheetGenerator() {
                         <td className="px-3 py-1.5">
                           {f.scope !== 'common' ? <span className="font-mono text-[11px]" style={{ color: 'var(--t2)' }}>{f.scope === 'tag' ? 'REFER ANNEXURE-I (per tag)' : 'REFER ANNEXURE-II (spares)'}</span> : (
                             <div className={f.value_cols.length > 1 ? 'grid grid-cols-3 gap-1' : ''}>
-                              {f.value_cols.map((_, k) => (
-                                <input key={k} value={vals[k] ?? ''} placeholder={f.sub_labels[k] || (f.origin === 'vendor' ? `e.g. ${f.example[0] || ''}` : f.origin === 'computed' ? `auto: ${selectedTags.length} NOS` : '')}
-                                  list={f.options?.length ? `opt-${i}` : undefined}
-                                  onChange={e => { const v = [...(overrides[f.key] || f.defaults)]; v[k] = e.target.value; setOverrides(o => ({ ...o, [f.key]: v })); setSpecSources(s2 => ({ ...s2, [f.key]: 'user' })); }}
-                                  className="w-full px-2 py-1 rounded-md text-xs" style={{ background: 'var(--s1)', border: `1px solid ${empty && f.origin !== 'vendor' ? 'var(--gold)' : 'var(--b2)'}`, color: 'var(--t0)', outline: 'none' }} />))}
-                              {f.options?.length > 0 && <datalist id={`opt-${i}`}>{f.options.filter(o => o !== 'Custom Value').map(o => <option key={o} value={o} />)}</datalist>}
+                              {f.value_cols.map((_, k) => {
+                                const setV = (nv: string) => { const v = [...(overrides[f.key] || f.defaults)]; v[k] = nv; setOverrides(o => ({ ...o, [f.key]: v })); setSpecSources(s2 => ({ ...s2, [f.key]: 'user' })); };
+                                const ph = f.sub_labels[k] || (f.origin === 'vendor' ? `e.g. ${f.example[0] || ''}` : f.origin === 'computed' ? `auto: ${selectedTags.length} NOS` : '');
+                                return f.value_cols.length === 1 && f.origin !== 'computed'
+                                  ? <SpecInput key={`${f.key}-${k}`} compact field={f} value={vals[k] ?? ''} onChange={setV} error={libErrs[f.key]} placeholder={ph} />
+                                  : <input key={k} value={vals[k] ?? ''} placeholder={ph} onChange={e => setV(e.target.value)}
+                                      className="w-full px-2 py-1 rounded-md text-xs" style={{ background: 'var(--s1)', border: `1px solid ${libErrs[f.key] ? 'var(--rose)' : empty && f.origin !== 'vendor' ? 'var(--gold)' : 'var(--b2)'}`, color: 'var(--t0)', outline: 'none' }} />;
+                              })}
                             </div>)}
+                          {libErrs[f.key] && <span className="block text-[10px]" style={{ color: 'var(--rose)' }}><AlertTriangle className="inline w-2.5 h-2.5 mr-0.5" />{libErrs[f.key]}</span>}
                           {empty && <span className="text-[10px]" style={{ color: f.origin === 'vendor' ? 'var(--t2)' : 'var(--gold)' }}>{f.origin === 'vendor' ? 'filled after vendor selection' : 'missing - enter it or leave blank on purpose'}</span>}
                         </td>
                         <td className="px-3 py-1.5"><span className="text-[10px] font-bold" style={{ color: f.scope === 'common' ? sc : 'var(--ok)' }}>
@@ -1430,6 +1597,59 @@ export default function DataSheetGenerator() {
                     </table>
                   </div>
                 </>)}
+                {templateId && (() => {
+                  const ann = validation.annexure!;
+                  const gaps = ann.missing || [];
+                  const colSet = new Set<number>(gaps.map(g => g.col));
+                  const tagSet = new Set<string>(gaps.map(g => g.tag));
+                  Object.entries(annexValues).forEach(([t, m]) => Object.entries(m).forEach(([c, v]) => { if (String(v).trim()) { colSet.add(Number(c)); tagSet.add(t); } }));
+                  if (!colSet.size) return null;
+                  const cols = ann.columns.filter(c => colSet.has(c.col));
+                  const gapKey = new Set(gaps.map(g => `${g.tag}|${g.col}`));
+                  const tagsShown = selectedTags.filter(t => tagSet.has(t));
+                  const setCell = (t: string, c: number, v: string) => setAnnexValues(a => ({ ...a, [t]: { ...(a[t] || {}), [String(c)]: v } }));
+                  return (<>
+                    <p className="text-xs font-semibold mt-5 mb-1 flex items-center gap-1.5" style={{ color: 'var(--gold)' }}>
+                      <AlertTriangle className="w-3.5 h-3.5" /> Annexure details not found in the IODB - {ann.missing_total ?? gaps.length} blank cell(s)
+                      {ann.manual_filled ? <span style={{ color: 'var(--ok)' }}> · {ann.manual_filled} entered by you</span> : null}
+                    </p>
+                    <p className="text-[11px] mb-2" style={{ color: 'var(--t2)' }}>Enter the missing values for each tag (leave a cell empty to keep it blank). Values from the IODB are never replaced. They go for approval with the datasheet.</p>
+                    <div className="overflow-auto max-h-80 rounded-lg" style={{ border: '1px solid var(--gold)' }}>
+                      <table className="text-[11px]">
+                        <thead style={{ background: 'var(--s2)' }}><tr>
+                          <th className="text-left px-2 py-1.5 sticky left-0" style={{ background: 'var(--s2)', color: 'var(--t2)' }}>TAG NO.</th>
+                          {cols.map(c => <th key={c.col} className="text-left px-2 py-1.5 font-semibold whitespace-nowrap" style={{ color: 'var(--t2)' }}>{c.label}</th>)}
+                        </tr></thead>
+                        <tbody>{tagsShown.map(t => (
+                          <tr key={t} style={{ borderTop: '1px solid var(--b1)' }}>
+                            <td className="px-2 py-1 font-mono sticky left-0 whitespace-nowrap" style={{ background: 'var(--s1)', color: 'var(--t0)' }}>{t}</td>
+                            {cols.map(c => {
+                              const v = annexValues[t]?.[String(c.col)] ?? '';
+                              const ask = gapKey.has(`${t}|${c.col}`) || v !== '';
+                              return <td key={c.col} className="px-1 py-0.5">{ask
+                                ? <input value={v} onChange={e => setCell(t, c.col, e.target.value)} placeholder="enter…" aria-label={`${c.label} for ${t}`}
+                                    className="w-32 px-1.5 py-1 rounded text-[11px]" style={{ background: 'var(--s1)', border: `1px solid ${v ? 'var(--b2)' : 'var(--gold)'}`, color: 'var(--t0)', outline: 'none' }} />
+                                : <span className="px-1.5" style={{ color: 'var(--t2)' }}>from IODB</span>}</td>;
+                            })}
+                          </tr>))}</tbody>
+                      </table>
+                    </div>
+                    <div className="flex flex-wrap gap-2 mt-2">
+                      <Button variant="secondary" onClick={() => runValidation()} loading={validating}><RefreshCw className="w-3.5 h-3.5" /> Apply entries &amp; re-check</Button>
+                      {tagsShown.length > 1 && <Button variant="secondary" onClick={() => {
+                        const first = tagsShown[0];
+                        setAnnexValues(a => {
+                          const n = { ...a };
+                          tagsShown.slice(1).forEach(t => cols.forEach(c => {
+                            const fv = a[first]?.[String(c.col)];
+                            if (fv && gapKey.has(`${t}|${c.col}`) && !(a[t]?.[String(c.col)])) n[t] = { ...(n[t] || {}), [String(c.col)]: fv };
+                          }));
+                          return n;
+                        });
+                      }} title="Copy the first tag's entries into the blank cells below">Copy first row down</Button>}
+                    </div>
+                  </>);
+                })()}
               </div>
             )}
           </>)}
@@ -1471,7 +1691,9 @@ export default function DataSheetGenerator() {
               <Button variant="secondary" disabled={!validation || validation.counts.ERROR > 0 || validating}
                 title={!validation ? 'Run the engineering validation first' : validation.counts.ERROR ? 'Resolve the validation errors first' : ''}
                 onClick={() => {
-                const errs = validateSpecs(specValues);
+                const errs = templateId
+                  ? Object.entries(libErrs).map(([k, m]) => `${keyLabel(k)}: ${m}`)
+                  : validateSpecs(specValues);
                 setValidErrs(errs);
                 if (errs.length === 0) setShowRaiseModal(true);
               }} className="flex-1">
@@ -1779,6 +2001,15 @@ export default function DataSheetGenerator() {
       )}
 
       {/* Modals */}
+      {showLibPopup && templateId && (
+        <LibSpecPopup fields={libFields} initial={overrides} title={templateInfo?.display_name || selectedType}
+          onClose={() => setShowLibPopup(false)}
+          onConfirm={(vals, changed) => {
+            setOverrides(o => ({ ...o, ...vals }));
+            if (changed.length) setSpecSources(s2 => ({ ...s2, ...Object.fromEntries(changed.map(k => [k, 'user' as SpecSource])) }));
+            setValidErrs([]); setShowLibPopup(false);
+          }} />
+      )}
       {showSpecPopup && (
         <SpecPopup initial={kbValues} onClose={() => setShowSpecPopup(false)}
           onConfirm={(vals) => { setKbValues(vals); setShowSpecPopup(false); }} />
@@ -1796,7 +2027,7 @@ export default function DataSheetGenerator() {
                        ...(templateInfo ? { 'Template': `${templateInfo.display_name} (${templateInfo.version})`, 'Output': templateInfo.output_filename } : {}),
                        'Validation': validation ? `${validation.counts.ERROR} error(s), ${validation.counts.REVIEW} review item(s)` : 'not run' },
             machine: { format: genFormat, datasheet: selectedDatasheet, overrides: effectiveOverrides(),
-                       template_id: templateId || null, instrument_type: selectedType, header, field_scope: fieldScope,
+                       template_id: templateId || null, instrument_type: selectedType, header, field_scope: fieldScope, annexure_values: annexValuesClean(),
                        annexure_mapping: genFormat === 'CONSOLIDATED' ? currentMapping() : null,
                        review_items: (validation?.issues || []).map(i => i.message) },
           }}

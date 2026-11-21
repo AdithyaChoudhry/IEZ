@@ -219,6 +219,68 @@ def test_missing_iodb_values_stay_blank_and_are_reported():
     assert ws.cell(ann.data_start + 2, first_data.col + 1).value is None
 
 
+def test_missing_annexure_data_is_asked_and_entered_values_fill_only_blanks():
+    io_b = iodb_for("dpt", 3, blank=(2,))
+    tags = tags_for("dpt", 3)
+    ann = DL.load_context("dpt", io_b).ctx.annexure
+    first_data = next(ac for ac in ann.columns if ac.kind == "data")
+    res = DL.validate("dpt", io_b, tags, {}, None, "Differential Pressure Transmitter", HEADER)
+    gaps = res["annexure"]["missing"]
+    assert {"tag": tags[1], "col": first_data.col, "label": first_data.label} in gaps and res["annexure"]["missing_total"] == len(gaps)
+    assert all(g["tag"] == tags[1] for g in gaps)                                        # only the blank cell is asked
+    entered = {tags[1]: {str(first_data.col): "ENTERED"}, tags[0]: {str(first_data.col): "MUST NOT REPLACE IODB"}}
+    res2 = DL.validate("dpt", io_b, tags, {}, None, "Differential Pressure Transmitter", HEADER, annexure_values=entered)
+    assert not res2["annexure"]["missing"] and res2["annexure"]["manual_filled"] == 1
+    assert not any(i["code"] == "MISSING_TAG_DATA" for i in res2["issues"])
+    assert res2["annexure"]["preview"][1][str(first_data.col)] == "ENTERED"
+    out, *_ = DL.generate("dpt", io_b, tags, {}, None, HEADER, annexure_values=entered)
+    ws = openpyxl.load_workbook(io.BytesIO(out))["ANNEXURE-I"]
+    assert ws.cell(ann.data_start + 2, first_data.col + 1).value == "ENTERED"
+    assert ws.cell(ann.data_start + 1, first_data.col + 1).value == "V0-1"
+
+
+@pytest.mark.parametrize("text", ["MOTOR COMMAND START", "MOTOR RUNNING STATUS", "ON/OFF VALVE PNEUMATIC", "CONTROL VALVE POSTIONER",
+                                  "LEVEL HIGH ALARM", "FLOW TRANSMITTER FAULT ALARM", "PRESSURE INDICATION", "VALVE OPEN STATUS",
+                                  "PUMP", "AGITATOR", "AIR BLOWER", "SPARE", "POWER SUPPLY FAILURE", "FLOW TOTALISER IND",
+                                  "Belt conveyor pos.1, electric motor 1-M1, forward", "MOTORIZED SLUICE GATE"])
+def test_non_instrument_types_are_not_offered(text):
+    assert not DL.is_instrument_type(text)
+
+
+@pytest.mark.parametrize("text", ["DIFFERENTIAL PRESSURE TRANSMITTER", "FLOW ELEMENT", "LEVEL SWITCH-TUNING FORK", "PRESSURE GUAGE",
+                                  "TEMPERATURE ELEMENT", "FLOW INDICATING ROTAMETER", "ANALYZER INDICATING TRANSMITTER - PH",
+                                  "MAGNETIC LEVEL GAUGE", "ORIFICE PLATE", "FT-THERMAL MASS", "LEVEL INDICATING TRANSMITTER-RADAR"])
+def test_instrument_types_are_offered(text):
+    assert DL.is_instrument_type(text)
+
+
+def test_iodb_analysis_hides_motors_valves_and_soft_points():
+    wb = openpyxl.Workbook(); ws = wb.active; ws.title = "IODB"
+    ws.append(["TAG NO", "INSTRUMENT TYPE"])
+    for r in [("PDT-1", "DP TRANSMITTER"), ("M-1A", "MOTOR COMMAND START"), ("M-1B", "MOTOR RUNNING STATUS"),
+              ("XV-1", "ON/OFF VALVE PNEUMATIC"), ("PAH-1", "PRESSURE ALARM HIGH"), ("PI-1", "PRESSURE INDICATION"), ("P-1", "PUMP")]:
+        ws.append(list(r))
+    b = io.BytesIO(); wb.save(b)
+    res = DL.analyze_iodb(b.getvalue())
+    assert [g["instrument_type"] for g in res["groups"]] == ["DP TRANSMITTER"]
+    assert len(res["hidden"]) == 6 and res["hidden_tags"] == 6
+
+
+def test_manual_entry_dropdown_options_are_engineering_values():
+    fields, _ = DL.fields_for(DL.entry("dpt"))
+    by = {(f.spec.section, f.spec.label): f for f in fields}
+    typ = by[("TRANSMITTER", "Type")].spec
+    assert typ.input_type == "dropdown" and typ.options[0] == "2 WIRE" and typ.options[-1] == "Custom Value"
+    assert not any("radar" in o.lower() for o in typ.options)                          # radar list only on radar templates
+    ip = by[("TRANSMITTER", "Enclosure Protection Class")].spec.options
+    assert ip[0] == "IP 66" and "IP 67" in ip
+    radar, _ = DL.fields_for(DL.entry("lt_radar"))
+    assert any("Radar" in o for f in radar if f.spec.label == "Type" for o in f.spec.options)
+    for f in fields:                                                                    # tag-wise rows are never dropdowns
+        if f.scope != "common":
+            assert not f.spec.options
+
+
 def test_generated_annexure_for_template_without_one():
     lc = DL.load_context("lt_radar", blank_iodb())
     assert lc.derived_annexure
@@ -289,11 +351,11 @@ def api(db):
 TAGS = ["DPT-101", "DPT-102", "DPT-103"]
 
 
-def approval(db, status="approved", template_id="dpt", tags=TAGS, overrides=None, mapping=None, header=None):
+def approval(db, status="approved", template_id="dpt", tags=TAGS, overrides=None, mapping=None, header=None, annexure_values=None):
     from app.auth.models import ApprovalRequest
     meta = {"format": SC.CONSOLIDATED, "datasheet": "DPT", "template_id": template_id,
             "overrides": overrides or {"TRANSMITTER::Output": ["APPROVED OUTPUT"]}, "annexure_mapping": mapping,
-            "header": header or HEADER, "field_scope": {}}
+            "header": header or HEADER, "field_scope": {}, "annexure_values": annexure_values or {}}
     req = ApprovalRequest(request_type="spec", tag_numbers=json.dumps(tags), instrument_type="DP TRANSMITTER",
                           payload_json=json.dumps({"Output": "APPROVED OUTPUT", "__iez": meta}), submitted_by_name="Eng",
                           submitted_by_id="E1", status=status, reviewed_by_name="Lead A", reviewed_by_id="L9",
@@ -360,6 +422,21 @@ def test_api_approval_gate_for_library_templates(api, db):
     assert str(wb["DPT"]["B5"].value).startswith("='COVER SHEET'!")                                     # main header reads it
     ap = next(f for f in fields if f.spec.label == "Make")
     assert wb["DPT"].cell(ap.spec.row + 1, ap.spec.value_cols[0] + 1).value is None
+
+
+def test_api_approved_annexure_entries_are_generated(api, db):
+    io_b = iodb_for("dpt", 3, blank=(2,))
+    ann = DL.load_context("dpt", io_b).ctx.annexure
+    col = next(ac for ac in ann.columns if ac.kind == "data").col
+    f = form(approval(db, annexure_values={"DPT-102": {str(col): "APPROVED ENTRY"}}))
+    f["files"] = {"iodb_file": ("iodb.xlsx", io_b)}
+    v = api.post("/api/sop-datasheet/validate", files={"iodb_file": ("iodb.xlsx", io_b)},
+                 data={**f["data"], "annexure_values": json.dumps({"DPT-102": {str(col): "X"}})})
+    assert v.status_code == 200 and v.json()["annexure"]["manual_filled"] == 1
+    _, job = run(api, **f)
+    assert job["status"] == "done", job
+    ws = openpyxl.load_workbook(io.BytesIO(api.get("/api/sop-datasheet/download").content))["ANNEXURE-I"]
+    assert ws.cell(ann.data_start + 2, col + 1).value == "APPROVED ENTRY"
 
 
 def test_api_other_users_cannot_download(api, db):

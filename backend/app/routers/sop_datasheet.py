@@ -255,13 +255,13 @@ async def library_template(template_id: str, field_scope: str = "", current_user
 def _run_generate_job(job_id, sop_bytes, sop_filename, datasheet_sheet,
                       iodb_bytes, instrument_type, selected_tags, overrides, user_id,
                       generation_format=SC.INDIVIDUAL, annexure_mapping=None, approval_id=None,
-                      template_id=None, header=None, field_scope=None):
+                      template_id=None, header=None, field_scope=None, annexure_values=None):
     """Generate the datasheet package in a background thread (individual: one file per tag; consolidated: one workbook;
     library template: one consolidated workbook from the standard template library)."""
     try:
         if template_id:
             zip_bytes, filename, err, failed = DL.generate(template_id, iodb_bytes, selected_tags, overrides,
-                                                           annexure_mapping, header, field_scope)
+                                                           annexure_mapping, header, field_scope, annexure_values)
         elif generation_format == SC.INDIVIDUAL:
             zip_bytes, filename, err, failed = generate_datasheets(
                 sop_bytes, sop_filename, datasheet_sheet,
@@ -339,7 +339,8 @@ def _approved_package(db: Session, approval_id: int, fmt: str, tags: list, datas
                                    "Changing the template needs a new approval.")
     if meta_out is not None:
         meta_out.update(header=meta.get("header") if isinstance(meta.get("header"), dict) else {},
-                        field_scope=meta.get("field_scope") if isinstance(meta.get("field_scope"), dict) else {})
+                        field_scope=meta.get("field_scope") if isinstance(meta.get("field_scope"), dict) else {},
+                        annexure_values=meta.get("annexure_values") if isinstance(meta.get("annexure_values"), dict) else {})
     if meta.get("datasheet") and meta["datasheet"] != datasheet_sheet:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT,
                             detail=f"Request #{approval_id} was approved for datasheet '{meta['datasheet']}', not '{datasheet_sheet}'.")
@@ -378,6 +379,7 @@ async def validate_package(
     header: str = Form("{}"),
     field_scope: str = Form("{}"),
     ai_confidence: str = Form("{}"),
+    annexure_values: str = Form("{}"),               # library: {tag: {annexure column: value}} for cells the IODB leaves blank
     current_user: User = Depends(get_current_user),
 ):
     """Engineering checks before approval: tags in the IODB, duplicates, mandatory values, common specs that differ per tag,
@@ -393,7 +395,8 @@ async def validate_package(
         try:
             return await run_in_threadpool(DL.validate, template_id, await iodb_file.read(), tags_list, overrides_dict,
                                            mapping_dict, instrument_type, _json_obj(header, "document header"),
-                                           _json_obj(field_scope, "field scope"), _json_obj(ai_confidence, "AI confidence"))
+                                           _json_obj(field_scope, "field scope"), _json_obj(ai_confidence, "AI confidence"),
+                                           _json_obj(annexure_values, "annexure values"))
         except DL.LibraryError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
     if sop_file is None:
@@ -472,7 +475,8 @@ async def generate(
         args=(job_id, sop_bytes, (sop_file.filename if sop_file else "") or "", datasheet_sheet,
               iodb_bytes, instrument_type, tags_list, overrides_dict, current_user.id,
               fmt, mapping_dict, approval_id, template_id or None,
-              approved_meta.get("header") or {}, approved_meta.get("field_scope") or {}),
+              approved_meta.get("header") or {}, approved_meta.get("field_scope") or {},
+              approved_meta.get("annexure_values") or {}),
         daemon=True,
     ).start()
 

@@ -147,7 +147,12 @@ _ABBR = {
     "fs": ["flow", "switch"], "fsl": ["flow", "switch"], "fsh": ["flow", "switch"],
     "lt": ["level", "transmitter"], "lit": ["level", "transmitter"], "lg": ["level", "gauge"],
     "li": ["level", "indicator"], "mli": ["magnetic", "level", "indicator"], "mlg": ["magnetic", "level", "gauge"],
-    "xmtr": ["transmitter"], "tx": ["transmitter"], "trans": ["transmitter"], "transmiter": ["transmitter"],
+    "pt": ["pressure", "transmitter"], "pit": ["pressure", "transmitter"], "ps": ["pressure", "switch"],
+    "psh": ["pressure", "switch"], "psl": ["pressure", "switch"], "pshh": ["pressure", "switch"], "psll": ["pressure", "switch"],
+    "pg": ["pressure", "gauge"], "tt": ["temperature", "transmitter"], "tit": ["temperature", "transmitter"],
+    "te": ["temperature", "element"], "tg": ["temperature", "gauge"], "rota": ["rotameter"], "ncr": ["ncr", "radar"],
+    "indicatoe": ["indicator"], "tempearture": ["temperature"], "indidating": ["indicator"], "swtich": ["switch"],
+    "pressurised": ["pressurized"], "xmtr": ["transmitter"], "tx": ["transmitter"], "trans": ["transmitter"], "transmiter": ["transmitter"],
     "flowmeter": ["flow", "meter"], "flowmeters": ["flow", "meter"], "meter": ["meter"],
     "clampon": ["clamp", "on"], "ultra": ["ultrasonic"], "mag": ["magnetic"], "magnet": ["magnetic"],
     "gage": ["gauge"], "guage": ["gauge"], "temp": ["temperature"], "press": ["pressure"],
@@ -432,6 +437,13 @@ def field_options(t: dict, f: "LibField") -> list[str]:
     return opts + [CUSTOM_VALUE] if opts else []
 
 
+def _base_label(label: str) -> str:
+    """'Immersion Length (U) MM' / 'Immersion Length (mm)' -> 'immersionlength'; 'Tag No' -> 'tag'."""
+    b = re.sub(r"\(.*?\)", " ", str(label or "").lower())
+    b = re.sub(r"\b(mm|m|no|nos)\.?\s*$", " ", b.strip())
+    return re.sub(r"[^a-z0-9]", "", b)
+
+
 def fields_for(t: dict, field_scope: Optional[dict] = None, _with_options: bool = True) -> tuple[list[LibField], dict]:
     """Field rules of a template. `field_scope` ({key: tag|common}) corrects tag-wise/common for templates without a guide."""
     sheets = sheets_of(t)
@@ -446,16 +458,36 @@ def fields_for(t: dict, field_scope: Optional[dict] = None, _with_options: bool 
         def k(f):
             return (re.sub(r"\W", "", f.section.lower()), re.sub(r"\W", "", f.label.lower()))
         main_specs, seen = {}, {}
-        for f in parse_field_spec(main, main):
+        main_list = parse_field_spec(main, main)
+        for f in main_list:
             seen[k(f)] = seen.get(k(f), 0) + 1
             main_specs[(*k(f), seen[k(f)])] = f
+        # fallbacks when the guide names a section differently (e.g. 'FLOW INDICATOR' vs 'TRANSMITTER'):
+        # the same row with the same label, else a label that occurs once on each sheet
+        by_row = {(f.row, k(f)[1]): f for f in main_list}
+        lab_count: dict[str, list] = {}
+        for f in main_list:
+            lab_count.setdefault(k(f)[1], []).append(f)
+        eg_list = parse_field_spec(eg, eg)
+        eg_lab_count: dict[str, int] = {}
+        for f in eg_list:
+            eg_lab_count[k(f)[1]] = eg_lab_count.get(k(f)[1], 0) + 1
+        used: set[int] = set()
         specs, seen, unmatched = [], {}, []
-        for f in parse_field_spec(eg, eg):
+        for f in eg_list:
             seen[k(f)] = seen.get(k(f), 0) + 1
             m = main_specs.get((*k(f), seen[k(f)]))
-            if m is None:
+            fallback = False
+            if m is None or m.row in used:
+                m, fallback = by_row.get((f.row, k(f)[1])), True
+            if (m is None or m.row in used) and len(lab_count.get(k(f)[1], [])) == 1 and eg_lab_count[k(f)[1]] == 1:
+                m, fallback = lab_count[k(f)[1]][0], True
+            if m is None or m.row in used:
                 unmatched.append(f.label)
                 continue
+            used.add(m.row)
+            if fallback or re.sub(r"\s", "", f.label).lower() != re.sub(r"\s", "", m.label).lower():
+                f = replace(f, section=m.section, label=m.label)  # the document shows the main sheet's own wording
             eg_rows[m.row] = f.row
             specs.append(replace(f, row=m.row, value_cols=m.value_cols, sub_labels=m.sub_labels,
                                  defaults=(f.defaults + [""] * len(m.value_cols))[:len(m.value_cols)]))
@@ -476,6 +508,14 @@ def fields_for(t: dict, field_scope: Optional[dict] = None, _with_options: bool 
                 cur = n
             notes[f.row] = cur if n or cur else ""
     learned = _learned_tag_labels(_lib_path().stat().st_mtime) if eg is None else frozenset()
+    # Some guides are a worked example for one tag (real values, no 'REFER ANNEXURE-I'). Then the template's own
+    # Annexure-I columns say which rows are tag-wise.
+    ann_labels: frozenset = frozenset()
+    if eg is not None and roles.get("annexure") and not any(
+            _REF1.search(d or "") or _REF2.search(d or "") for f in specs for d in f.defaults):
+        a = SC.parse_annexure(sheets[roles["annexure"]])
+        if a is not None:
+            ann_labels = frozenset(_base_label(c.header or c.label.split(" · ")[0]) for c in a.columns if c.kind == "data") | {"tag"}
     tag_secs = {s.upper() for s in t.get("tag_sections", [])}
     out: list[LibField] = []
     for f in specs:
@@ -485,7 +525,7 @@ def fields_for(t: dict, field_scope: Optional[dict] = None, _with_options: bool 
         if eg is not None:
             if any(_REF2.search(d or "") for d in f.defaults):
                 scope = "annexure2"
-            elif any(_REF1.search(d or "") for d in f.defaults) or f.source == "iodb":
+            elif any(_REF1.search(d or "") for d in f.defaults) or f.source == "iodb" or _base_label(f.label) in ann_labels:
                 scope = "tag"
             else:
                 scope = "common"

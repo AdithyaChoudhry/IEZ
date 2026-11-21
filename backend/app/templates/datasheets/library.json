@@ -1,62 +1,1080 @@
 {
-  "version": 1,
-  "about": "Datasheet Generator standard template library. Each entry is one instrument datasheet workbook (converted once from the original .xls to .xlsx with LibreOffice so logos, merges and page setup are kept). Matching rules: a rule matches when ALL of its words are present in the normalised instrument type and NONE of the 'none' words are. Sheet roles are detected from names and content; the 'sheets' block pins them.",
-  "templates": [
-    {"id": "dps", "code": "DPS", "display_name": "Differential Pressure Switch", "category": "Pressure",
-     "file": "dps.xlsx", "original_filename": "DIFFERENTIAL PRESSURE SWITCH-R0.xls", "version": "R0", "active": true,
-     "aliases": ["Differential Pressure Switch", "DP Switch", "Diff Pressure Switch", "PDS", "PDSH", "PDSL"],
-     "rules": [{"all": ["differential", "pressure", "switch"], "none": ["transmitter", "gauge", "indicator"]}],
-     "sheets": {"main": "DPS", "example": "DPS-EXAMPLE", "annexure": "ANNEXURE-I", "annexure2": "SPARE", "checklist": "checklist ", "cover": "COVER SHEET", "index": "INDEX"}},
-    {"id": "dpt", "code": "DPT", "display_name": "Differential Pressure Transmitter", "category": "Pressure",
-     "file": "dpt.xlsx", "original_filename": "DIFFERENTIAL PRESSURE TRANSMITTER-R0.xls", "version": "R0", "active": true,
-     "aliases": ["Differential Pressure Transmitter", "DP Transmitter", "Diff Pressure Transmitter", "PDT", "PDIT", "DPT"],
-     "rules": [{"all": ["differential", "pressure", "transmitter"], "none": ["flow", "level", "switch", "gauge"]}],
-     "sheets": {"main": "DPT", "example": "DPT -EXAMPLE", "annexure": "ANNEXURE-I", "annexure2": "SPARE", "checklist": "Sheet1", "cover": "COVER SHEET", "index": "INDEX"}},
-    {"id": "fe_orifice", "code": "FE", "display_name": "Orifice Plate", "category": "Flow",
-     "file": "fe_orifice.xlsx", "original_filename": "FE-ORIFICE PLATE-R0.xls", "version": "R0", "active": true,
-     "aliases": ["Orifice Plate", "Orifice Flow Element", "Flow Element Orifice Plate", "Flow Element - Orifice Plate", "Orifice"],
-     "rules": [{"all": ["orifice"], "none": ["transmitter"]}],
-     "sheets": {"main": "FE", "example": "FE-EG", "annexure": "ANNEXURE-I", "annexure2": "SPARE", "checklist": "checklist ", "cover": "COVER SHEET", "index": "INDEX"}},
-    {"id": "fs", "code": "FS", "display_name": "Flow Switch", "category": "Flow",
-     "file": "fs.xlsx", "original_filename": "FLOW SWITCH.xls", "version": "R0", "active": true,
-     "aliases": ["Flow Switch", "FS", "FSL", "FSH"],
-     "rules": [{"all": ["flow", "switch"], "none": ["pressure", "level", "transmitter"]}],
-     "sheets": {"main": "FS", "example": "FS-EXAMPLE", "annexure": "ANNEXURE-I", "annexure2": "SPARE", "checklist": "checklist ", "cover": "COVER SHEET", "index": "INDEX"}},
-    {"id": "ft_parshall", "code": "FT-PARSHALL", "display_name": "Parshall Flume Flow Transmitter", "category": "Flow",
-     "file": "ft_parshall.xlsx", "original_filename": "FLOW TRANSMITTER-ULTRASONIC PARSHALL FLUME-R0.xls", "version": "R0", "active": true,
-     "aliases": ["Ultrasonic Parshall Flume Flow Transmitter", "Parshall Flume Flow Transmitter", "Flow Transmitter - Ultrasonic Parshall Flume", "Parshall Flume"],
-     "rules": [{"all": ["parshall"], "none": []}, {"all": ["flume", "flow"], "none": []}],
-     "sheets": {"main": "FT", "example": "FT-EG", "annexure": "ANNEXURE-I", "annexure2": "SPARE", "checklist": "checklist ", "cover": "COVER SHEET", "index": "INDEX"}},
-    {"id": "ft_dp", "code": "FT-DP", "display_name": "DP Flow Transmitter", "category": "Flow",
-     "file": "ft_dp.xlsx", "original_filename": "FT-DP-R0.xls", "version": "R0", "active": true,
-     "aliases": ["DP Flow Transmitter", "Flow Transmitter - DP Type", "Flow Transmitter DP Type", "Differential Pressure Flow Transmitter", "DP Type Flow Transmitter"],
-     "rules": [{"all": ["flow", "differential", "pressure"], "none": ["switch", "element", "gauge"]}],
-     "sheets": {"main": "FT(DP)", "example": "FT(DP)-EXAMPLE", "annexure": "ANNEXURE-I", "annexure2": "SPARE", "checklist": "checklist ", "cover": "COVER SHEET", "index": "INDEX"}},
-    {"id": "ft_thermal", "code": "FT-THERMAL", "display_name": "Thermal Mass Flow Transmitter", "category": "Flow",
-     "file": "ft_thermal.xlsx", "original_filename": "FT-THERMAL MASS-R0.xls", "version": "R0", "active": true,
-     "aliases": ["Thermal Mass Flow Transmitter", "Thermal Mass Flow Meter", "Thermal Mass Flowmeter", "Flow Transmitter - Thermal Mass"],
-     "rules": [{"all": ["thermal", "mass"], "none": ["switch"]}, {"all": ["thermal", "flow"], "none": ["switch"]}],
-     "sheets": {"main": "FT", "example": "FT-EG", "annexure": "ANNEXURE-I", "annexure2": "SPARE", "checklist": "checklist ", "cover": "COVER SHEET", "index": "INDEX"}},
-    {"id": "ft_clampon", "code": "FT-CLAMPON", "display_name": "Ultrasonic Clamp-On Flow Transmitter", "category": "Flow",
-     "file": "ft_clampon.xlsx", "original_filename": "FT-ULTRASONIC CLAMP ON-R0.xls", "version": "R0", "active": true,
-     "aliases": ["Ultrasonic Clamp-On Flow Transmitter", "Clamp-On Ultrasonic Flowmeter", "Clamp On Ultrasonic Flow Meter", "Ultrasonic Clamp On Flow Transmitter", "Clamp-On Flow Transmitter"],
-     "rules": [{"all": ["clamp", "flow"], "none": ["level"]}],
-     "sheets": {"main": "FT-CLAMPON", "example": "FT-EG", "annexure": "ANNEXURE-I", "annexure2": "SPARE", "checklist": "checklist ", "cover": "COVER SHEET", "index": "INDEX"}},
-    {"id": "lg_magnetic", "code": "LG-MAGNETIC", "display_name": "Magnetic Level Gauge", "category": "Level",
-     "file": "lg_magnetic.xlsx", "original_filename": "LG-Magnetic Type-R0.xls", "version": "R0", "active": true,
-     "aliases": ["Magnetic Level Gauge", "Magnetic Level Indicator", "Level Gauge - Magnetic Type", "Level Gauge Magnetic Type", "MLI", "MLG"],
-     "rules": [{"all": ["magnetic", "level"], "none": ["transmitter", "switch", "flow"]}],
-     "sheets": {"main": "LG-MAGNETIC", "example": "LG-MAGNETIC-EG", "annexure": "ANNEXURE-I", "annexure2": "SPARE", "checklist": "checklist ", "cover": "COVER SHEET", "index": "INDEX"}},
-    {"id": "lg_reflex", "code": "LG-REFLEX", "display_name": "Reflex Level Gauge", "category": "Level",
-     "file": "lg_reflex.xlsx", "original_filename": "LG-REFLEX TYPE-R0.xls", "version": "R0", "active": true,
-     "aliases": ["Reflex Level Gauge", "Level Gauge - Reflex Type", "Level Gauge Reflex Type", "Reflex Gauge"],
-     "rules": [{"all": ["reflex"], "none": ["transmitter", "switch"]}],
-     "sheets": {"main": "LG-REFLEX", "example": "LG-REFLEX-EG", "annexure": "ANNEXURE-I", "annexure2": "SPARE", "checklist": "checklist ", "cover": "COVER SHEET", "index": "INDEX"}},
-    {"id": "lt_radar", "code": "LT-RADAR", "display_name": "Radar Level Transmitter", "category": "Level",
-     "file": "lt_radar.xlsx", "original_filename": "SOP LT.xls", "version": "R0", "active": true,
-     "aliases": ["Radar Level Transmitter", "Level Transmitter - Non Contact Radar Type", "Non Contact Radar Level Transmitter", "Radar Type Level Transmitter", "Level Transmitter Radar"],
-     "rules": [{"all": ["radar", "level"], "none": ["guided", "gwr", "switch", "gauge"]}],
-     "tag_sections": ["GENERAL", "PROCESS CONDITIONS", "TANK DETAILS"],
-     "sheets": {"main": "LT-RADAR"}}
-  ]
+ "version": 1,
+ "about": "Datasheet Generator standard template library. Each entry is one instrument datasheet workbook (converted once from the original .xls to .xlsx with LibreOffice so logos, merges and page setup are kept). Matching rules: a rule matches when ALL of its words are present in the normalised instrument type and NONE of the 'none' words are. Sheet roles are detected from names and content; the 'sheets' block pins them.",
+ "templates": [
+  {
+   "id": "dps",
+   "code": "DPS",
+   "display_name": "Differential Pressure Switch",
+   "category": "Pressure",
+   "file": "dps.xlsx",
+   "original_filename": "DIFFERENTIAL PRESSURE SWITCH-R0.xls",
+   "version": "R0",
+   "active": true,
+   "aliases": [
+    "Differential Pressure Switch",
+    "DP Switch",
+    "Diff Pressure Switch",
+    "PDS",
+    "PDSH",
+    "PDSL"
+   ],
+   "rules": [
+    {
+     "all": [
+      "differential",
+      "pressure",
+      "switch"
+     ],
+     "none": [
+      "transmitter",
+      "gauge",
+      "indicator"
+     ]
+    }
+   ],
+   "sheets": {
+    "main": "DPS",
+    "example": "DPS-EXAMPLE",
+    "annexure": "ANNEXURE-I",
+    "annexure2": "SPARE",
+    "checklist": "checklist ",
+    "cover": "COVER SHEET",
+    "index": "INDEX"
+   }
+  },
+  {
+   "id": "dpt",
+   "code": "DPT",
+   "display_name": "Differential Pressure Transmitter",
+   "category": "Pressure",
+   "file": "dpt.xlsx",
+   "original_filename": "DIFFERENTIAL PRESSURE TRANSMITTER-R0.xls",
+   "version": "R0",
+   "active": true,
+   "aliases": [
+    "Differential Pressure Transmitter",
+    "DP Transmitter",
+    "Diff Pressure Transmitter",
+    "PDT",
+    "PDIT",
+    "DPT"
+   ],
+   "rules": [
+    {
+     "all": [
+      "differential",
+      "pressure",
+      "transmitter"
+     ],
+     "none": [
+      "flow",
+      "level",
+      "switch",
+      "gauge"
+     ]
+    }
+   ],
+   "sheets": {
+    "main": "DPT",
+    "example": "DPT -EXAMPLE",
+    "annexure": "ANNEXURE-I",
+    "annexure2": "SPARE",
+    "checklist": "Sheet1",
+    "cover": "COVER SHEET",
+    "index": "INDEX"
+   }
+  },
+  {
+   "id": "fe_orifice",
+   "code": "FE",
+   "display_name": "Orifice Plate",
+   "category": "Flow",
+   "file": "fe_orifice.xlsx",
+   "original_filename": "FE-ORIFICE PLATE-R0.xls",
+   "version": "R0",
+   "active": true,
+   "aliases": [
+    "Orifice Plate",
+    "Orifice Flow Element",
+    "Flow Element Orifice Plate",
+    "Flow Element - Orifice Plate",
+    "Orifice"
+   ],
+   "rules": [
+    {
+     "all": [
+      "orifice"
+     ],
+     "none": [
+      "transmitter"
+     ]
+    }
+   ],
+   "sheets": {
+    "main": "FE",
+    "example": "FE-EG",
+    "annexure": "ANNEXURE-I",
+    "annexure2": "SPARE",
+    "checklist": "checklist ",
+    "cover": "COVER SHEET",
+    "index": "INDEX"
+   }
+  },
+  {
+   "id": "fs",
+   "code": "FS",
+   "display_name": "Flow Switch",
+   "category": "Flow",
+   "file": "fs.xlsx",
+   "original_filename": "FLOW SWITCH.xls",
+   "version": "R0",
+   "active": true,
+   "aliases": [
+    "Flow Switch",
+    "FS",
+    "FSL",
+    "FSH"
+   ],
+   "rules": [
+    {
+     "all": [
+      "flow",
+      "switch"
+     ],
+     "none": [
+      "pressure",
+      "level",
+      "transmitter"
+     ]
+    }
+   ],
+   "sheets": {
+    "main": "FS",
+    "example": "FS-EXAMPLE",
+    "annexure": "ANNEXURE-I",
+    "annexure2": "SPARE",
+    "checklist": "checklist ",
+    "cover": "COVER SHEET",
+    "index": "INDEX"
+   }
+  },
+  {
+   "id": "ft_parshall",
+   "code": "FT-PARSHALL",
+   "display_name": "Parshall Flume Flow Transmitter",
+   "category": "Flow",
+   "file": "ft_parshall.xlsx",
+   "original_filename": "FLOW TRANSMITTER-ULTRASONIC PARSHALL FLUME-R0.xls",
+   "version": "R0",
+   "active": true,
+   "aliases": [
+    "Ultrasonic Parshall Flume Flow Transmitter",
+    "Parshall Flume Flow Transmitter",
+    "Flow Transmitter - Ultrasonic Parshall Flume",
+    "Parshall Flume"
+   ],
+   "rules": [
+    {
+     "all": [
+      "parshall"
+     ],
+     "none": []
+    },
+    {
+     "all": [
+      "flume",
+      "flow"
+     ],
+     "none": []
+    }
+   ],
+   "sheets": {
+    "main": "FT",
+    "example": "FT-EG",
+    "annexure": "ANNEXURE-I",
+    "annexure2": "SPARE",
+    "checklist": "checklist ",
+    "cover": "COVER SHEET",
+    "index": "INDEX"
+   }
+  },
+  {
+   "id": "ft_dp",
+   "code": "FT-DP",
+   "display_name": "DP Flow Transmitter",
+   "category": "Flow",
+   "file": "ft_dp.xlsx",
+   "original_filename": "FT-DP-R0.xls",
+   "version": "R0",
+   "active": true,
+   "aliases": [
+    "DP Flow Transmitter",
+    "Flow Transmitter - DP Type",
+    "Flow Transmitter DP Type",
+    "Differential Pressure Flow Transmitter",
+    "DP Type Flow Transmitter"
+   ],
+   "rules": [
+    {
+     "all": [
+      "flow",
+      "differential",
+      "pressure"
+     ],
+     "none": [
+      "switch",
+      "element",
+      "gauge"
+     ]
+    }
+   ],
+   "sheets": {
+    "main": "FT(DP)",
+    "example": "FT(DP)-EXAMPLE",
+    "annexure": "ANNEXURE-I",
+    "annexure2": "SPARE",
+    "checklist": "checklist ",
+    "cover": "COVER SHEET",
+    "index": "INDEX"
+   }
+  },
+  {
+   "id": "ft_thermal",
+   "code": "FT-THERMAL",
+   "display_name": "Thermal Mass Flow Transmitter",
+   "category": "Flow",
+   "file": "ft_thermal.xlsx",
+   "original_filename": "FT-THERMAL MASS-R0.xls",
+   "version": "R0",
+   "active": true,
+   "aliases": [
+    "Thermal Mass Flow Transmitter",
+    "Thermal Mass Flow Meter",
+    "Thermal Mass Flowmeter",
+    "Flow Transmitter - Thermal Mass"
+   ],
+   "rules": [
+    {
+     "all": [
+      "thermal",
+      "mass"
+     ],
+     "none": [
+      "switch"
+     ]
+    },
+    {
+     "all": [
+      "thermal",
+      "flow"
+     ],
+     "none": [
+      "switch"
+     ]
+    }
+   ],
+   "sheets": {
+    "main": "FT",
+    "example": "FT-EG",
+    "annexure": "ANNEXURE-I",
+    "annexure2": "SPARE",
+    "checklist": "checklist ",
+    "cover": "COVER SHEET",
+    "index": "INDEX"
+   }
+  },
+  {
+   "id": "ft_clampon",
+   "code": "FT-CLAMPON",
+   "display_name": "Ultrasonic Clamp-On Flow Transmitter",
+   "category": "Flow",
+   "file": "ft_clampon.xlsx",
+   "original_filename": "FT-ULTRASONIC CLAMP ON-R0.xls",
+   "version": "R0",
+   "active": true,
+   "aliases": [
+    "Ultrasonic Clamp-On Flow Transmitter",
+    "Clamp-On Ultrasonic Flowmeter",
+    "Clamp On Ultrasonic Flow Meter",
+    "Ultrasonic Clamp On Flow Transmitter",
+    "Clamp-On Flow Transmitter"
+   ],
+   "rules": [
+    {
+     "all": [
+      "clamp",
+      "flow"
+     ],
+     "none": [
+      "level"
+     ]
+    }
+   ],
+   "sheets": {
+    "main": "FT-CLAMPON",
+    "example": "FT-EG",
+    "annexure": "ANNEXURE-I",
+    "annexure2": "SPARE",
+    "checklist": "checklist ",
+    "cover": "COVER SHEET",
+    "index": "INDEX"
+   }
+  },
+  {
+   "id": "lg_magnetic",
+   "code": "LG-MAGNETIC",
+   "display_name": "Magnetic Level Gauge",
+   "category": "Level",
+   "file": "lg_magnetic.xlsx",
+   "original_filename": "LG-Magnetic Type-R0.xls",
+   "version": "R0",
+   "active": true,
+   "aliases": [
+    "Magnetic Level Gauge",
+    "Magnetic Level Indicator",
+    "Level Gauge - Magnetic Type",
+    "Level Gauge Magnetic Type",
+    "MLI",
+    "MLG"
+   ],
+   "rules": [
+    {
+     "all": [
+      "magnetic",
+      "level"
+     ],
+     "none": [
+      "transmitter",
+      "switch",
+      "flow"
+     ]
+    }
+   ],
+   "sheets": {
+    "main": "LG-MAGNETIC",
+    "example": "LG-MAGNETIC-EG",
+    "annexure": "ANNEXURE-I",
+    "annexure2": "SPARE",
+    "checklist": "checklist ",
+    "cover": "COVER SHEET",
+    "index": "INDEX"
+   }
+  },
+  {
+   "id": "lg_reflex",
+   "code": "LG-REFLEX",
+   "display_name": "Reflex Level Gauge",
+   "category": "Level",
+   "file": "lg_reflex.xlsx",
+   "original_filename": "LG-REFLEX TYPE-R0.xls",
+   "version": "R0",
+   "active": true,
+   "aliases": [
+    "Reflex Level Gauge",
+    "Level Gauge - Reflex Type",
+    "Level Gauge Reflex Type",
+    "Reflex Gauge"
+   ],
+   "rules": [
+    {
+     "all": [
+      "reflex"
+     ],
+     "none": [
+      "transmitter",
+      "switch"
+     ]
+    }
+   ],
+   "sheets": {
+    "main": "LG-REFLEX",
+    "example": "LG-REFLEX-EG",
+    "annexure": "ANNEXURE-I",
+    "annexure2": "SPARE",
+    "checklist": "checklist ",
+    "cover": "COVER SHEET",
+    "index": "INDEX"
+   }
+  },
+  {
+   "id": "lt_radar",
+   "code": "LT-RADAR",
+   "display_name": "Radar Level Transmitter",
+   "category": "Level",
+   "file": "lt_radar_ncr.xlsx",
+   "original_filename": "LT Non contact Radar Type-R0-1.xls",
+   "version": "R0",
+   "active": true,
+   "aliases": [
+    "Radar Level Transmitter",
+    "Level Transmitter - Non Contact Radar Type",
+    "Non Contact Radar Level Transmitter",
+    "Radar Type Level Transmitter",
+    "Level Transmitter Radar",
+    "NCR Level Transmitter",
+    "Level Transmitter - NCR Type",
+    "Level Indicating Transmitter - NCR Type"
+   ],
+   "rules": [
+    {
+     "all": [
+      "radar",
+      "level"
+     ],
+     "none": [
+      "guided",
+      "gwr",
+      "switch",
+      "gauge"
+     ]
+    },
+    {
+     "all": [
+      "ncr",
+      "level"
+     ],
+     "none": [
+      "switch",
+      "gauge"
+     ]
+    }
+   ],
+   "sheets": {
+    "main": "LT-RADAR",
+    "example": "LT-RADAR-EG",
+    "annexure": "ANNEXURE-I",
+    "annexure2": "SPARE",
+    "checklist": "checklist ",
+    "cover": "COVER SHEET",
+    "index": "INDEX"
+   }
+  },
+  {
+   "id": "lt_radar_sop",
+   "code": "LT-RADAR-SOP",
+   "display_name": "Radar Level Transmitter (SOP LT, legacy)",
+   "category": "Level",
+   "file": "lt_radar.xlsx",
+   "original_filename": "SOP LT.xls",
+   "version": "R0",
+   "active": true,
+   "aliases": [],
+   "rules": [],
+   "tag_sections": [
+    "GENERAL",
+    "PROCESS CONDITIONS",
+    "TANK DETAILS"
+   ],
+   "sheets": {
+    "main": "LT-RADAR"
+   }
+  },
+  {
+   "id": "lt_gwr",
+   "code": "LT-GWR",
+   "display_name": "Guided Wave Radar Level Transmitter",
+   "category": "Level",
+   "file": "lt_gwr.xlsx",
+   "original_filename": "LT Guided Wave Radar-R0.Xls",
+   "aliases": [
+    "Guided Wave Radar Level Transmitter",
+    "GWR Level Transmitter",
+    "Level Transmitter - Guided Wave Radar",
+    "Guided Radar Level Transmitter"
+   ],
+   "rules": [
+    {
+     "all": [
+      "guided",
+      "level"
+     ],
+     "none": [
+      "switch",
+      "gauge"
+     ]
+    },
+    {
+     "all": [
+      "gwr"
+     ],
+     "none": [
+      "switch"
+     ]
+    }
+   ],
+   "sheets": {
+    "main": "LT-RADAR",
+    "example": "LT-RADAR-EG",
+    "annexure": "ANNEXURE-I",
+    "annexure2": "SPARE",
+    "checklist": "checklist ",
+    "cover": "COVER SHEET",
+    "index": "INDEX"
+   },
+   "version": "R0",
+   "active": true
+  },
+  {
+   "id": "lt_ultrasonic",
+   "code": "LT-ULT",
+   "display_name": "Ultrasonic Level Transmitter",
+   "category": "Level",
+   "file": "lt_ultrasonic.xlsx",
+   "original_filename": "LT Ultrasonic TypeR0.xls",
+   "aliases": [
+    "Ultrasonic Level Transmitter",
+    "Level Transmitter - Ultrasonic Type",
+    "Ultrasonic Type Level Transmitter"
+   ],
+   "rules": [
+    {
+     "all": [
+      "ultrasonic",
+      "level"
+     ],
+     "none": [
+      "switch",
+      "gauge",
+      "flow",
+      "flume",
+      "parshall"
+     ]
+    }
+   ],
+   "sheets": {
+    "main": "LT-ULT",
+    "example": "LT-ULT-EG",
+    "annexure": "ANNEXURE-I",
+    "annexure2": "SPARE",
+    "checklist": "checklist ",
+    "cover": "COVER SHEET",
+    "index": "INDEX"
+   },
+   "version": "R0",
+   "active": true
+  },
+  {
+   "id": "lt_dp_open",
+   "code": "LT-DP-OPEN",
+   "display_name": "DP Level Transmitter (Open Tank)",
+   "category": "Level",
+   "file": "lt_dp_open.xlsx",
+   "original_filename": "LT-DP Type-R0 open tank.xls",
+   "aliases": [
+    "DP Level Transmitter Open Tank",
+    "Level Transmitter - DP Type Open Tank",
+    "DP Type Level Transmitter - Open Tank"
+   ],
+   "rules": [
+    {
+     "all": [
+      "level",
+      "differential",
+      "pressure"
+     ],
+     "none": [
+      "switch",
+      "gauge",
+      "flow",
+      "closed",
+      "pressurized",
+      "capillary"
+     ]
+    },
+    {
+     "all": [
+      "level",
+      "differential",
+      "pressure",
+      "open"
+     ],
+     "none": [
+      "switch"
+     ]
+    }
+   ],
+   "sheets": {
+    "main": "LT-DP",
+    "example": "LT-DP-EG",
+    "annexure": "ANNEXURE-I",
+    "annexure2": "SPARE",
+    "checklist": "checklist ",
+    "cover": "COVER SHEET",
+    "index": "INDEX"
+   },
+   "version": "R0",
+   "active": true
+  },
+  {
+   "id": "lt_dp_closed",
+   "code": "LT-DP-CLOSED",
+   "display_name": "DP Level Transmitter (Pressurized Tank)",
+   "category": "Level",
+   "file": "lt_dp_closed.xlsx",
+   "original_filename": "LT-DP Type-R0 Pressurized tank.xls",
+   "aliases": [
+    "DP Level Transmitter Pressurized Tank",
+    "DP Level Transmitter Closed Tank",
+    "Level Transmitter - DP Type Pressurized Tank"
+   ],
+   "rules": [
+    {
+     "all": [
+      "level",
+      "differential",
+      "pressure"
+     ],
+     "none": [
+      "switch",
+      "gauge",
+      "flow"
+     ]
+    },
+    {
+     "all": [
+      "level",
+      "differential",
+      "pressure",
+      "pressurized"
+     ],
+     "none": [
+      "switch"
+     ]
+    },
+    {
+     "all": [
+      "level",
+      "differential",
+      "pressure",
+      "closed"
+     ],
+     "none": [
+      "switch"
+     ]
+    }
+   ],
+   "sheets": {
+    "main": "LT -DP2",
+    "example": "LT-DP-EG",
+    "annexure": "ANNEXURE II",
+    "annexure2": "SPARE",
+    "checklist": "checklist ",
+    "cover": "COVER SHEET",
+    "index": "INDEX"
+   },
+   "version": "R0",
+   "active": false,
+   "inactive_reason": "The workbook's Engineering Guide sheet (LT-DP-EG) is the open-tank example and the datasheet 'LT -DP2' uses a different column layout (HP/LP side and upper/lower fluid sub-rows, values in G-J). Needs a matching guide sheet before it can be used."
+  },
+  {
+   "id": "fi_glass",
+   "code": "FI-GLASS",
+   "display_name": "Glass Tube Rotameter",
+   "category": "Flow",
+   "file": "fi_glass.xlsx",
+   "original_filename": "ONLINE GLASS TUBE.xls",
+   "aliases": [
+    "Glass Tube Rotameter",
+    "Online Glass Tube Rotameter",
+    "Rotameter - Glass Tube",
+    "Glass Tube Flow Indicator"
+   ],
+   "rules": [
+    {
+     "all": [
+      "glass",
+      "tube"
+     ],
+     "none": [
+      "level"
+     ]
+    },
+    {
+     "all": [
+      "rotameter"
+     ],
+     "none": [
+      "transmitter",
+      "metal"
+     ]
+    },
+    {
+     "all": [
+      "rotameter",
+      "glass"
+     ],
+     "none": []
+    }
+   ],
+   "sheets": {
+    "main": "FI",
+    "example": "FI-EG",
+    "annexure": "ANNEXURE-I",
+    "annexure2": "SPARE",
+    "checklist": "checklist ",
+    "cover": "COVER SHEET",
+    "index": "INDEX"
+   },
+   "version": "R0",
+   "active": true
+  },
+  {
+   "id": "fi_metal",
+   "code": "FI-METAL",
+   "display_name": "Metal Tube Rotameter",
+   "category": "Flow",
+   "file": "fi_metal.xlsx",
+   "original_filename": "ONLINE METAL TUBE.xls",
+   "aliases": [
+    "Metal Tube Rotameter",
+    "Online Metal Tube Rotameter",
+    "Rotameter - Metal Tube",
+    "Metal Tube Flow Indicator"
+   ],
+   "rules": [
+    {
+     "all": [
+      "metal",
+      "tube"
+     ],
+     "none": [
+      "level"
+     ]
+    },
+    {
+     "all": [
+      "rotameter"
+     ],
+     "none": [
+      "glass"
+     ]
+    },
+    {
+     "all": [
+      "rotameter",
+      "metal"
+     ],
+     "none": []
+    }
+   ],
+   "sheets": {
+    "main": "FI",
+    "example": "FI-EG",
+    "annexure": "ANNEXURE-I",
+    "annexure2": "SPARE",
+    "checklist": "checklist ",
+    "cover": "COVER SHEET",
+    "index": "INDEX"
+   },
+   "version": "R0",
+   "active": true
+  },
+  {
+   "id": "pg_bourdon",
+   "code": "PG-BOURDON",
+   "display_name": "Pressure Gauge (Bourdon)",
+   "category": "Pressure",
+   "file": "pg_bourdon.xlsx",
+   "original_filename": "PG- BOURDON-R0.xls",
+   "aliases": [
+    "Pressure Gauge",
+    "Bourdon Pressure Gauge",
+    "Pressure Gauge - Bourdon Type",
+    "Pressure Gauge Bourdon Type",
+    "PG"
+   ],
+   "rules": [
+    {
+     "all": [
+      "pressure",
+      "gauge"
+     ],
+     "none": [
+      "diaphragm",
+      "seal",
+      "differential",
+      "transmitter"
+     ]
+    },
+    {
+     "all": [
+      "bourdon"
+     ],
+     "none": [
+      "transmitter",
+      "diaphragm"
+     ]
+    }
+   ],
+   "sheets": {
+    "main": "PG-BOURDON (2)",
+    "example": "PG-(B)-EXAMPLE",
+    "annexure": "ANNEXURE-I",
+    "annexure2": "SPARE",
+    "checklist": "checklist ",
+    "cover": "COVER SHEET",
+    "index": "INDEX"
+   },
+   "version": "R0",
+   "active": true
+  },
+  {
+   "id": "pg_diaphragm",
+   "code": "PG-DIAPHRAGM",
+   "display_name": "Pressure Gauge (Diaphragm Seal)",
+   "category": "Pressure",
+   "file": "pg_diaphragm.xlsx",
+   "original_filename": "PG- DIAPHRAGM SEAL-R0.xls",
+   "aliases": [
+    "Diaphragm Seal Pressure Gauge",
+    "Pressure Gauge - Diaphragm Seal Type",
+    "Pressure Gauge Diaphragm Seal Type",
+    "Pressure Gauge with Diaphragm Seal"
+   ],
+   "rules": [
+    {
+     "all": [
+      "pressure",
+      "gauge",
+      "diaphragm"
+     ],
+     "none": [
+      "transmitter"
+     ]
+    },
+    {
+     "all": [
+      "gauge",
+      "seal"
+     ],
+     "none": [
+      "transmitter"
+     ]
+    }
+   ],
+   "sheets": {
+    "main": "PG-DIA (2)",
+    "example": "PG-(D)-EXAMPLE",
+    "annexure": "ANNEXURE-I",
+    "annexure2": "SPARE",
+    "checklist": "checklist ",
+    "cover": "COVER SHEET",
+    "index": "INDEX"
+   },
+   "version": "R0",
+   "active": true
+  },
+  {
+   "id": "ps",
+   "code": "PS",
+   "display_name": "Pressure Switch",
+   "category": "Pressure",
+   "file": "ps.xlsx",
+   "original_filename": "PRESSURE SWITCH.xls",
+   "aliases": [
+    "Pressure Switch",
+    "PS",
+    "PSH",
+    "PSL",
+    "PSHH",
+    "PSLL"
+   ],
+   "rules": [
+    {
+     "all": [
+      "pressure",
+      "switch"
+     ],
+     "none": [
+      "differential",
+      "transmitter",
+      "flow",
+      "level"
+     ]
+    }
+   ],
+   "sheets": {
+    "main": "PS",
+    "example": "PS-EXAMPLE",
+    "annexure": "ANNEXURE-I",
+    "annexure2": "SPARE",
+    "checklist": "checklist ",
+    "cover": "COVER SHEET",
+    "index": "INDEX"
+   },
+   "version": "R0",
+   "active": true
+  },
+  {
+   "id": "pt",
+   "code": "PT",
+   "display_name": "Pressure Transmitter",
+   "category": "Pressure",
+   "file": "pt.xlsx",
+   "original_filename": "PRESSURE TRANSMITTER-R0.xls",
+   "aliases": [
+    "Pressure Transmitter",
+    "Pressure Indicating Transmitter",
+    "PT",
+    "PIT",
+    "Gauge Pressure Transmitter"
+   ],
+   "rules": [
+    {
+     "all": [
+      "pressure",
+      "transmitter"
+     ],
+     "none": [
+      "differential",
+      "flow",
+      "level",
+      "switch"
+     ]
+    }
+   ],
+   "sheets": {
+    "main": "PT",
+    "example": "PT-Example",
+    "annexure": "ANNEXURE-I",
+    "annexure2": "SPARE",
+    "checklist": "checklist ",
+    "cover": "COVER SHEET",
+    "index": "INDEX"
+   },
+   "version": "R0",
+   "active": true
+  },
+  {
+   "id": "te_rtd",
+   "code": "TE",
+   "display_name": "Temperature Element (RTD)",
+   "category": "Temperature",
+   "file": "te_rtd.xlsx",
+   "original_filename": "TE-RTD-R0.xls",
+   "aliases": [
+    "Temperature Element",
+    "RTD",
+    "Temperature Element - RTD",
+    "RTD Temperature Element",
+    "TE"
+   ],
+   "rules": [
+    {
+     "all": [
+      "temperature",
+      "element"
+     ],
+     "none": [
+      "transmitter",
+      "gauge"
+     ]
+    },
+    {
+     "all": [
+      "rtd"
+     ],
+     "none": [
+      "transmitter",
+      "gauge"
+     ]
+    }
+   ],
+   "sheets": {
+    "main": "TEMP ELEMENT",
+    "example": "EXAMPLE",
+    "annexure": "ANNEXURE-l",
+    "annexure2": "SPARE",
+    "checklist": "checklist",
+    "cover": "COVER SHEET",
+    "index": "INDEX"
+   },
+   "version": "R0",
+   "active": true
+  },
+  {
+   "id": "tg",
+   "code": "TG",
+   "display_name": "Temperature Gauge",
+   "category": "Temperature",
+   "file": "tg.xlsx",
+   "original_filename": "TG-R0.xls",
+   "aliases": [
+    "Temperature Gauge",
+    "Bimetallic Temperature Gauge",
+    "Dial Thermometer",
+    "TG",
+    "TI"
+   ],
+   "rules": [
+    {
+     "all": [
+      "temperature",
+      "gauge"
+     ],
+     "none": [
+      "transmitter",
+      "element"
+     ]
+    },
+    {
+     "all": [
+      "thermometer"
+     ],
+     "none": [
+      "transmitter"
+     ]
+    }
+   ],
+   "sheets": {
+    "main": "TEMP GAUGE",
+    "example": "EXAMPLE",
+    "annexure": "ANNEXURE-l",
+    "annexure2": "SPARE",
+    "checklist": "checklist",
+    "cover": "COVER SHEET",
+    "index": "INDEX"
+   },
+   "version": "R0",
+   "active": true
+  },
+  {
+   "id": "tt",
+   "code": "TT",
+   "display_name": "Temperature Transmitter",
+   "category": "Temperature",
+   "file": "tt.xlsx",
+   "original_filename": "TT-R0.xls",
+   "aliases": [
+    "Temperature Transmitter",
+    "Temperature Indicating Transmitter",
+    "TT",
+    "TIT"
+   ],
+   "rules": [
+    {
+     "all": [
+      "temperature",
+      "transmitter"
+     ],
+     "none": [
+      "switch",
+      "gauge"
+     ]
+    }
+   ],
+   "sheets": {
+    "main": "TEMPERATURE TRANSMITTER",
+    "example": "TT-EXAMPLE",
+    "annexure": "ANNEXURE-l",
+    "annexure2": "SPARE",
+    "checklist": "checklist",
+    "cover": "COVER SHEET",
+    "index": "INDEX"
+   },
+   "version": "R0",
+   "active": true
+  }
+ ]
 }

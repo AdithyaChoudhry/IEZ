@@ -17,7 +17,10 @@ from utils import datasheet_library as DL
 from utils import sop_consolidated as SC
 
 LIB = Path(DL.LIB_DIR)
-ALL = ["dps", "dpt", "fe_orifice", "fs", "ft_parshall", "ft_dp", "ft_thermal", "ft_clampon", "lg_magnetic", "lg_reflex", "lt_radar"]
+ALL = ["dps", "dpt", "fe_orifice", "fs", "ft_parshall", "ft_dp", "ft_thermal", "ft_clampon", "lg_magnetic", "lg_reflex", "lt_radar",
+       "lt_radar_sop", "lt_gwr", "lt_ultrasonic", "lt_dp_open", "fi_glass", "fi_metal", "pg_bourdon",
+       "pg_diaphragm", "ps", "pt", "te_rtd", "tg", "tt"]
+LEGACY = "lt_radar_sop"                     # the SOP LT workbook: no guide, no annexure (iEZ builds Annexure-I)
 HEADER = {"client": "GAIL (INDIA) LTD", "consultant": "PDIL", "project": "NEW WWTP", "plant": "PANIPAT", "client_doc_no": "C-001",
           "vatech_doc_no": "PC286-10P195-I0003-100", "rev": "0", "prepared_by": "AKB", "date": "20.11.2026"}
 
@@ -70,11 +73,11 @@ def test_each_template_loads_and_generates(tid):
     info = DL.template_info(DL.entry(tid))
     roles = {s["role"]: s["sheet"] for s in info["sheets"]}
     assert roles["main"]
-    if tid != "lt_radar":
+    if tid != LEGACY:
         for r in ("example", "annexure", "annexure2", "checklist", "cover", "index"):
             assert roles.get(r), f"{tid}: {r} not identified"
     fields, notes = DL.fields_for(DL.entry(tid))
-    assert len(fields) >= 30
+    assert len(fields) >= 15
     assert any(f.scope == "tag" for f in fields) and any(f.scope == "common" for f in fields)
     lc = DL.load_context(tid, blank_iodb())
     main = lc.ctx.sheets[roles["main"]]
@@ -86,7 +89,7 @@ def test_each_template_loads_and_generates(tid):
     assert err is None and not failed and name.endswith("_CONSOLIDATED_DATASHEET.xlsx")
     wb = openpyxl.load_workbook(io.BytesIO(out))
     expected = [roles[r] for r in ("cover", "index", "main", "annexure", "annexure2") if roles.get(r)]
-    if tid == "lt_radar":
+    if tid == LEGACY:
         expected = [roles["main"], "ANNEXURE-I"]
     assert wb.sheetnames == expected                                    # guide + checklist are not part of the document
     ws = wb[roles["main"]]
@@ -137,15 +140,39 @@ def test_guide_rows_paired_by_label_when_layout_shifts():
     ("Reflex Level Gauge", "lg_reflex", "exact"),
     ("Radar Level Transmitter", "lt_radar", "exact"),
     ("LT - NON CONTACT RADAR", "lt_radar", "keyword"),
+    ("LEVEL INDICATING TRANSMITTER - NCR TYPE", "lt_radar", "alias"),
+    ("Guided Wave Radar Level Transmitter", "lt_gwr", "exact"),
+    ("LEVEL TRANSMITTER - GWR", "lt_gwr", "keyword"),
+    ("Ultrasonic Level Transmitter", "lt_ultrasonic", "exact"),
+    ("LEVEL INDICATING TRANSMITTER-DP OPEN TANK", "lt_dp_open", "keyword"),
+    ("LEVEL INDICATING TRANSMITTER-DP", "lt_dp_open", "keyword"),
+    ("FLOW INDICATOR GLASS TUBE ROTAMETER", "fi_glass", "keyword"),
+    ("ROTAMETER METAL TUBE TYPE", "fi_metal", "keyword"),
+    ("PRESSURE GAUGE", "pg_bourdon", "alias"),
+    ("PRESSURE GAUGE- BOURDON TYPE", "pg_bourdon", "alias"),
+    ("PRESSURE GAUGE- DIAPHRAGM SEAL TYPE", "pg_diaphragm", "alias"),
+    ("PRESSURE SWITCH", "ps", "exact"),
+    ("PRESSURE INDICATING TRANSMITTER", "pt", "alias"),
+    ("PRESSURE INDICATING TRANSMITTER-BOURDON", "pt", "keyword"),
+    ("TEMPERATURE ELEMENT", "te_rtd", "alias"),
+    ("TEMPERATURE GAUGE", "tg", "exact"),
+    ("TEMPERATURE INDIDATING TRANSMITTER-RTD", "tt", "keyword"),
+    ("TEMPERATURE INDICATING TRANSMITTER", "tt", "alias"),
 ])
 def test_type_matching(text, tid, status):
     m = DL.match_type(text)
     assert (m["template_id"], m["status"]) == (tid, status)
 
 
-@pytest.mark.parametrize("text", ["Pressure Transmitter", "Magnetic Flow Meter", "Guided Wave Radar Level Transmitter",
-                                  "Ultrasonic Level Transmitter", "Level Transmitter", "Ultrasonic Flow Transmitter",
-                                  "Temperature Transmitter", "Flow Element", ""])
+def test_inactive_template_is_not_offered():
+    assert "lt_dp_closed" not in {t["id"] for t in DL.library()}
+    with pytest.raises(DL.LibraryError):
+        DL.entry("lt_dp_closed")
+
+
+@pytest.mark.parametrize("text", ["Magnetic Flow Meter", "Level Transmitter", "Ultrasonic Flow Transmitter", "Coriolis Flow Transmitter",
+                                  "Flow Element", "Level Switch", "Conductivity Analyzer", "LEVEL TRANSMITTER DP TYPE CLOSED TANK",
+                                  "Rotameter", ""])
 def test_similar_or_unknown_types_are_never_assigned(text):
     assert DL.match_type(text)["template_id"] is None
 
@@ -161,7 +188,7 @@ def test_iodb_analysis_groups_all_signal_types():
     rows = [("PDT-1", "DP TRANSMITTER", "", "AI", "A-1"), ("PDT-2", "DP TRANSMITTER", "", "AI", "A-1"),
             ("PDT-2", "DP TRANSMITTER", "", "AI", "A-1"),                                   # duplicate row
             ("LG-1", "MAGNETIC LEVEL GAUGE", "", "", ""),                                     # local - no signal
-            ("FS-1", "FLOW SWITCH", "", "DI", "B"), ("PT-1", "PRESSURE TRANSMITTER", "", "AI", "A-1"),
+            ("FS-1", "FLOW SWITCH", "", "DI", "B"), ("VT-1", "VIBRATION TRANSMITTER", "", "AI", "A-1"),
             ("X-1", "", "Reflex level gauge for tank T-1", "", "")]                          # blank type, description only
     for r in rows:
         ws.append(list(r))
@@ -172,7 +199,7 @@ def test_iodb_analysis_groups_all_signal_types():
     assert by["DP TRANSMITTER"]["duplicates"] == ["PDT-2"]
     assert by["MAGNETIC LEVEL GAUGE"]["template_id"] == "lg_magnetic"
     assert by["FLOW SWITCH"]["template_id"] == "fs"
-    assert by["PRESSURE TRANSMITTER"]["template_id"] is None and "PRESSURE TRANSMITTER" in res["unsupported"]
+    assert by["VIBRATION TRANSMITTER"]["template_id"] is None and "VIBRATION TRANSMITTER" in res["unsupported"]
     reflex = next(g for g in res["groups"] if g["matched_on"] == "description")
     assert reflex["template_id"] == "lg_reflex" and reflex["status"] == "description"
 
@@ -282,13 +309,30 @@ def test_manual_entry_dropdown_options_are_engineering_values():
 
 
 def test_generated_annexure_for_template_without_one():
-    lc = DL.load_context("lt_radar", blank_iodb())
+    lc = DL.load_context(LEGACY, blank_iodb())
     assert lc.derived_annexure
     heads = [c.label for c in lc.ctx.annexure.columns]
     assert heads[:2] == ["SL.No.", "TAG NO."] and "PRESSURE (KG/CM2 G) · MIN" in heads and "TANK MOC" in heads
     scope = {f"{f.spec.section}::{f.spec.label}": "common" for f in lc.lib_fields if f.spec.label == "Nozzle Size"}
-    scoped = DL.load_context("lt_radar", blank_iodb(), {"SENSOR::Nozzle Size": "tag"})
+    scoped = DL.load_context(LEGACY, blank_iodb(), {"SENSOR::Nozzle Size": "tag"})
     assert any("NOZZLE SIZE" in c.label for c in scoped.ctx.annexure.columns)
+
+
+def test_worked_example_guide_takes_tag_rows_from_the_annexure():
+    # the RTD guide is filled for one real tag (no 'REFER ANNEXURE-I'): Annexure-I columns decide what is tag-wise
+    fields, _ = DL.fields_for(DL.entry("te_rtd"))
+    tag = {f.spec.label for f in fields if f.scope == "tag"}
+    assert {"Tag No", "Location", "P&ID No", "Fluid", "Immersion Length (U) MM"} <= tag
+    assert "RTD Material" not in tag
+    out, *_ = DL.generate("te_rtd", iodb_for("te_rtd", 2), tags_for("te_rtd", 2), {}, None, HEADER)
+    vals = {c.value for row in openpyxl.load_workbook(io.BytesIO(out))["TEMP ELEMENT"].iter_rows() for c in row}
+    assert "TE 0102" not in vals and "REFER ANNEXURE-I" in vals                # the example tag is not copied
+
+
+def test_guide_with_different_section_names_still_pairs_every_row():
+    fields, notes = DL.fields_for(DL.entry("fi_glass"))
+    assert len(fields) == 30 and not notes["notes"]
+    assert next(f for f in fields if f.spec.label == "Tube Material").example == ["GLASS BOROSILICATE"]
 
 
 def test_header_placeholders_filled_and_reported():
@@ -387,7 +431,7 @@ def run(api, **kw):
 
 def test_api_library_and_iodb_analysis(api):
     lib = api.get("/api/sop-datasheet/library").json()["templates"]
-    assert len(lib) == 11 and all(t["output_filename"].endswith(".xlsx") for t in lib)
+    assert len(lib) == len(ALL) and all(t["output_filename"].endswith(".xlsx") for t in lib)
     t = api.get("/api/sop-datasheet/library/dpt").json()
     assert t["template"]["has_guide"] and len(t["fields"]) == 34 and "client" in t["header_fields"]
     assert api.get("/api/sop-datasheet/library/..%2Fsecret").status_code == 404

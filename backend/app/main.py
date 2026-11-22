@@ -43,6 +43,7 @@ from .routers.loop_wiring_test import router as loop_wiring_test_router
 from .routers.shared_iodb import router as shared_iodb_router
 from .routers.loop_wiring_assignment import router as loop_wiring_assignment_router
 from .routers.loop_wiring_engine import router as loop_wiring_engine_router
+from .routers.deliverables import router as deliverables_router
 
 
 @asynccontextmanager
@@ -125,6 +126,7 @@ app.include_router(loop_wiring_test_router, prefix="/api")
 app.include_router(shared_iodb_router, prefix="/api")
 app.include_router(loop_wiring_assignment_router, prefix="/api")
 app.include_router(loop_wiring_engine_router, prefix="/api")
+app.include_router(deliverables_router, prefix="/api")
 
 
 @app.get("/")

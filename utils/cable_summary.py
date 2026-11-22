@@ -7,7 +7,10 @@ For every IODB record two cable runs contribute quantities:
     MAIN CABLE TYPE              + MAIN CABLE LENGTH(MTRS)
 
 Identical cable descriptions (across both sources and across rows) are grouped into
-one row with the summed length in METERS. The result is written to the LAST worksheet,
+one row with the summed length in METERS. A PHYSICAL cable is counted once: rows that share a cable tag
+(INSTRUMENT TO JB CABLE TAG NO / MAIN CABLE TAG NUMBER - e.g. every instrument of a junction box naming the
+same main cable) contribute its length once; a tag whose rows give different types or lengths is not counted
+and is reported. Rows without a cable tag cannot be identified as shared and are counted per row. The result is written to the LAST worksheet,
 named "CABLE SUMMARY", reusing the template's own summary sheet when it has one.
 
 Matching is EXACT after safe whitespace normalisation only - no fuzzy matching.
@@ -36,6 +39,12 @@ CANONICAL_FIELDS: dict[str, dict] = {
     "MAIN_CABLE_TYPE":             {"aliases": ["MAIN CABLE TYPE"],             "unit_suffix": False},
     "MAIN_CABLE_LENGTH":           {"aliases": ["MAIN CABLE LENGTH"],           "unit_suffix": True},
 }
+# Physical cable identity (optional): when present, rows naming the same cable count it once.
+_TAG_ALIASES = {
+    "branch cable": ("INSTRUMENT TO JB CABLE TAG NO", "INSTRUMENT TO JB CABLE TAG NUMBER", "BRANCH CABLE TAG NO",
+                     "BRANCH CABLE TAG NUMBER"),
+    "main cable": ("MAIN CABLE TAG NUMBER", "MAIN CABLE TAG NO", "MAIN CABLE NO", "MAIN CABLE TAG"),
+}
 _UNIT_TOKENS = {"M", "MT", "MTR", "MTRS", "MTS", "METER", "METERS", "METRE", "METRES", "IN", "MM"}
 # (type field, length field, label) - the two cable runs that contribute quantities
 _SOURCES = (
@@ -58,6 +67,7 @@ class CableSummaryResult:
     source: dict = field(default_factory=dict)                # {"sheet", "header_row", "columns": {field: letter}}
     typed: dict[str, int] = field(default_factory=dict)       # cable-type entries per run (before length checks)
     formula_hint: str = ""
+    conflicts: list[str] = field(default_factory=list)       # cable tags with conflicting type / length (not counted)
 
     def diagnostics(self) -> list[str]:
         """Plain-language account of what the parser found (logged on every generation)."""
@@ -170,6 +180,14 @@ def _quantity(total: Decimal) -> int | float:
 
 
 # ── calculation ──────────────────────────────────────────────────────────────
+def _cable_key(value: Any) -> str:
+    """Identity of a physical cable from its tag ('' = no usable tag)."""
+    if value is None or (isinstance(value, float) and math.isnan(value)):
+        return ""
+    t = re.sub(r"\s+", " ", str(value)).strip().upper()
+    return "" if t in _PLACEHOLDERS else t
+
+
 def build_cable_summary(df, tag_column: str | None = None) -> CableSummaryResult:
     """
     Cable quantity per cable description from an IODB DataFrame (all rows of that IODB).
@@ -187,6 +205,8 @@ def build_cable_summary(df, tag_column: str | None = None) -> CableSummaryResult
     index_to_row = {pos: int(idx) + 2 if isinstance(idx, (int, float)) else pos + 2
                     for pos, idx in enumerate(df.index)}
     tag_values = df[tag_column].tolist() if tag_column and tag_column in df.columns else None
+    by_norm = {_norm_col(c): c for c in df.columns}
+    cables: dict[tuple[str, str], dict] = {}           # (source, cable tag) -> {"values": {(desc, length)}, "rows": [...]}
 
     for type_col, len_col, label in _SOURCES:
         t_name, l_name = cols[type_col], cols[len_col]
@@ -198,7 +218,9 @@ def build_cable_summary(df, tag_column: str | None = None) -> CableSummaryResult
             continue
         types = df[t_name].tolist()
         lengths = df[l_name].tolist()
-        for pos, (raw_type, raw_len) in enumerate(zip(types, lengths)):
+        tag_name = next((by_norm[_norm_col(a)] for a in _TAG_ALIASES[label] if _norm_col(a) in by_norm), None)
+        cable_tags = df[tag_name].tolist() if tag_name else [None] * len(types)
+        for pos, (raw_type, raw_len, raw_tag) in enumerate(zip(types, lengths, cable_tags)):
             description = normalize_cable_description(raw_type)
             if not description:
                 continue                                   # no cable of this kind on this record
@@ -220,10 +242,37 @@ def build_cable_summary(df, tag_column: str | None = None) -> CableSummaryResult
             if length == 0:
                 counts["zero_length"] += 1
                 continue
+            cable = _cable_key(raw_tag)
+            if cable:                                      # one physical cable: counted once, after all its rows are seen
+                entry = cables.setdefault((label, cable), {"values": set(), "rows": [], "tag": str(raw_tag).strip()})
+                entry["values"].add((description, length))
+                entry["rows"].append(index_to_row[pos])
+                continue
             key = description
             spelled.setdefault(key, description)
             totals[key] = totals.get(key, Decimal(0)) + length
             counts[label] += 1
+
+    conflicts = []
+    for (label, _), entry in cables.items():
+        if len(entry["values"]) > 1:
+            conflicts.append((label, entry))
+            continue
+        description, length = next(iter(entry["values"]))
+        spelled.setdefault(description, description)
+        totals[description] = totals.get(description, Decimal(0)) + length
+        counts[label] += 1
+        if len(entry["rows"]) > 1:
+            counts["shared_rows"] = counts.get("shared_rows", 0) + len(entry["rows"]) - 1
+    for label, entry in conflicts:
+        vals = "; ".join(f"{d} {_quantity(l)} m" for d, l in sorted(entry["values"], key=str))
+        result.warnings.append(f"[Cable Summary] Conflicting lengths were found for the same {label} {entry['tag']} "
+                               f"(IODB rows {', '.join(map(str, entry['rows'][:6]))}: {vals}). Please review the source "
+                               "engineering data - this cable is not counted.")
+    result.conflicts = [entry["tag"] for _, entry in conflicts]
+    if counts.get("shared_rows"):
+        result.warnings.append(f"[Cable Summary] {counts['shared_rows']} row(s) name a cable already counted on another row "
+                               "(e.g. a main cable shared by the instruments of a junction box) - each physical cable is counted once.")
 
     # Look-alike descriptions are NOT merged - only reported.
     looks_alike: dict[str, list[str]] = {}
@@ -308,11 +357,12 @@ def locate_cable_source(df, iodb_bytes: bytes | None = None, tag_column: str | N
         if not complete(cand["headers"]):
             continue
         letters = [cand["columns"][f] for f in cand["columns"]]
-        if tag_column:
-            tag_letter = next((letter for h, letter in cand["letters_by_header"].items()
-                               if _norm_col(h) == _norm_col(tag_column)), None)
-            if tag_letter and tag_letter not in letters:
-                letters.append(tag_letter)
+        wanted = [tag_column] if tag_column else []
+        wanted += [a for aliases in _TAG_ALIASES.values() for a in aliases]   # cable tags: one physical cable counted once
+        for name in wanted:
+            letter = next((lt for h, lt in cand["letters_by_header"].items() if _norm_col(h) == _norm_col(name)), None)
+            if letter and letter not in letters:
+                letters.append(letter)
         try:
             import io
             import pandas as pd

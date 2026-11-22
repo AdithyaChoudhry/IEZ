@@ -1,6 +1,7 @@
 """
 Instrument List Generator router.
 """
+from fastapi.concurrency import run_in_threadpool
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, status
 from fastapi.responses import StreamingResponse
 from typing import Optional
@@ -45,6 +46,7 @@ async def generate_instrument_list(
     selected_columns: str = Form(...),  # JSON array of column names
     filters: str = Form("{}"),  # JSON object of {column: [values]}
     project_id: Optional[str] = Form(None),  # optional: register output in the project document registry
+    cover_template_file: Optional[UploadFile] = File(None),  # optional custom cover sheet template (default: iEZ cover sheet)
     current_user: User = Depends(get_current_user),
 ):
     try:
@@ -87,6 +89,10 @@ async def generate_instrument_list(
                       template_filename=template_file.filename if template_file is not None else None)
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=err)
 
+    from .deliverables import finalize
+    cover_tpl = await cover_template_file.read() if cover_template_file is not None else None
+    out_bytes, filename, cover = await run_in_threadpool(finalize, current_user.id, "instrument_list", project_id, out_bytes,
+                                                         filename, custom_template=cover_tpl)
     cache_key = f"{current_user.id}_instrument_list"
     instrument_list_cache[cache_key] = {"bytes": out_bytes, "filename": filename}
 
@@ -99,7 +105,7 @@ async def generate_instrument_list(
     )
 
     return ListGenerateResponse(filename=filename, message="Instrument List generated successfully",
-                                 registry=registry)
+                                 registry=registry, cover=cover)
 
 
 @router.get("/download")

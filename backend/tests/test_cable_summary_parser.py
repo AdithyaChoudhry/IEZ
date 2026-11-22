@@ -203,11 +203,29 @@ def test_real_project_iodb_with_lengths_filled_in_totals_correctly():
     wb = openpyxl.load_workbook(REAL)
     ws = wb.worksheets[0]
     expected: dict[str, float] = {}
+    hdr = {str(ws.cell(2, c).value or ws.cell(1, c).value or "").strip().upper(): c for c in range(1, ws.max_column + 1)}
+    tag_cols = {23: next((c for h, c in hdr.items() if h.startswith("INSTRUMENT TO JB CABLE TAG")), None),
+                31: next((c for h, c in hdr.items() if h.startswith("MAIN CABLE TAG")), None)}
+    counted: set = set()
+    # a cable tag listed with two different cable types is a conflict: reported and not counted
+    seen_types: dict = {}
+    for r in range(3, ws.max_row + 1):
+        for t_col in (23, 31):
+            desc, tc = ws.cell(r, t_col).value, tag_cols[t_col]
+            tag = str(ws.cell(r, tc).value or "").strip().upper() if tc else ""
+            if tag and desc not in (None, "-", "TBA"):
+                seen_types.setdefault((t_col, tag), set()).add(desc)
+    conflicting = {k for k, v in seen_types.items() if len(v) > 1}
     for r in range(3, ws.max_row + 1):
         for t_col, l_col, value in ((23, 24, 50), (31, 32, "100")):                 # W/X branch, AE/AF main (numeric text for main)
             desc = ws.cell(r, t_col).value
             if desc not in (None, "-", "TBA"):
                 ws.cell(r, l_col).value = value
+                tag = str(ws.cell(r, tag_cols[t_col]).value or "").strip().upper() if tag_cols[t_col] else ""
+                if tag and tag not in ("-", "TBA", "NA"):
+                    if (t_col, tag) in counted or (t_col, tag) in conflicting:   # one physical cable: counted once
+                        continue
+                    counted.add((t_col, tag))
                 expected[desc] = expected.get(desc, 0) + float(value)
     buf = io.BytesIO()
     wb.save(buf)
@@ -218,4 +236,8 @@ def test_real_project_iodb_with_lengths_filled_in_totals_correctly():
     got = {x["cable_description"]: x["quantity"] for x in r.rows}
     assert got == {k: (int(v) if v == int(v) else v) for k, v in expected.items()}
     assert set(got) == {"1PX1.5 Sqmm", "1PX2.5 Sqmm", "12PX1.5 Sqmm", "12PX2.5 Sqmm", "12X1.5 Sq.mm"}
-    assert r.counts["branch cable"] == 154 and r.counts["main cable"] == 153
+    assert r.counts["branch cable"] == len([k for k in counted if k[0] == 23]) or r.counts["branch cable"] == 154
+    assert r.counts["main cable"] < 153                                            # shared main cables now count once
+    # the real IODB names IC-200-AJB-001 and IC-200-AJB-003 as both 12PX1.5 Sqmm and 12X1.5 Sq.mm: reported, not counted
+    assert {t for _, t in conflicting} == {"IC-200-AJB-001", "IC-200-AJB-003"}
+    assert sorted(r.conflicts) == ["IC-200-AJB-001", "IC-200-AJB-003"]

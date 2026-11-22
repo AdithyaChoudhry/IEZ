@@ -24,6 +24,8 @@ class CableScheduleGenerateResponse(BaseModel):
     extra_sheets: Optional[List[str]] = None
     extra_stats: Optional[List[Dict[str, Any]]] = None
     extra_warnings: Optional[List[str]] = None
+    # Centralised cover sheet applied to the deliverable (status, MDL document, revision, draft)
+    cover: Optional[Dict[str, Any]] = None
 
 
 class CompositionSheet(BaseModel):

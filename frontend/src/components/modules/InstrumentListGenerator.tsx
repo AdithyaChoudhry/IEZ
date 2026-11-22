@@ -3,7 +3,8 @@
  * Upload an IODB file, pick columns + per-column filters, preview, and generate.
  */
 import { useState, useMemo } from 'react';
-import { FileSpreadsheet, Upload, FileText, Download, CheckCircle2, ChevronLeft, ChevronRight } from 'lucide-react';
+import { FileSpreadsheet, Upload, FileText, CheckCircle2, ChevronLeft, ChevronRight } from 'lucide-react';
+import { DeliverableCoverCard, DeliverableDownloads, type AppliedCover } from '../ui/DeliverableCover';
 import api from '@/services/api';
 import PageHeader from '../ui/PageHeader';
 import ProjectSelector from '../ui/ProjectSelector';
@@ -26,11 +27,13 @@ interface AnalyzeResponse {
 interface GenerateResponse {
   filename: string;
   message: string;
+  cover?: AppliedCover | null;
 }
 
 export default function InstrumentListGenerator() {
   const [iodbFile, setIodbFile] = useState<File | null>(null);
   const [templateFile, setTemplateFile] = useState<File | null>(null);
+  const [coverTemplate, setCoverTemplate] = useState<File | null>(null);
   const [analysis, setAnalysis] = useState<AnalyzeResponse | null>(null);
   const [selectedColumns, setSelectedColumns] = useState<string[]>([]);
   const [filters, setFilters] = useState<Record<string, string[]>>({});
@@ -79,6 +82,7 @@ export default function InstrumentListGenerator() {
     const formData = new FormData();
     formData.append('iodb_file', iodbFile);
     if (templateFile) formData.append('template_file', templateFile);
+    if (coverTemplate) formData.append('cover_template_file', coverTemplate);
     formData.append('selected_columns', JSON.stringify(selectedColumns));
     formData.append('filters', JSON.stringify(filters));
 
@@ -314,6 +318,8 @@ export default function InstrumentListGenerator() {
             )}
           </Card>
 
+          <DeliverableCoverCard docType="instrument_list" customTemplate={coverTemplate} onCustomTemplate={(f) => { setCoverTemplate(f); setResult(null); }} />
+
           {/* Generate */}
           <Button
             onClick={handleGenerate}
@@ -337,10 +343,8 @@ export default function InstrumentListGenerator() {
             <div className="flex-1">
               <h3 className="text-xl font-bold text-green-800 mb-2">Instrument List Generated!</h3>
               <p className="text-green-700 mb-4">{result.message}</p>
-              <Button onClick={handleDownload} className="bg-green-600 hover:bg-green-700">
-                <Download className="w-5 h-5" />
-                Download {result.filename}
-              </Button>
+              <p className="text-sm text-green-800 mb-2 font-mono">{result.filename}</p>
+              <DeliverableDownloads module="instrument_list" filename={result.filename} cover={result.cover} onExcel={handleDownload} />
             </div>
           </div>
         </div>

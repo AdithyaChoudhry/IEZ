@@ -18,6 +18,8 @@ import Button from '../ui/Button';
 import Alert from '../ui/Alert';
 import { scoreVendors, VendorScore, VendorModel } from '@/data/ltRadarVendors';
 import { SharedIodbPanel } from '../ui/SharedIodb';
+import { DeliverableCoverCard, DeliverableDownloads, type AppliedCover } from '../ui/DeliverableCover';
+import { getCurrentProject } from '@/services/projectContext';
 
 // ── Engineering Knowledge Base ─────────────────────────────────────────────────
 const KB: Record<string, string[]> = {
@@ -74,7 +76,7 @@ interface VResult { format: string; issues: VIssue[]; counts: { ERROR: number; R
     columns: { col: number; label: string; kind: string; hidden: boolean; iodb_column: string | null }[];
     missing?: { tag: string; col: number; label: string }[]; missing_total?: number; manual_filled?: number } }
 interface ApprovalInfo { approved_by: string; employee_id: string; role: string; date: string; time_log: string; }
-interface GenStatus { job_id: string; status: 'processing' | 'done' | 'error'; result?: { filename: string; tag_count: number; message: string; requested_count?: number; failed_tags?: { tag: string; reason: string }[]; format?: GenFormat }; error?: string; }
+interface GenStatus { job_id: string; status: 'processing' | 'done' | 'error'; result?: { filename: string; tag_count: number; message: string; requested_count?: number; failed_tags?: { tag: string; reason: string }[]; format?: GenFormat; cover?: AppliedCover | null }; error?: string; }
 
 type SpecSource = 'iodb' | 'ai' | 'user' | string;
 
@@ -680,6 +682,7 @@ export default function DataSheetGenerator() {
 
   // Step 9 — generate
   const [genStatus, setGenStatus] = useState<GenStatus | null>(null);
+  const [coverTemplate, setCoverTemplate] = useState<File | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Restore persisted state on mount
@@ -1002,6 +1005,8 @@ export default function DataSheetGenerator() {
       fd.append('generation_format', genFormat);
       fd.append('approval_id', String(pendingReqId));
       if (genFormat === 'CONSOLIDATED') fd.append('annexure_mapping', JSON.stringify(currentMapping()));
+      if (getCurrentProject()) fd.append('project_id', getCurrentProject());      // resolves this datasheet's cover sheet (MDL)
+      if (coverTemplate) fd.append('cover_template_file', coverTemplate);
       const res = await api.post('/sop-datasheet/generate', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
       setGenStatus({ job_id: res.data.job_id, status: 'processing' });
       pollRef.current = setInterval(async () => {
@@ -1974,13 +1979,20 @@ export default function DataSheetGenerator() {
                       </Alert>
                     </div>
                   )}
-                  <Button onClick={downloadZip} size="lg">
-                    <Download className="w-4 h-4" /> {genStatus.result?.filename?.endsWith('.xlsx') ? `Download ${genStatus.result.filename}` : (genStatus.result?.tag_count ?? 0) === 1 ? 'Download Datasheet (ZIP)' : 'Download Datasheets (ZIP)'}
-                  </Button>
+                  <p className="text-xs mb-2 font-mono" style={{ color: 'var(--t1)' }}>{genStatus.result?.filename}</p>
+                  <div className="inline-block text-left">
+                    <DeliverableDownloads module="datasheet" filename={genStatus.result?.filename || 'Datasheets.zip'} cover={genStatus.result?.cover} onExcel={downloadZip} />
+                  </div>
                 </>
               )}
               {genStatus?.status === 'error' && (
                 <Alert variant="error">{genStatus.error || 'Generation failed'}</Alert>
+              )}
+              {!genStatus && (
+                <div className="text-left mb-4">
+                  <DeliverableCoverCard docType="datasheet" subKey={templateId || selectedType} subLabel={templateInfo?.display_name || selectedType}
+                                        customTemplate={coverTemplate} onCustomTemplate={setCoverTemplate} />
+                </div>
               )}
               {!genStatus && (
                 <Button onClick={startGenerate} loading={busy} size="lg" className="mx-auto">

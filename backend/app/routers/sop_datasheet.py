@@ -255,7 +255,8 @@ async def library_template(template_id: str, field_scope: str = "", current_user
 def _run_generate_job(job_id, sop_bytes, sop_filename, datasheet_sheet,
                       iodb_bytes, instrument_type, selected_tags, overrides, user_id,
                       generation_format=SC.INDIVIDUAL, annexure_mapping=None, approval_id=None,
-                      template_id=None, header=None, field_scope=None, annexure_values=None):
+                      template_id=None, header=None, field_scope=None, annexure_values=None,
+                      project_id=None, cover_template=None):
     """Generate the datasheet package in a background thread (individual: one file per tag; consolidated: one workbook;
     library template: one consolidated workbook from the standard template library)."""
     try:
@@ -276,6 +277,15 @@ def _run_generate_job(job_id, sop_bytes, sop_filename, datasheet_sheet,
             generation_jobs[job_id] = {"status": "error", "error": err}
             return
         generated = len(set(map(str, selected_tags))) - len(failed)
+        # centralised cover sheet: one per datasheet document (library template = instrument type), Excel and PDF alike
+        from .deliverables import finalize
+        try:
+            label = DL.entry(template_id)["display_name"] if template_id else instrument_type
+        except Exception:
+            label = instrument_type
+        zip_bytes, filename, cover = finalize(user_id, "datasheet", project_id, zip_bytes, filename,
+                                              sub_key=template_id or str(instrument_type or ""), sub_label=label,
+                                              custom_template=cover_template)
         generation_cache[f"{user_id}_sop_datasheet"] = {"bytes": zip_bytes, "filename": filename}
         try:
             _OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -290,6 +300,7 @@ def _run_generate_job(job_id, sop_bytes, sop_filename, datasheet_sheet,
             "status": "done",
             "result": GenerateResult(
                 filename=filename,
+                cover=cover,
                 tag_count=generated,
                 requested_count=len(set(map(str, selected_tags))),
                 failed_tags=failed,
@@ -421,6 +432,8 @@ async def generate(
     approval_id: int | None = Form(None),           # Lead Engineer approval of exactly this package
     annexure_mapping: str = Form("{}"),             # consolidated: {annexure column: IODB column}
     template_id: str = Form(""),                    # standard template library: consolidated only, approval required
+    project_id: str | None = Form(None),            # selected project: resolves the datasheet's cover sheet (MDL)
+    cover_template_file: UploadFile | None = File(None),   # optional custom cover sheet template
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -466,6 +479,7 @@ async def generate(
 
     sop_bytes = await sop_file.read() if sop_file is not None else b""
     iodb_bytes = await iodb_file.read()
+    cover_tpl = await cover_template_file.read() if cover_template_file is not None else None
 
     job_id = str(uuid.uuid4())
     generation_jobs[job_id] = {"status": "processing"}
@@ -476,7 +490,7 @@ async def generate(
               iodb_bytes, instrument_type, tags_list, overrides_dict, current_user.id,
               fmt, mapping_dict, approval_id, template_id or None,
               approved_meta.get("header") or {}, approved_meta.get("field_scope") or {},
-              approved_meta.get("annexure_values") or {}),
+              approved_meta.get("annexure_values") or {}, project_id, cover_tpl),
         daemon=True,
     ).start()
 

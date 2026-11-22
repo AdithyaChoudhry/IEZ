@@ -22,6 +22,8 @@ class ListGenerateResponse(BaseModel):
     # I/O List output option and the sheets the generated workbook actually contains (read from the output file).
     output_mode: Optional[str] = None
     sheets: Optional[List[str]] = None
+    # Centralised cover sheet applied to the deliverable (status, MDL document, revision, draft) - see routers/deliverables.py
+    cover: Optional[Dict[str, Any]] = None
 
 
 class CompositionSheet(BaseModel):

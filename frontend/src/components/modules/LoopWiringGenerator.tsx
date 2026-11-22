@@ -15,6 +15,7 @@ import Button from '../ui/Button';
 import Alert from '../ui/Alert';
 import FileUploadCard from '../ui/FileUploadCard';
 import { getCurrentProject } from '@/services/projectContext';
+import { DeliverableCoverCard, DeliverableDownloads } from '../ui/DeliverableCover';
 
 type Row = Record<string, any>;
 const mp = { headers: { 'Content-Type': 'multipart/form-data' } };
@@ -227,6 +228,8 @@ export default function LoopWiringGenerator() {
               </div>)}
           </Card>
 
+          <DeliverableCoverCard docType="loop_wiring" />
+
           <Card title="Step 6 - Generate">
             <p className="text-sm mb-3" style={{ color: 'var(--t0)' }}>
               {selected.length} loop(s) selected · {generable.length} can be generated{selected.length - generable.length > 0 && <span className="text-red-500"> · {selected.length - generable.length} with ERROR will be skipped (listed in the report)</span>}
@@ -236,8 +239,10 @@ export default function LoopWiringGenerator() {
               <div className="mt-4 rounded-xl p-4" style={{ background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.3)' }}>
                 <p className="text-sm font-semibold flex items-center gap-2 text-green-600"><CheckCircle2 className="w-4 h-4" />{result.message}</p>
                 {result.skipped?.length > 0 && <ul className="text-xs mt-2 text-red-500">{result.skipped.map((s: Row) => <li key={s.loop}>{s.loop}: {s.errors[0]}</li>)}</ul>}
-                <div className="flex flex-wrap gap-2 mt-3">
-                  <Button onClick={() => save('download', 'LOOP_WIRING_GENERATED.xlsx')}><Download className="w-4 h-4" />Download LOOP_WIRING_GENERATED.xlsx</Button>
+                <div className="mt-3 space-y-2">
+                  <p className="text-sm font-mono" style={{ color: 'var(--t0)' }}>{result.filename}</p>
+                  <DeliverableDownloads module="loop_wiring" filename={result.filename || 'LOOP_WIRING_GENERATED.xlsx'} cover={result.cover}
+                                        onExcel={() => save('download', result.filename || 'LOOP_WIRING_GENERATED.xlsx')} />
                   <Button variant="secondary" onClick={() => save('report', 'LOOP_WIRING_GENERATION_REPORT.xlsx')}><Download className="w-4 h-4" />Generation &amp; traceability report</Button>
                 </div>
               </div>)}

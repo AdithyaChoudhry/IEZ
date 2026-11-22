@@ -219,6 +219,7 @@ async def generate_cable_schedule(
     extra_sheets: str = Form(""),              # optional: "MCC DI,MCC DO,VFD,MOV,LCP"
     include_schedule: bool = Form(True),       # False: only the extra sheets (needs extra_sheets)
     selected_jbs: str = Form(""),              # optional JSON list / comma list of junction boxes (default: all)
+    cover_template_file: Optional[UploadFile] = File(None),  # optional custom cover sheet template (default: iEZ cover sheet)
     current_user: User = Depends(get_current_user),
 ):
     try:
@@ -278,6 +279,12 @@ async def generate_cable_schedule(
     if mismatch:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=mismatch)
 
+    from .deliverables import finalize
+    cover_tpl = await cover_template_file.read() if cover_template_file is not None else None
+    out_bytes, filename, cover = await run_in_threadpool(finalize, current_user.id, "cable_schedule", project_id, out_bytes,
+                                                         filename, custom_template=cover_tpl)
+    if cover.get("cover_sheet") and cover["cover_sheet"] not in planned:
+        planned = [cover["cover_sheet"]] + planned
     cache_key = f"{current_user.id}_cable_schedule"
     cable_schedule_cache[cache_key] = {"bytes": out_bytes, "filename": filename}
     with _generated_lock:
@@ -298,7 +305,7 @@ async def generate_cable_schedule(
                                          registry=registry, output_mode=output_mode, sheets=planned,
                                          extra_sheets=extra_report.get("sheets") or None,
                                          extra_stats=extra_report.get("stats") or None,
-                                         extra_warnings=extra_report.get("warnings") or None)
+                                         extra_warnings=extra_report.get("warnings") or None, cover=cover)
 
 
 @router.get("/generated")

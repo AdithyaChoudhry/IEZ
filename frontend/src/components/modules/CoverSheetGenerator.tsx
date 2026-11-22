@@ -25,6 +25,7 @@ import ConnectedDocuments, { type DocInfo } from './coversheet/ConnectedDocument
 import MdlSelector, { type MdlSelection, type MdlSummary } from './coversheet/MdlSelector';
 import TemplateCoverSheet from './coversheet/TemplateCoverSheet';
 import CoversheetBuilder from './coversheet/CoversheetBuilder';
+import DeliverableCovers from './coversheet/DeliverableCovers';
 import { getCurrentProject } from '@/services/projectContext';
 import Button from '../ui/Button';
 import Alert from '../ui/Alert';
@@ -320,7 +321,8 @@ function CSRaiseRequestModal({
 // ── Main Component ─────────────────────────────────────────────────────────────
 export default function CoverSheetGenerator() {
   // 'existing' = the standard iEZ workflow (default, unchanged); 'template' = use an uploaded Excel coversheet.
-  const [mode, setMode] = useState<'existing' | 'template' | 'builder'>('existing');
+  const [mode, setMode] = useState<'existing' | 'template' | 'builder' | 'deliverables'>(
+    new URLSearchParams(window.location.search).get('deliverable') ? 'deliverables' : 'existing');
   const [projectInfo, setProjectInfo] = useState<ProjectInfo>(emptyProjectInfo);
   const [revisions, setRevisions] = useState<RevisionEntry[]>([emptyRevision()]);
   const setPI = (k: keyof ProjectInfo, v: string) => setProjectInfo(p => ({ ...p, [k]: v }));
@@ -578,7 +580,7 @@ export default function CoverSheetGenerator() {
 
   const modeSelector = (
     <div className="flex flex-wrap gap-2" role="radiogroup" aria-label="Coversheet workflow">
-      {([['existing', 'Existing iEZ Coversheet Workflow'], ['template', 'Use Uploaded Excel Coversheet Template'], ['builder', 'MDL-Driven Coversheet (Excel / PDF Template)']] as const).map(([k, label]) => (
+      {([['existing', 'Existing iEZ Coversheet Workflow'], ['template', 'Use Uploaded Excel Coversheet Template'], ['builder', 'MDL-Driven Coversheet (Excel / PDF Template)'], ['deliverables', 'Engineering Deliverable Covers']] as const).map(([k, label]) => (
         <button key={k} role="radio" aria-checked={mode === k} onClick={() => setMode(k)}
           className="px-4 py-2 rounded-xl text-sm font-semibold"
           style={mode === k
@@ -589,6 +591,17 @@ export default function CoverSheetGenerator() {
       ))}
     </div>
   );
+
+  if (mode === 'deliverables') {
+    return (
+      <div className="sm:p-6 max-w-6xl mx-auto space-y-5">
+        <PageHeader icon={FileSpreadsheet} title="Cover Sheet Generator"
+          description="Cover sheets of the Instrument List, I/O List, Cable Schedule, Loop Wiring and Datasheet deliverables - entered once, used by every generator" />
+        {modeSelector}
+        <DeliverableCovers />
+      </div>
+    );
+  }
 
   if (mode === 'builder') {
     return (

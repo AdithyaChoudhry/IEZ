@@ -3,7 +3,7 @@
  * Upload IODB + Cable Schedule template, pick JB/Tag columns, preview JB summary, generate.
  */
 import { useState } from 'react';
-import { Cable, Upload, FileText, Download, CheckCircle2 } from 'lucide-react';
+import { Cable, Upload, FileText, CheckCircle2 } from 'lucide-react';
 import api from '@/services/api';
 import PageHeader from '../ui/PageHeader';
 import ProjectSelector from '../ui/ProjectSelector';
@@ -18,6 +18,7 @@ import DrumScheduleGenerator from './cableschedule/DrumScheduleGenerator';
 import GlandQuantityGenerator from './cableschedule/GlandQuantityGenerator';
 import LugQuantityGenerator from './cableschedule/LugQuantityGenerator';
 import CableScheduleComplete from './cableschedule/CableScheduleComplete';
+import { DeliverableCoverCard, DeliverableDownloads, type AppliedCover } from '../ui/DeliverableCover';
 
 interface ColumnsResponse {
   columns: string[];
@@ -40,6 +41,7 @@ interface GenerateResponse {
   sheets?: string[];   // sheets of the generated workbook, read from the output file
   extra_sheets?: string[] | null;
   extra_warnings?: string[] | null;
+  cover?: AppliedCover | null;
 }
 
 export default function CableScheduleGenerator() {
@@ -58,6 +60,7 @@ export default function CableScheduleGenerator() {
   const [view, setView] = useState<'schedule' | 'drum' | 'gland' | 'lug' | 'complete'>('schedule');
   const [includeSchedule, setIncludeSchedule] = useState(true);
   const [extraSheets, setExtraSheets] = useState<string[]>([]);
+  const [coverTemplate, setCoverTemplate] = useState<File | null>(null);
 
   const [loadingColumns, setLoadingColumns] = useState(false);
   const [loadingPreview, setLoadingPreview] = useState(false);
@@ -143,6 +146,7 @@ export default function CableScheduleGenerator() {
     formData.append('extra_sheets', extraSheets.join(','));
     formData.append('include_schedule', String(includeSchedule));
     if (includeSchedule && jbSummary && selectedJbs.length < jbSummary.length) formData.append('selected_jbs', JSON.stringify(selectedJbs));
+    if (coverTemplate) formData.append('cover_template_file', coverTemplate);
 
     try {
       const response = await api.post<GenerateResponse>('/cable-schedule/generate', formData, {
@@ -311,6 +315,8 @@ export default function CableScheduleGenerator() {
         />
       )}
 
+      <DeliverableCoverCard docType="cable_schedule" customTemplate={coverTemplate} onCustomTemplate={(f) => { setCoverTemplate(f); setResult(null); }} />
+
       {extraOnly && (
         <Card title="Generate">
           <Button onClick={handleGenerate} disabled={!templateFile || !iodbFile} loading={generating} size="lg" fullWidth className="text-lg py-4">
@@ -440,10 +446,8 @@ export default function CableScheduleGenerator() {
                   {result.extra_warnings.map((w, i) => <li key={i}>{w}</li>)}
                 </ul>
               )}
-              <Button onClick={handleDownload} className="bg-green-600 hover:bg-green-700">
-                <Download className="w-5 h-5" />
-                Download {result.filename}
-              </Button>
+              <p className="text-sm text-green-800 mb-2 font-mono">{result.filename}</p>
+              <DeliverableDownloads module="cable_schedule" filename={result.filename} cover={result.cover} onExcel={handleDownload} />
               <p className="text-sm text-green-800 mt-3">
                 This Cable Schedule is now the input of the Drum Schedule, Cable Gland Quantity and Cable Lug Quantity generators (tabs above).
               </p>

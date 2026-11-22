@@ -507,6 +507,66 @@ def _find_cs_sheet(template_wb) -> str | None:
     return None
 
 
+_CS_CONSTANT_FORMULA = re.compile(r"=\s*[-+]?[\d.\s+\-*/()]+")   # no cell reference: a sample value, not a formula
+
+
+def _cs_main_key(value) -> str:
+    """Identity of a physical main cable: its MAIN CABLE TAG (case / spacing insensitive); '' when there is none."""
+    if value is None or (not isinstance(value, str) and pd.isna(value)):
+        return ""
+    t = re.sub(r"\s+", " ", str(value)).strip().upper()
+    return "" if t in ("", "NAN", "-", "--", "NA", "N/A", "TBA", "NONE") else t
+
+
+def _cs_remark(value):
+    """Remarks exactly as in the IODB: text kept (line breaks included), numbers kept as numbers, empty -> None."""
+    if value is None or (not isinstance(value, str) and pd.isna(value)):
+        return None
+    if isinstance(value, str):
+        return value if value.strip() else None
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    return value
+
+
+def _cs_special_columns(header_map: dict, col_match: dict, df, rows) -> dict:
+    """Template columns that are not filled 'as is': Remarks and MAIN CABLE LENGTH, their IODB sources, the IODB column
+    that identifies a main cable, and the main cables of `rows` whose type / length differ between rows (conflicts)."""
+    from utils.cable_summary import normalize_cable_description, parse_length
+    k = lambda t: re.sub(r"[^a-z0-9]", "", str(t).lower())
+    inv = {}
+    for src, col in col_match.items():
+        inv.setdefault(col, src)
+    remarks_col = next((c for c, t in header_map.items() if k(t) == "remarks"), None)
+    main_len_col = next((c for c, t in header_map.items() if k(t).startswith("maincablelength")), None)
+    main_tag_col = next((c for c, t in header_map.items() if k(t).startswith("maincabletag")), None)
+    main_type_col = next((c for c, t in header_map.items() if k(t).startswith("maincabletype")), None)
+    iodb_key = {k(c): c for c in df.columns}
+    find = lambda pre: next((c for kk, c in iodb_key.items() if kk.startswith(pre)), None)
+    main_tag_src = inv.get(main_tag_col) or find("maincabletag")
+    main_type_src = inv.get(main_type_col) or find("maincabletype")
+    main_len_src = inv.get(main_len_col) or find("maincablelength")
+    out = {"remarks_col": remarks_col, "remarks_src": inv.get(remarks_col), "main_len_col": main_len_col,
+           "main_tag_src": main_tag_src, "conflicts": set(), "warnings": []}
+    if remarks_col and not out["remarks_src"]:
+        out["warnings"].append("The IODB has no Remarks column: the Remarks column of the Cable Schedule is left blank.")
+    if main_tag_src and main_len_src:
+        seen: dict[str, set] = {}
+        for tag, typ, length in zip(rows[main_tag_src], rows[main_type_src] if main_type_src else [None] * len(rows), rows[main_len_src]):
+            key_ = _cs_main_key(tag)
+            if not key_:
+                continue
+            val, status = parse_length(length)
+            if status == "ok":
+                seen.setdefault(key_, set()).add((normalize_cable_description(typ), val))
+        out["conflicts"] = {t for t, v in seen.items() if len(v) > 1}
+        for t in sorted(out["conflicts"])[:20]:
+            vals = "; ".join(f"{ty or 'no type'} {ln} m" for ty, ln in sorted(seen[t], key=str))
+            out["warnings"].append(f"Conflicting lengths were found for the same main cable {t} ({vals}). Please review the "
+                                   "source engineering data - every row keeps its own value and the cable is not counted in the Cable Summary.")
+    return out
+
+
 def generate_cable_schedule(
     df: pd.DataFrame,
     template_wb: openpyxl.Workbook,
@@ -755,6 +815,9 @@ def generate_cable_schedule(
         seen_tags: dict[str, int] = {}   # tag_value → first output row (dedup log)
         block_jbs: list[str] = []        # junction box of every written entry, in output order (TB numbering)
         tag_warnings: list[str]   = []   # empty-TAG-NO warnings
+        _cs = _cs_special_columns(header_map, col_match, df, work_df)
+        cs_warnings: list[str] = list(_cs["warnings"])
+        seen_main: set[str] = set()      # main cables whose length is already shown (one physical cable = one length)
 
         for jb_idx, jb_name in enumerate(jb_order):
             if progress_callback:
@@ -763,6 +826,7 @@ def generate_cable_schedule(
             tag_entries = work_df[work_df[jb_column] == jb_name].to_dict('records')
 
             for entry in tag_entries:
+                main_key = _cs_main_key(entry.get(_cs["main_tag_src"])) if _cs["main_tag_src"] else ""
                 # ── Validate TAG NO for this row ───────────────────────────
                 raw_tag = entry.get(tag_column)
                 if raw_tag is None or (not isinstance(raw_tag, str) and pd.isna(raw_tag)):
@@ -820,12 +884,25 @@ def generate_cable_schedule(
                 for iodb_col, tmpl_col_idx in col_match.items():
                     try:
                         c = out_ws.cell(row=dst_main, column=tmpl_col_idx)
-                        if isinstance(c.value, str) and c.value.startswith('='):
-                            continue  # keep formula
+                        if isinstance(c.value, str) and c.value.startswith('=') and not _CS_CONSTANT_FORMULA.fullmatch(c.value):
+                            continue  # keep formula (a constant one such as '=98+210' is template sample data: the IODB value replaces it)
 
                         # For TAG NO: always use raw_tag (already validated above)
                         if iodb_col == tag_column:
                             c.value = raw_tag
+                        elif tmpl_col_idx == _cs["remarks_col"]:
+                            # Remarks = the IODB value as it is; an empty source stays empty (never a placeholder)
+                            c.value = _cs_remark(entry.get(iodb_col))
+                        elif tmpl_col_idx == _cs["main_len_col"] and main_key and main_key not in _cs["conflicts"]:
+                            # one physical main cable = one length: shown on its first row only
+                            raw = entry.get(iodb_col)
+                            if main_key in seen_main:
+                                c.value = None
+                            elif raw is None or (not isinstance(raw, str) and pd.isna(raw)) or str(raw).strip() in ("", "nan"):
+                                c.value = "TBA"
+                            else:
+                                c.value = str(raw).strip() if isinstance(raw, str) else raw
+                                seen_main.add(main_key)
                         else:
                             raw = entry.get(iodb_col)
                             if raw is None or (not isinstance(raw, str) and pd.isna(raw)):
@@ -838,6 +915,13 @@ def generate_cable_schedule(
                         c.alignment = _CS_ALIGN
                     except Exception:
                         continue
+
+                if _cs["remarks_col"] and not _cs["remarks_src"]:
+                    # no Remarks column in the IODB: the template's sample text is not carried into the output
+                    for row_off in range(ROWS_PER_TAG):
+                        _rc = out_ws.cell(row=current_row + row_off, column=_cs["remarks_col"])
+                        if not isinstance(_rc, openpyxl.cell.cell.MergedCell):
+                            _rc.value = None
 
                 block_jbs.append(str(jb_name))
                 sl_no      += 1
@@ -933,6 +1017,8 @@ def generate_cable_schedule(
             redundant_rows = redundant_main_cable_rows(df, list(extra_sheets))
             if extra_report is not None:
                 extra_report.update(_report)
+        if include_schedule and extra_report is not None and cs_warnings:
+            extra_report["warnings"] = list(extra_report.get("warnings") or []) + cs_warnings
         if extra_sheets and not include_schedule:
             del out_wb[target_sheet]
 
@@ -958,6 +1044,11 @@ def generate_cable_schedule(
                     if not _summary.rows and iodb_bytes:
                         _summary.formula_hint = formula_hint_for(iodb_bytes, _info)
                 append_cable_summary_sheet(out_wb, _summary)
+                if extra_report is not None:
+                    _shown = [w.replace("[Cable Summary] ", "Cable Summary: ") for w in _summary.warnings
+                              if "Conflicting lengths" in w or "counted once" in w]
+                    if _shown:
+                        extra_report["warnings"] = list(extra_report.get("warnings") or []) + _shown
                 import sys
                 for _line in _summary.log_lines():
                     print(_line, file=sys.stderr)

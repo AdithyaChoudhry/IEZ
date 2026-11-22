@@ -76,6 +76,7 @@ class GenerateResult(BaseModel):
     failed_tags: list[FailedTag] = []
     format: str = "INDIVIDUAL"     # INDIVIDUAL | CONSOLIDATED
     approval_id: int | None = None
+    cover: dict | None = None      # centralised cover sheet applied (status, MDL document, revision, draft)
 
 
 class GenerateStatusResponse(BaseModel):

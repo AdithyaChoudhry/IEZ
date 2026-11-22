@@ -158,13 +158,15 @@ def _run(job_id: str, analysis_id: str, names: Optional[list[str]], user: User, 
         an: A.Analysis = s["analysis"]
         data, stats = GEN.generate_workbook(an, names, s["name"])
         report = GEN.build_report(an, set(stats["sheet_names"]), s["name"])
-        _outputs[str(user.id)] = {"workbook": data, "report": report, "filename": "LOOP_WIRING_GENERATED.xlsx"}
-        loop_wiring_cache[f"{user.id}_loop_wiring"] = {"bytes": data, "filename": "LOOP_WIRING_GENERATED.xlsx"}
+        from .deliverables import finalize          # centralised cover sheet first; Excel and PDF serve this same workbook
+        data, fname, cover = finalize(user.id, "loop_wiring", project_id, data, "LOOP_WIRING_GENERATED.xlsx")
+        _outputs[str(user.id)] = {"workbook": data, "report": report, "filename": fname}
+        loop_wiring_cache[f"{user.id}_loop_wiring"] = {"bytes": data, "filename": fname}
         registry = register_safe("success", project_id=project_id, module="loop_wiring", user=user.username, source_bytes=s["bytes"], source_filename=s["name"],
-                                 output_bytes=data, output_filename="LOOP_WIRING_GENERATED.xlsx", sheet_count=stats["sheets"],
+                                 output_bytes=data, output_filename=fname, sheet_count=stats["sheets"],
                                  template_bytes=an.registry.template_bytes, template_filename=TEMPLATES_FILE)
         _jobs[job_id].update(status="done", ts=time.time(), result={
-            "filename": "LOOP_WIRING_GENERATED.xlsx", "sheet_count": stats["sheets"], "skipped": stats["skipped"], "sheet_names": stats["sheet_names"], "registry": registry,
+            "filename": fname, "cover": cover, "sheet_count": stats["sheets"], "skipped": stats["skipped"], "sheet_names": stats["sheet_names"], "registry": registry,
             "message": f"Loop Wiring generated: {stats['sheets']} loop sheet(s)" + (f"; {len(stats['skipped'])} loop(s) with ERROR not generated" if stats["skipped"] else "")})
     except Exception as e:                                           # noqa: BLE001
         logger.exception("loop wiring generation failed")

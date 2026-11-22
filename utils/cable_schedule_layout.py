@@ -7,6 +7,8 @@ changed). Implements the reference 'Cable_Schedule-12' mark-up:
   Instrument Cable Schedule
     * columns marked red are removed (LOOP NUMBER, P&ID NO., SIGNAL TO, IO PANEL, IO TYPE, RACK / NODE, SLOT,
       CHANNEL NO, TERMINAL STRIP NO, TERMINAL NO (CMN / Signal / Zero)); MAIN CABLE LENGTH is kept
+    * FERRULE AT PLC (+) and FERRULE AT PLC (-) are removed (Cable_Schedule-13 mark-up): Remarks follows PANEL END
+      GLAND SIZE. Only this sheet - the MCC DI / MCC DO / VFD / MOV / LCP sheets keep their own ferrule columns.
     * every tag is ONE 3-row entry: all columns merged over the 3 rows, except
         - TB DETAILS AT JB: three TB numbers, one per row, numbered 1-2-3, 4-5-6, ... within each junction box
         - FERRULE AT INSTRUMENT SIDE: one column, (+) ferrule on the first row, (-) ferrule on the second
@@ -31,6 +33,7 @@ from openpyxl.worksheet.dimensions import DimensionHolder, ColumnDimension
 
 INST_REMOVE = {"loopnumber", "loopno", "pidno", "pandidno", "signalto", "iopanel", "iotype", "racknode", "rack",
                "slot", "channelno", "terminalstripno", "terminalnocmn", "terminalnosignal", "terminalnozero"}
+INST_REMOVE_PREFIX = ("ferruleatplc",)                      # FERRULE AT PLC (+) / (-)
 EXTRA_REMOVE = {"plcto", "controldeskterminals", "signaltype"}
 EXTRA_SHEETS = ("mcc_di", "mcc_do", "vfd")
 
@@ -290,7 +293,7 @@ def instrument_layout(ws, hdr_row: int = 7, first_row: int = 9, rows_per_tag: in
     tb_col = next((c for c, t in ks.items() if t.startswith("tbdetails") or t in ("tbno", "tb")), None)
     f_plus = next((c for c, t in ns.items() if "ferruleatinstrumentside" in t and "+" in t), None)
     f_minus = next((c for c, t in ns.items() if "ferruleatinstrumentside" in t and "-" in t and "+" not in t), None)
-    remove = {c for c, t in ks.items() if t in INST_REMOVE and c != tag_col}
+    remove = {c for c, t in ks.items() if (t in INST_REMOVE or t.startswith(INST_REMOVE_PREFIX)) and c != tag_col}
     if not tb_col:
         report["warnings"].append("The template has no 'TB DETAILS AT JB' column - TB numbers were not written.")
 

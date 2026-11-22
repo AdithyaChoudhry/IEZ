@@ -354,12 +354,13 @@ def summary(out):
 def test_cable_summary_counts_a_shared_physical_cable_once():
     base = summary(run(None)[0])
     plus = summary(run(["mcc_di", "vfd", "mov"])[0])
-    # one physical cable, carried by several signal rows: without the sheets every row adds its length
-    assert base["19Cx1.5"] == 600 and plus["19Cx1.5"] == 150          # MOV-1: 4 rows, one cable
-    assert base["14Cx1.0"] == 320 and plus["14Cx1.0"] == 80           # VFD multicore: 4 rows, one cable
-    assert base["30Cx1.5"] == 600 and plus["30Cx1.5"] == 120          # MCC DI cable shared by two motors
-    # untouched: cables of sheets that were not selected, and the JB cables of the instrument schedule
-    assert plus["12Cx2.5"] == base["12Cx2.5"] == 240 and plus["12Px1.5"] == base["12Px1.5"] == 200
+    # one physical cable, carried by several signal rows, is counted once - whether or not its sheet is selected
+    # (rows naming the same cable tag count it once; Cable_Schedule-13 correction)
+    assert base["19Cx1.5"] == plus["19Cx1.5"] == 150                  # MOV-1: 4 rows, one cable
+    assert base["14Cx1.0"] == plus["14Cx1.0"] == 80                   # VFD multicore: 4 rows, one cable
+    assert base["30Cx1.5"] == plus["30Cx1.5"] == 120                  # MCC DI cable shared by two motors
+    # the JB main cables of the instrument schedule: one main cable per JB shared by two instruments
+    assert plus["12Cx2.5"] == base["12Cx2.5"] == 120 and plus["12Px1.5"] == base["12Px1.5"] == 100
 
 
 # ── API ──────────────────────────────────────────────────────────────────────

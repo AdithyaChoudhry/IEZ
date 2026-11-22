@@ -86,15 +86,17 @@ def test_red_columns_removed_main_cable_length_kept():
     heads = list(cols(ws))
     assert not RED & set(heads)
     assert "FERRULE AT INSTRUMENT SIDE (-)" not in heads and "FERRULE AT INSTRUMENT SIDE\n(+) / (-)" in heads
-    assert heads[-1] == "Remarks" and len(heads) == len(HEAD) - len(RED) - 1
+    # FERRULE AT PLC (+) / (-) are removed too (Cable_Schedule-13): Remarks follows PANEL END GLAND SIZE
+    assert "FERRULE AT PLC (+)" not in heads and "FERRULE AT PLC (-)" not in heads
+    assert heads[-1] == "Remarks" and heads[-2] == "PANEL END GLAND SIZE" and len(heads) == len(HEAD) - len(RED) - 1 - 2
     c = cols(ws)
     assert "MAIN CABLE LENGTH(Mtrs)" in c
     assert ws.column_dimensions[openpyxl.utils.get_column_letter(c["MAIN CABLE LENGTH(Mtrs)"])].width == 22
-    for r in entries(ws):
-        assert ws.cell(r, c["MAIN CABLE LENGTH(Mtrs)"]).value not in (None, "")       # populated (template formula kept)
-    # PLC ferrule no longer joins the removed IO PANEL / TERMINAL STRIP NO
-    plc = ws.cell(9, c["FERRULE AT PLC (+)"]).value
-    assert plc.startswith("=CONCATENATE(") and '""' not in plc and plc.endswith(")")
+    # the IODB length is written (the template's '=98+210' is sample data); these rows give different lengths for the
+    # same main cable tag - a conflict - so every row keeps its own value and a warning is raised
+    lengths = [ws.cell(r, c["MAIN CABLE LENGTH(Mtrs)"]).value for r in entries(ws)]
+    assert all(isinstance(v, int) for v in lengths) and "=98+210" not in lengths
+    assert not any(isinstance(ws.cell(r, k).value, str) and "FERRULE AT PLC" in str(ws.cell(r, k).value) for r in (7, 8) for k in range(1, 30))
     # the title block is re-laid inside the new width
     assert ws["A3"].value == "PROJECT" and any(ws.cell(4, k).value == "WABAG DOC NO." for k in range(1, len(heads) + 1))
 

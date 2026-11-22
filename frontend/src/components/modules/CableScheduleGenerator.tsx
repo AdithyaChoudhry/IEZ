@@ -147,6 +147,7 @@ export default function CableScheduleGenerator() {
     try {
       const response = await api.post<GenerateResponse>('/cable-schedule/generate', formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
+        timeout: 330000,                                    // just past the server proxy limit: never spin forever
       });
       setResult(response.data);
     } catch (err: any) {

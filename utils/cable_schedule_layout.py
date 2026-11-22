@@ -25,6 +25,7 @@ from copy import copy
 from typing import Any, Iterable, Optional
 
 from openpyxl.cell.cell import MergedCell
+from openpyxl.worksheet.merge import MergedCellRange
 from openpyxl.utils import get_column_letter, column_index_from_string
 from openpyxl.worksheet.dimensions import DimensionHolder, ColumnDimension
 
@@ -260,6 +261,18 @@ def header_texts(ws, rows: Iterable[int], last_col: int) -> dict[int, str]:
     return out
 
 
+def _merge_block(ws, r1: int, c1: int, r2: int, c2: int) -> None:
+    """ws.merge_cells for a block known not to overlap any existing merge.
+
+    openpyxl's merge_cells first scans every existing merge (MultiCellRange.__contains__), so N merges cost N^2:
+    18,000 entry merges of a 1,000-tag schedule took minutes. The entry blocks are disjoint by construction (the data
+    area's merges were removed by reorder_columns), so the scan is skipped; the merge and its borders are the same.
+    """
+    mcr = MergedCellRange(ws, f"{get_column_letter(c1)}{r1}:{get_column_letter(c2)}{r2}")
+    ws.merged_cells.ranges.add(mcr)
+    ws._clean_merge_range(mcr)
+
+
 # ── Instrument Cable Schedule ────────────────────────────────────────────────
 def instrument_layout(ws, hdr_row: int = 7, first_row: int = 9, rows_per_tag: int = 3,
                       block_jbs: Optional[list[str]] = None) -> dict:
@@ -333,10 +346,7 @@ def instrument_layout(ws, hdr_row: int = 7, first_row: int = 9, rows_per_tag: in
             below = [ws.cell(s + i, c).value for i in range(1, rows_per_tag)]
             if any(v not in (None, "") for v in below):
                 continue
-            try:
-                ws.merge_cells(start_row=s, start_column=c, end_row=s + rows_per_tag - 1, end_column=c)
-            except Exception:
-                pass
+            _merge_block(ws, s, c, s + rows_per_tag - 1, c)
     report["columns"] = [header_texts(ws, (hdr_row, hdr_row + 1), new_last).get(c, "") for c in range(1, new_last + 1)]
     return report
 

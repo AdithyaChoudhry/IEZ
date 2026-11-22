@@ -3,6 +3,7 @@ Cable Schedule Generator router.
 """
 from typing import Optional
 from utils.xlsx_trim import trim_empty_tail
+from fastapi.concurrency import run_in_threadpool
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, status
 from fastapi.responses import StreamingResponse
 import io
@@ -200,7 +201,9 @@ async def generate_cable_schedule(
     template_bytes = trim_empty_tail(await template_file.read())
 
     extra_report: dict = {}
-    out_bytes, filename, err = process_cable_schedule(
+    # CPU-bound: run in the worker pool so one long generation does not freeze the server for every other request
+    out_bytes, filename, err = await run_in_threadpool(
+        process_cable_schedule,
         io.BytesIO(iodb_bytes),
         io.BytesIO(template_bytes),
         jb_column,

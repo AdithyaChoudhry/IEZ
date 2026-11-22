@@ -150,7 +150,13 @@ export default function CableScheduleGenerator() {
       });
       setResult(response.data);
     } catch (err: any) {
-      setError(err.response?.data?.detail || 'Generation failed');
+      const st = err.response?.status;
+      const detail = err.response?.data?.detail;
+      setError(typeof detail === 'string' && detail ? detail
+        : st === 502 || st === 503 ? `Generation failed: the server stopped while generating (error ${st}). Please try again; if it repeats, send the template so it can be checked.`
+        : st === 504 || err.code === 'ECONNABORTED' ? 'Generation failed: the server took too long to respond (timeout). Please try again with fewer junction boxes selected.'
+        : st === 413 ? 'Generation failed: the uploaded file is too large for the server.'
+        : st ? `Generation failed (server error ${st}).` : `Generation failed: no response from the server (${err.message || 'network error'}).`);
     } finally {
       setGenerating(false);
     }

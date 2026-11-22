@@ -753,12 +753,14 @@ export default function DataSheetGenerator() {
   const userFields = useMemo(() => fields.filter(f => f.input_type !== 'iodb'), [fields]);
 
   // ── Template library ─────────────────────────────────────────────────────────
-  useEffect(() => {
-    api.get('/sop-datasheet/library').then(r => setLibraryList((r.data.templates || []).map((t: any) => ({ id: t.id, display_name: t.display_name })))).catch(() => {});
-  }, []);
+  const loadLibraryList = () =>
+    api.get('/sop-datasheet/library')
+      .then(r => setLibraryList((r.data.templates || []).map((t: any) => ({ id: t.id, display_name: t.display_name }))))
+      .catch((e: any) => setError(`The template library could not be loaded${e?.response?.status ? ` (server error ${e.response.status})` : ''}: ${e?.response?.data?.detail || e?.message || 'no response from the server'}. Refresh the page and try again.`));
+  useEffect(() => { loadLibraryList(); }, []);
   const analyseIodb = async () => {
     if (!iodbFile) return;
-    if (!libraryList.length) api.get('/sop-datasheet/library').then(r => setLibraryList((r.data.templates || []).map((t: any) => ({ id: t.id, display_name: t.display_name })))).catch(() => {});
+    if (!libraryList.length) loadLibraryList();
     setBusy(true); clearError();
     try {
       const fd = new FormData(); fd.append('iodb_file', iodbFile);
@@ -1058,8 +1060,16 @@ export default function DataSheetGenerator() {
             </div>
             <p className="text-xs mb-3" style={{ color: 'var(--t2)' }}>
               iEZ reads every instrument row (tag, instrument type, name / description) and matches each instrument type to the
-              standard datasheet template library ({libraryList.length || 11} templates). The IODB is only read.
+              standard datasheet template library ({libraryList.length ? `${libraryList.length} templates` : 'loading…'}). The IODB is only read.
             </p>
+            {libraryList.length > 0 && (
+              <details className="text-xs mb-3" style={{ color: 'var(--t2)' }}>
+                <summary className="cursor-pointer select-none" style={{ color: 'var(--t1)' }}>Templates in the library ({libraryList.length})</summary>
+                <ul className="mt-1 ml-4 list-disc columns-1 sm:columns-2">
+                  {[...libraryList].sort((a, b) => a.display_name.localeCompare(b.display_name)).map(t => <li key={t.id}>{t.display_name}</li>)}
+                </ul>
+              </details>
+            )}
             <SharedIodbPanel compact file={iodbFile} onChange={f => { setIodbFile(f); setIodbAnalysis(null); setInstrumentTypes([]); setSelectedType(''); }} />
             {iodbFile && !iodbAnalysis && (
               <Button onClick={analyseIodb} loading={busy} fullWidth className="mt-3">

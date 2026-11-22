@@ -15,6 +15,7 @@ from __future__ import annotations
 import io
 import re
 import zipfile
+from array import array
 
 _DIM = re.compile(rb'<dimension ref="([A-Z]+)(\d+)(?::([A-Z]+)(\d+))?"\s*/>')
 _ROW = re.compile(rb"<row\b[^>]*?\br=\"(\d+)\"[^>]*?(?:/>|>(.*?)</row>)", re.S)
@@ -39,35 +40,45 @@ def _trim_sheet(xml: bytes, min_rows: int, margin: int) -> bytes | None:
     sd_start, sd_end = xml.find(b"<sheetData"), xml.find(b"</sheetData>")
     if sd_start < 0 or sd_end < 0:
         return None
-    rows = [(int(m.group(1)), m.start(), m.group(2)) for m in _ROW.finditer(xml, sd_start, sd_end)]
-    if len(rows) < min_rows:
+    # Only the row numbers, positions and "holds a value" flags are kept (a million-row sheet would otherwise hold
+    # every row body in memory, several hundred MB); a row's cells are re-read from the XML when needed.
+    nums, starts, ends, valued = array("l"), array("q"), array("q"), bytearray()
+    for m in _ROW.finditer(xml, sd_start, sd_end):
+        nums.append(int(m.group(1)))
+        starts.append(m.start())
+        ends.append(m.end())
+        b = m.group(2)
+        valued.append(1 if b and _HAS_VALUE.search(b) else 0)
+    n = len(nums)
+    if n < min_rows:
         return None
+
+    def body(i: int) -> bytes:
+        m = _ROW.match(xml, starts[i], ends[i])
+        return (m.group(2) or b"") if m else b""
+
     # The bottom-most row with values gives the fill signature (one or two cells, e.g. a header filled down a column).
     # Every row below the data that holds only those same cells is part of the tail.
-    noise: frozenset = frozenset()
-    for _, _, body in reversed(rows):
-        if body and _HAS_VALUE.search(body):
-            noise = _row_values(body)
-            break
+    bottom = next((i for i in range(n - 1, -1, -1) if valued[i]), None)
+    noise: frozenset = _row_values(body(bottom)) if bottom is not None else frozenset()
     if len(noise) > 2:                                            # a full row at the bottom is data, not a fill-down
         noise = frozenset()
     last, repeats = 0, 0
-    for r, _, body in reversed(rows):
-        if body and _HAS_VALUE.search(body):
-            v = _row_values(body)
-            if v and not v <= noise:
-                last = r
-                break
-            repeats += 1
+    for i in (i for i in range(n - 1, -1, -1) if valued[i]):
+        v = _row_values(body(i))
+        if v and not v <= noise:
+            last = nums[i]
+            break
+        repeats += 1
     if repeats and repeats < 1000:                               # a few repeated values are data, not a fill-down
-        last = next(r for r, _, body in reversed(rows) if body and _HAS_VALUE.search(body))
+        last = nums[bottom]
     for m in _MERGE.finditer(xml, sd_end):                       # a merge that starts in the data keeps its full height
         if int(m.group(1)) <= last:
             last = max(last, int(m.group(2)))
     keep = last + margin
-    if keep >= rows[-1][0]:
+    if keep >= nums[n - 1]:
         return None
-    cut = next(pos for r, pos, _ in rows if r > keep)
+    cut = next(starts[i] for i in range(n) if nums[i] > keep)
     tail = xml[sd_end:]
     mc = _MERGES.search(tail)
     if mc:                                                       # merges that start in the removed rows go with them

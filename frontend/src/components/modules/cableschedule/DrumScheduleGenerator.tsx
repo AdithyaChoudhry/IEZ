@@ -1,22 +1,23 @@
 /**
  * Drum Schedule Generator (sub-module of the Cable Schedule Generator).
  *
- * Step 1 IODB (the shared IODB) -> cable demand found   Step 2 Drum Master Excel -> drum lots
+ * Step 1 the generated Cable Schedule (from the Cable Schedule Generator, read on the server) -> cable demand found
+ * Step 2 Drum Master Excel -> drum lots
  * Step 3 settings               Step 4 generate -> progress by cable type, six preview reports, Excel download.
  * All numbers come from the backend engine; nothing is computed here.
  */
 import { useEffect, useState } from 'react';
-import { AlertTriangle, CheckCircle2, Download, FileText, Layers, Upload } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Download, FileText, Layers } from 'lucide-react';
 import api from '@/services/api';
 import Card from '../../ui/Card';
 import Button from '../../ui/Button';
 import Alert from '../../ui/Alert';
 import FileUploadCard from '../../ui/FileUploadCard';
-import SharedIodbCard from '../../ui/SharedIodb';
+import GeneratedScheduleCard, { handleSourceError, useGeneratedSchedule } from './GeneratedScheduleSource';
 
 interface Issue { severity: string; kind: string; ref: string; message: string; source?: string }
 interface Demand {
-  stats: { rows: number; demand: number; branch: number; main: number; total_length: number };
+  stats: { rows: number; demand: number; branch: number; main: number; total_length: number; not_in_schedule?: number };
   issues: Issue[];
   issue_counts: Record<string, number>;
   cable_types: { cable_type: string; is_nis: string; required: number }[];
@@ -36,6 +37,7 @@ interface Result {
   shortage: Row[];
   excess: { unused_drums: Row[]; partial_drums: Row[]; by_type: Row[] };
   exceptions: Issue[];
+  source?: { name: string; generated_at: string };
 }
 
 const TABS = ['Drum Schedule', 'Cable Type Summary', 'Drum Utilization', 'Shortage', 'Excess / Balance', 'Exceptions'] as const;
@@ -66,7 +68,7 @@ function Table({ columns, rows, empty }: { columns: [string, string][]; rows: Ro
 }
 
 export default function DrumScheduleGenerator() {
-  const [iodb, setIodb] = useState<File | null>(null);
+  const src = useGeneratedSchedule();
   const [masterFile, setMasterFile] = useState<File | null>(null);
   const [demand, setDemand] = useState<Demand | null>(null);
   const [master, setMaster] = useState<Master | null>(null);
@@ -83,15 +85,16 @@ export default function DrumScheduleGenerator() {
     return api.post<T>(url, f, { headers: { 'Content-Type': 'multipart/form-data' } });
   };
 
+  // a new generated schedule (or project) clears the demand and any result calculated from the previous one
   useEffect(() => {
     setDemand(null); setResult(null);
-    if (!iodb) return;
+    if (!src.gen?.available) return;
     let off = false;
-    post<Demand>('/cable-schedule/drum/demand', { iodb_file: iodb })
+    post<Demand>('/cable-schedule/drum/generated/demand', src.fields())
       .then((r) => { if (!off) { setDemand(r.data); setError(null); } })
-      .catch((e) => { if (!off) setError(e.response?.data?.detail || 'Could not read the cable demand from the IODB'); });
+      .catch((e) => { if (!off) handleSourceError(e, src, setError, 'Could not read the cable demand of the generated Cable Schedule'); });
     return () => { off = true; };
-  }, [iodb]);
+  }, [src.gen?.id, src.gen?.available]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     setMaster(null); setResult(null);
@@ -104,15 +107,15 @@ export default function DrumScheduleGenerator() {
   }, [masterFile]);
 
   const generate = async () => {
-    if (!iodb || !masterFile) return;
+    if (!src.gen?.available || !masterFile) return;
     setBusy(true); setError(null); setResult(null);
     try {
-      const r = await post<Result>('/cable-schedule/drum/generate', {
-        iodb_file: iodb, drum_master_file: masterFile, min_residual: String(minResidual), use_master_split: String(useSplit),
+      const r = await post<Result>('/cable-schedule/drum/generated/generate', {
+        ...src.fields(), drum_master_file: masterFile, min_residual: String(minResidual), use_master_split: String(useSplit),
       });
       setResult(r.data); setTab('Drum Schedule');
     } catch (e: any) {
-      setError(e.response?.data?.detail || 'Drum schedule generation failed');
+      handleSourceError(e, src, setError, 'Drum schedule generation failed');
     } finally { setBusy(false); }
   };
 
@@ -133,7 +136,7 @@ export default function DrumScheduleGenerator() {
     </p>
   ));
 
-  const ready = !!iodb && !!masterFile && !!demand && !!master && minResidual >= 0 && minResidual <= 15;
+  const ready = !!src.gen?.available && !!masterFile && !!demand && !!master && minResidual >= 0 && minResidual <= 15;
   const t = result?.totals;
 
   return (
@@ -141,16 +144,18 @@ export default function DrumScheduleGenerator() {
       {error && <Alert variant="error" title="Error" onClose={() => setError(null)}>{error}</Alert>}
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <SharedIodbCard title="Step 1 - IODB" icon={Upload} file={iodb} onChange={setIodb}>
+        <GeneratedScheduleCard state={src} title="Step 1 - Generated Cable Schedule (automatically loaded)">
           {demand && (
             <div className="mt-3 text-xs" style={{ color: 'var(--t0)' }}>
               <p className="flex items-center gap-1.5 font-semibold"><CheckCircle2 className="w-4 h-4 text-green-500" />
                 {demand.stats.demand} cable requirements ({demand.stats.branch} branch, {demand.stats.main} main, shared main cables counted once)</p>
               <p style={{ color: 'var(--t1)' }}>{demand.stats.total_length} m in total · {Object.entries(demand.issue_counts).map(([k, v]) => `${v} ${k.toLowerCase()}${v > 1 ? 's' : ''}`).join(' · ') || 'no validation issues'}</p>
+              {!!demand.stats.not_in_schedule && <p style={{ color: 'var(--t1)' }}>{demand.stats.not_in_schedule} IODB cable(s) are not in this Cable Schedule and are not scheduled.</p>}
+              <p className="mt-1" style={{ color: 'var(--t2)' }}>Cable type, length and IS/NIS of each scheduled cable are read from the IODB this Cable Schedule was generated from (the schedule sheets carry no IS/NIS column).</p>
               {issueList(demand.issues.filter((i) => i.severity !== 'INFO'))}
             </div>
           )}
-        </SharedIodbCard>
+        </GeneratedScheduleCard>
 
         <FileUploadCard title="Step 2 - Drum Master" icon={FileText} file={masterFile} onChange={setMasterFile}
                         hint="Drum Master Excel: cable type, IS/NIS, standard drum length, drum quantity, split allowed, vendor ...">
@@ -193,7 +198,7 @@ export default function DrumScheduleGenerator() {
           <Layers className="w-6 h-6" />
           {busy ? 'Generating...' : 'GENERATE DRUM SCHEDULE'}
         </Button>
-        {!ready && <p className="text-sm mt-2 text-center" style={{ color: 'var(--t1)' }}>Choose the IODB and the Drum Master (both must be read successfully).</p>}
+        {!ready && <p className="text-sm mt-2 text-center" style={{ color: 'var(--t1)' }}>{src.gen?.available ? 'Upload the Drum Master (it must be read successfully).' : 'Generate a Cable Schedule with the Cable Schedule Generator first, then upload the Drum Master.'}</p>}
         {result && (
           <ul className="mt-4 space-y-1" data-testid="drum-progress">
             {result.progress.map((p) => (
@@ -232,6 +237,7 @@ export default function DrumScheduleGenerator() {
               ['drum_id', 'Drum ID'], ['cable_type', 'Cable type'], ['cable_tag', 'Cable tag'], ['category', 'Category'], ['is_nis', 'IS/NIS'],
               ['manufacturer', 'Manufacturer'], ['usable', 'Usable (m)'], ['before', 'Before (m)'], ['allocated', 'Allocated (m)'],
               ['after', 'After (m)'], ['unallocated', 'Unallocated (m)'], ['status', 'Status'], ['source', 'IODB ref'], ['remarks', 'Remarks']]} />
+            {result.source && <p className="text-xs mt-1" style={{ color: 'var(--t2)' }}>Input: {result.source.name} (generated {result.source.generated_at})</p>}
             {result.schedule_truncated && <p className="text-xs mt-1" style={{ color: 'var(--t2)' }}>Preview shows the first rows; the Excel file has all of them.</p>}
           </>)}
           {tab === 'Cable Type Summary' && <Table empty="-" rows={result.summary} columns={[

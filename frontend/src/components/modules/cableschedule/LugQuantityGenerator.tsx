@@ -1,7 +1,7 @@
 /**
  * Cable Lug Quantity Generator (sub-module of the Cable Schedule Generator).
  *
- * Upload -> live extraction (the table and the errors panel update sheet by sheet while the engine reads the schedule)
+ * Generated Cable Schedule (from the Cable Schedule Generator, read on the server) -> live extraction (the table and the errors panel update sheet by sheet while the engine reads the schedule)
  * -> preview tabs -> Excel report. All numbers come from the backend engine.
  *
  * Boundaries shown to the engineer:
@@ -10,13 +10,12 @@
  *   - cable length is shown but never used for lugs; gland size comes from the cable OD and a manufacturer table, not the cable type.
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, Download, Info, Loader2, Upload } from 'lucide-react';
+import { AlertTriangle, Download, Info, Loader2 } from 'lucide-react';
 import api from '@/services/api';
 import Card from '../../ui/Card';
 import Button from '../../ui/Button';
 import Alert from '../../ui/Alert';
-import FileUploadCard from '../../ui/FileUploadCard';
-import IodbQuantitySource, { IodbSourceHandle } from './IodbQuantitySource';
+import GeneratedScheduleCard, { handleSourceError, useGeneratedSchedule } from './GeneratedScheduleSource';
 
 type Row = Record<string, any>;
 const mp = { headers: { 'Content-Type': 'multipart/form-data' } };
@@ -55,7 +54,7 @@ const Kpi = ({ label, value, warn, bad }: { label: string; value: any; warn?: bo
 );
 
 export default function LugQuantityGenerator() {
-  const [file, setFile] = useState<File | null>(null);
+  const src = useGeneratedSchedule();
   const [sheets, setSheets] = useState<Row[]>([]);
   const [picked, setPicked] = useState<string[]>([]);
   const [rules, setRules] = useState<Row>({ count_duplicates_once: true, ferrule_evidence: false, instrumentation_use_lugs: true, control_use_lugs: true, power_use_lugs: true, default_lug_type: '', default_lug_material: '', lug_type_by_size_text: '',
@@ -68,9 +67,6 @@ export default function LugQuantityGenerator() {
   const [stage, setStage] = useState('');
   const [view, setView] = useState<View>('Summary');
   const [busy, setBusy] = useState(false);
-  const [source, setSource] = useState<'schedule' | 'iodb'>('schedule');
-  const iodbRef = useRef<IodbSourceHandle>(null);
-  const pend = useRef<{ ov: Record<string, Row>; od: Record<string, Row> } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [edit, setEdit] = useState<{ tag: string; form: Row } | null>(null);
   const [f, setF] = useState<Row>({ search: '', type: '', category: '', lug: '', status: '' });
@@ -88,30 +84,22 @@ export default function LugQuantityGenerator() {
   };
   useEffect(() => () => { if (timer.current) window.clearTimeout(timer.current); }, []);
 
+  // a new generated schedule (or project) clears the sheets, overrides, OD entries and any result from the previous one
   useEffect(() => {
     setRes(null); setLive(null); setSheets([]); setPicked([]); setOverrides({}); setOdData({});
-    if (!file) return;
+    if (!src.gen?.available) return;
     let off = false;
-    post('/cable-schedule/lug/detect', { file })
+    post('/cable-schedule/lug/generated/detect', src.fields())
       .then((r) => { if (!off) { setSheets(r.data.sheets.filter((s: Row) => s.used)); setPicked(r.data.default_sheets); setError(null); } })
-      .catch((e) => { if (!off) setError(e.response?.data?.detail || 'Could not read the cable schedule'); });
+      .catch((e) => { if (!off) handleSourceError(e, src, setError, 'Could not read the generated Cable Schedule'); });
     return () => { off = true; };
-  }, [file]);
+  }, [src.gen?.id, src.gen?.available]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const iodbFields = () => {
-    const ov = pend.current?.ov ?? overrides, od = pend.current?.od ?? odData;
-    return { rules: JSON.stringify({ ...rules, lug_type_by_size: sizeMap }), overrides: JSON.stringify(ov), od_data: JSON.stringify(od), gland: JSON.stringify({ ...gland, hazardous: gland.hazardous || null }) };
-  };
   const run = async (ov: Record<string, Row> = overrides, od: Record<string, Row> = odData) => {
-    if (source === 'iodb') {
-      pend.current = { ov, od }; setRes(null);
-      await iodbRef.current?.run(!!iodbRef.current?.hasGenerated());
-      return;
-    }
-    if (!file) return;
+    if (!src.gen?.available) return;
     setBusy(true); setError(null); setRes(null); setLive(null); setStage('Starting');
     try {
-      const start = await post('/cable-schedule/lug/start', { file, rules: JSON.stringify({ ...rules, lug_type_by_size: sizeMap, sheets: picked }), overrides: JSON.stringify(ov),
+      const start = await post('/cable-schedule/lug/generated/start', { ...src.fields(), rules: JSON.stringify({ ...rules, lug_type_by_size: sizeMap, sheets: picked }), overrides: JSON.stringify(ov),
         od_data: JSON.stringify(od), gland: JSON.stringify({ ...gland, hazardous: gland.hazardous || null }) });
       const poll = async () => {
         try {
@@ -124,7 +112,7 @@ export default function LugQuantityGenerator() {
         } catch (e: any) { setError(e.response?.data?.detail || 'Lost contact with the analysis job'); setBusy(false); }
       };
       poll();
-    } catch (e: any) { setError(e.response?.data?.detail || 'Analysis could not be started'); setBusy(false); }
+    } catch (e: any) { handleSourceError(e, src, setError, 'Analysis could not be started'); setBusy(false); }
   };
   const download = async () => {
     try {
@@ -166,22 +154,7 @@ export default function LugQuantityGenerator() {
         <p className="pl-6"><b>Core count</b> (14C = 14) and <b>lugged conductors</b> are separate: lugs per cable = lugged From + lugged To (14C all lugged both ends = 28; 12 lugged each end = 24, core count stays 14). <b>Gland size</b> comes from the cable OD and a manufacturer table, never from the cable type.</p>
       </div>
 
-      <div className="flex flex-wrap gap-2" data-testid="lug-source">
-        {([['schedule', 'Upload Cable Schedule (Excel)'], ['iodb', 'Upload IODB (generate the Cable Schedule first)']] as const).map(([k2, label]) => (
-          <button key={k2} onClick={() => { setSource(k2); setRes(null); setLive(null); }} className="px-4 py-2 rounded-xl text-sm font-semibold"
-                  style={{ background: source === k2 ? 'var(--em)' : 'var(--s3)', color: source === k2 ? '#fff' : 'var(--t0)', border: '1px solid var(--b1)' }}>{label}</button>))}
-      </div>
-
-      {source === 'iodb' && (
-        <Card title="Step 1 - Cable lug quantity from an IODB" description="Upload only the IODB: the Cable Schedule is generated from it automatically, then the lug quantities are extracted. Set the project rules below first; changing them re-runs on the same generated schedule.">
-          <IodbQuantitySource ref={iodbRef} title="Upload IODB" buttonLabel="GENERATE LUG QUANTITY FROM IODB" startUrl="/cable-schedule/lug/start"
-            jobUrl={(id) => `/cable-schedule/lug/job/${id}`} setError={setError}
-            onReset={() => { setRes(null); setLive(null); setOverrides({}); setOdData({}); pend.current = null; }}
-            onLive={setLive} onResult={(r) => { pend.current = null; setRes(r); setView('Summary'); }} fields={iodbFields} />
-        </Card>)}
-
-      {source === 'schedule' && <FileUploadCard title="Step 1 - Cable Schedule (Excel)" icon={Upload} file={file} onChange={setFile}
-                      hint="The generated Cable Schedule workbook can be used as is. It is only read - never changed.">
+      <GeneratedScheduleCard state={src} title="Step 1 - Generated Cable Schedule (automatically loaded)">
         {sheets.length > 0 && (
           <div className="mt-3 text-xs" style={{ color: 'var(--t0)' }}>
             <p className="font-semibold mb-1">Cable schedule sheets found (tick the ones to analyse):</p>
@@ -192,7 +165,7 @@ export default function LugQuantityGenerator() {
                 {s.has_ferrule && <span style={{ color: 'var(--t2)' }}>ferrule columns</span>}{s.has_lug_columns && <span className="text-blue-500">lug columns</span>}
               </label>))}
           </div>)}
-      </FileUploadCard>}
+      </GeneratedScheduleCard>
 
       <Card title="Step 2 - Project rules" description="Used only when the schedule does not state the lug requirement or termination itself.">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
@@ -220,9 +193,9 @@ export default function LugQuantityGenerator() {
             <label key={key} className="text-sm" style={{ color: 'var(--t0)' }}><span className="block mb-1">{label}</span>
               <input className={field} style={fieldStyle} value={gland[key]} onChange={(e) => { setGland({ ...gland, [key]: e.target.value }); setRes(null); }} /></label>))}
         </div>
-        {source === 'schedule' ? <Button onClick={() => run()} loading={busy} disabled={!file || picked.length === 0} size="lg" fullWidth className="mt-5 text-lg py-4">
+        <Button onClick={() => run()} loading={busy} disabled={!src.gen?.available || picked.length === 0} size="lg" fullWidth className="mt-5 text-lg py-4">
           {busy ? 'Analysing...' : 'ANALYZE CABLE SCHEDULE'}
-        </Button> : res && <Button onClick={() => run()} className="mt-5 bg-blue-600 hover:bg-blue-700">Re-run with these rules</Button>}
+        </Button>
         {Object.keys(overrides).length > 0 && <p className="text-xs mt-2 text-blue-500">{Object.keys(overrides).length} user override(s) applied.</p>}
       </Card>
 
@@ -267,7 +240,7 @@ export default function LugQuantityGenerator() {
                 <Table empty="No lugs required." rows={res.procurement} columns={[['conductor_size', 'Conductor size'], ['lug_type', 'Lug type'], ['material', 'Material'], ['use', 'Use'], ['from_qty', 'From-end lugs'], ['to_qty', 'To-end lugs'], ['qty', 'Total lugs'], ['cables', 'Cables']]} /></div>
               <div><p className="text-sm font-semibold mb-1" style={{ color: 'var(--t0)' }}>Lugs by conductor size</p><Table empty="No lugs required." rows={res.by_size} columns={[['size', 'Conductor size'], ['qty', 'Lugs']]} /></div>
               <div><p className="text-sm font-semibold mb-1" style={{ color: 'var(--t0)' }}>Lugs by material</p><Table empty="No lugs required." rows={res.by_material} columns={[['material', 'Material'], ['qty', 'Lugs']]} /></div>
-              <div className="md:col-span-2 text-xs" style={{ color: 'var(--t1)' }}>{res.source?.type === 'IODB' && <>Source: IODB {res.source.name} (Cable Schedule generated from it) · </>}Sheets analysed: {res.used_sheets.join(', ')} · {k.overrides} user override(s)</div>
+              <div className="md:col-span-2 text-xs" style={{ color: 'var(--t1)' }}>{res.source?.type === 'GENERATED' && <>Input: {res.source.name} (generated {res.source.generated_at}) · </>}Sheets analysed: {res.used_sheets.join(', ')} · {k.overrides} user override(s)</div>
             </div>)}
 
           {view === 'Extraction' && (<>

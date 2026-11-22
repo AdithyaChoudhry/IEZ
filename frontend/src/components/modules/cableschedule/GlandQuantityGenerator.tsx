@@ -1,20 +1,21 @@
 /**
  * Cable Gland Quantity Generator (sub-module of the Cable Schedule Generator).
  *
- *   A  Gland Quantity     - upload a cable schedule -> quantities by gland / cable type / location, OD check, exceptions, Excel report
+ *   A  Gland Quantity     - the generated Cable Schedule (Cable Schedule Generator, read on the server) -> quantities by gland /
+ *                           cable type / location, OD check, exceptions, Excel report
  *   B  Gland Size Advisor - cable OD (+ construction ...) -> Metric / NPT / BSP / ET options with sources and advice
  *   C  Reference          - standards, principles, the reference tables and the vendor-table import
  *
  * Every number and recommendation comes from the backend. The result is an ENGINEERING RECOMMENDATION, never a final selection.
  */
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, CheckCircle2, Download, FileText, Info, Upload } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { AlertTriangle, CheckCircle2, Download, FileText, Info } from 'lucide-react';
 import api from '@/services/api';
 import Card from '../../ui/Card';
 import Button from '../../ui/Button';
 import Alert from '../../ui/Alert';
 import FileUploadCard from '../../ui/FileUploadCard';
-import IodbQuantitySource, { IodbSourceHandle } from './IodbQuantitySource';
+import GeneratedScheduleCard, { handleSourceError, useGeneratedSchedule } from './GeneratedScheduleSource';
 
 type Row = Record<string, any>;
 const CONSTRUCTIONS = ['UNARMOURED', 'ARMOURED', 'BRAIDED', 'FLEXIBLE', 'FLAT', 'OTHER'];
@@ -117,7 +118,7 @@ export default function GlandQuantityGenerator() {
 
 // ───────────────────────────── A: gland quantity ─────────────────────────────
 function TabA({ project, refFile, setError }: { project: string; refFile: File | null; setError: (m: string | null) => void }) {
-  const [file, setFile] = useState<File | null>(null);
+  const src = useGeneratedSchedule();
   const [detect, setDetect] = useState<any>(null);
   const [sheets, setSheets] = useState<string[]>([]);
   const [cd, setCd] = useState<Record<string, Row>>({});
@@ -126,33 +127,32 @@ function TabA({ project, refFile, setError }: { project: string; refFile: File |
   const [res, setRes] = useState<any>(null);
   const [view, setView] = useState('Gland Summary');
   const [busy, setBusy] = useState(false);
-  const [source, setSource] = useState<'schedule' | 'iodb'>('schedule');
-  const iodbRef = useRef<IodbSourceHandle>(null);
 
+  // a new generated schedule (or project) clears the sheets, OD entries and any result calculated from the previous one
   useEffect(() => {
     setDetect(null); setRes(null); setSheets([]); setCd({});
-    if (!file) return;
+    if (!src.gen?.available) return;
     let off = false;
-    api.post('/cable-schedule/gland/detect', form({ file }), mp)
+    api.post('/cable-schedule/gland/generated/detect', form(src.fields()), mp)
       .then((r) => { if (!off) { setDetect(r.data); setSheets(r.data.default_sheets); setError(null); } })
-      .catch((e) => { if (!off) setError(e.response?.data?.detail || 'Could not read the cable schedule'); });
+      .catch((e) => { if (!off) handleSourceError(e, src, setError, 'Could not read the generated Cable Schedule'); });
     return () => { off = true; };
-  }, [file]);
+  }, [src.gen?.id, src.gen?.available]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const setType = (key: string, patch: Row) => { setCd({ ...cd, [key]: { ...(cd[key] || {}), ...patch } }); setRes(null); };
 
   const run = async () => {
-    if (!file) return;
+    if (!src.gen?.available) return;
     setBusy(true); setError(null);
     try {
       const data: Record<string, Row> = {};
       Object.entries(cd).forEach(([k, v]) => { data[k] = v; });
-      const r = await api.post('/cable-schedule/gland/analyze', form({
-        file, reference_file: refFile, project,
+      const r = await api.post('/cable-schedule/gland/generated/analyze', form({
+        ...src.fields(), reference_file: refFile, project,
         settings: JSON.stringify({ sheets, default_qty: defaultQty, repeated_rows: repeated }), cable_data: JSON.stringify(data),
       }), mp);
       setRes(r.data); setView('Gland Summary');
-    } catch (e: any) { setError(e.response?.data?.detail || 'Analysis failed'); } finally { setBusy(false); }
+    } catch (e: any) { handleSourceError(e, src, setError, 'Analysis failed'); } finally { setBusy(false); }
   };
   const download = async () => {
     try {
@@ -166,42 +166,7 @@ function TabA({ project, refFile, setError }: { project: string; refFile: File |
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap gap-2" data-testid="gland-source">
-        {([['schedule', 'Upload Cable Schedule (Excel)'], ['iodb', 'Upload IODB (generate the Cable Schedule first)']] as const).map(([k2, label]) => (
-          <button key={k2} onClick={() => { setSource(k2); setRes(null); }} className="px-4 py-2 rounded-xl text-sm font-semibold"
-                  style={{ background: source === k2 ? 'var(--em)' : 'var(--s3)', color: source === k2 ? '#fff' : 'var(--t0)', border: '1px solid var(--b1)' }}>{label}</button>))}
-      </div>
-
-      {source === 'iodb' && (
-        <Card title="Gland quantity from an IODB" description="Upload only the IODB: the Cable Schedule is generated from it automatically, then the gland quantities are extracted from that schedule.">
-          <IodbQuantitySource ref={iodbRef} title="Upload IODB" buttonLabel="GENERATE GLAND QUANTITY FROM IODB" startUrl="/cable-schedule/gland/iodb/start"
-            jobUrl={(id) => `/cable-schedule/gland/iodb/job/${id}`} setError={setError} onReset={() => setRes(null)}
-            onResult={(r) => { setRes(r); setView('Gland Summary'); }}
-            fields={() => ({ project, settings: JSON.stringify({ default_qty: defaultQty, repeated_rows: repeated }), cable_data: JSON.stringify(cd) })} />
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4 text-sm" style={{ color: 'var(--t0)' }}>
-            <label><span className="block mb-1 font-medium">Default gland quantity when a size has none (project rule)</span>
-              <input className={field} style={fieldStyle} placeholder="empty = flag MISSING GLAND QUANTITY" value={defaultQty} onChange={(e) => setDefaultQty(e.target.value)} /></label>
-            <label><span className="block mb-1 font-medium">Identical termination rows of one cable</span>
-              <select className={field} style={fieldStyle} value={repeated} onChange={(e) => setRepeated(e.target.value)}>
-                <option value="once">Count once (shared cable - default)</option><option value="sum">Add the quantities</option></select></label>
-          </div>
-          {res?.source && (
-            <div className="mt-4">
-              <p className="text-sm font-semibold mb-1" style={{ color: 'var(--t0)' }}>Cable OD per cable type (optional - runs the gland check; re-runs reuse the generated schedule)</p>
-              <div className="overflow-auto max-h-64 border rounded-lg" style={{ borderColor: 'var(--b1)' }}>
-                <table className="w-full text-xs"><thead style={{ background: 'var(--s2)' }}><tr>{['Cable type', 'Existing gland (schedule)', 'Cable OD (mm)', 'Result'].map((h) => <th key={h} className="px-2 py-1.5 text-left font-medium" style={{ color: 'var(--t1)' }}>{h}</th>)}</tr></thead>
-                  <tbody>{res.advisory.map((a: Row) => (
-                    <tr key={a.key} className="border-t" style={{ borderColor: 'var(--b1)', color: 'var(--t0)' }}>
-                      <td className="px-2 py-1">{a.cable_type}</td><td className="px-2 py-1">{a.existing.join(', ') || '-'}</td>
-                      <td className="px-2 py-1"><input className={field} style={{ ...fieldStyle, width: '6rem' }} placeholder="mm" value={cd[a.key]?.od ?? ''} onChange={(e) => setCd({ ...cd, [a.key]: { ...(cd[a.key] || {}), od: e.target.value } })} /></td>
-                      <td className="px-2 py-1">{a.result}</td></tr>))}</tbody></table>
-              </div>
-              <Button onClick={() => iodbRef.current?.run(true)} className="mt-2 bg-blue-600 hover:bg-blue-700">Re-run with these OD values</Button>
-            </div>)}
-        </Card>)}
-
-      {source === 'schedule' && <FileUploadCard title="Step 1 - Cable Schedule (Excel)" icon={Upload} file={file} onChange={setFile}
-                      hint="The workbook is only read. Cable schedule sheets are found by their gland columns; the file is never changed.">
+      <GeneratedScheduleCard state={src} title="Step 1 - Generated Cable Schedule (automatically loaded)">
         {detect && (
           <div className="mt-3 text-xs" style={{ color: 'var(--t0)' }}>
             <p className="font-semibold mb-1">Sheets with gland columns (tick the ones to count):</p>
@@ -214,9 +179,9 @@ function TabA({ project, refFile, setError }: { project: string; refFile: File |
             <p className="mt-1" style={{ color: 'var(--t1)' }}>{detect.cable_types.length} cable types · {detect.occurrences} gland entries</p>
           </div>
         )}
-      </FileUploadCard>}
+      </GeneratedScheduleCard>
 
-      {source === 'schedule' && detect && (
+      {detect && (
         <Card title="Step 2 - Cable OD and construction per cable type" description="Optional but needed for the gland check. The schedule's own gland is shown and is never overwritten.">
           <div className="overflow-auto max-h-96 border rounded-lg" style={{ borderColor: 'var(--b1)' }}>
             <table className="w-full text-xs">
@@ -247,14 +212,14 @@ function TabA({ project, refFile, setError }: { project: string; refFile: File |
               <select className={field} style={fieldStyle} value={repeated} onChange={(e) => { setRepeated(e.target.value); setRes(null); }}>
                 <option value="once">Count once (shared cable - default)</option><option value="sum">Add the quantities</option></select></label>
           </div>
-          <Button onClick={run} loading={busy} disabled={!file || sheets.length === 0} size="lg" fullWidth className="mt-5 text-lg py-4">
+          <Button onClick={run} loading={busy} disabled={!src.gen?.available || sheets.length === 0} size="lg" fullWidth className="mt-5 text-lg py-4">
             {busy ? 'Analysing...' : 'GENERATE GLAND QUANTITY'}
           </Button>
         </Card>
       )}
 
       {res && S && (
-        <Card title="Gland Quantity Report">
+        <Card title="Gland Quantity Report" description={res.source ? `Input: ${res.source.name} (generated ${res.source.generated_at})` : undefined}>
           <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4 text-sm" style={{ color: 'var(--t0)' }}>
             {([['Total glands', res.totals.glands], ['Cable types', res.totals.cable_types], ['Cables', res.totals.cables], ['Errors', res.totals.errors], ['Warnings', res.totals.warnings]] as [string, any][]).map(([k, v]) => (
               <div key={k} className="rounded-xl p-3" style={{ background: 'var(--s1)', border: '1px solid var(--b1)' }}><p className="text-xs" style={{ color: 'var(--t1)' }}>{k}</p>

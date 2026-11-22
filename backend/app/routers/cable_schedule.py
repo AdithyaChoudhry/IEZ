@@ -8,6 +8,9 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, s
 from fastapi.responses import StreamingResponse
 import io
 import json
+import threading
+import uuid
+from datetime import datetime
 
 from ..deps import get_current_user
 from ..auth.models import User
@@ -31,6 +34,47 @@ from utils.cable_summary import CABLE_SUMMARY_SHEET
 router = APIRouter(prefix="/cable-schedule", tags=["Cable Schedule"])
 
 cable_schedule_cache: dict = {}
+
+# The last SUCCESSFULLY generated Cable Schedule per (user, project): the single input of the Gland Quantity, Cable Lug
+# Quantity and Drum Schedule generators (they read it here, server side - the bytes never go back to the browser).
+# Written only after a generation passed every check, so a failed run never replaces a good schedule. In memory: a
+# server restart clears it and the page asks for the Cable Schedule to be generated again.
+_generated: dict = {}
+_generated_lock = threading.Lock()
+NOT_GENERATED = ("No generated Cable Schedule is available. Please generate a Cable Schedule using the Cable Schedule "
+                 "Generator first.")
+
+
+def _project_key(project_id: Optional[str]) -> str:
+    return (project_id or "").strip()
+
+
+def get_generated(user_id, project_id: Optional[str]) -> Optional[dict]:
+    """The user's last generated Cable Schedule for exactly this project ("" = no project selected); never another
+    user's or another project's. The returned dict is a snapshot: its bytes do not change if a newer schedule is made."""
+    with _generated_lock:
+        return _generated.get((user_id, _project_key(project_id)))
+
+
+def require_generated(user_id, project_id: Optional[str], generated_id: Optional[str]) -> dict:
+    """The snapshot to calculate from. When the page names the schedule it shows (generated_id) and a newer one has been
+    generated since, the request is refused so a result is never labelled with the wrong workbook."""
+    g = get_generated(user_id, project_id)
+    if g is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=NOT_GENERATED)
+    if generated_id and generated_id != g["id"]:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                            detail=f"A newer Cable Schedule ({g['filename']}, generated {g['generated_at']}) is now available. "
+                                   "The page has been refreshed - run the calculation again.")
+    return g
+
+
+def generated_meta(g: Optional[dict]) -> dict:
+    if g is None:
+        return {"available": False, "message": NOT_GENERATED}
+    return {"available": True, "id": g["id"], "filename": g["filename"], "generated_at": g["generated_at"],
+            "project_id": g["project_id"] or None, "sheets": g["sheets"], "iodb_filename": g["iodb_filename"],
+            "selected_jbs": len(g["selected_jbs"]) if g["selected_jbs"] else None}
 
 
 @router.post("/columns", response_model=ColumnsResponse)
@@ -236,6 +280,12 @@ async def generate_cable_schedule(
 
     cache_key = f"{current_user.id}_cable_schedule"
     cable_schedule_cache[cache_key] = {"bytes": out_bytes, "filename": filename}
+    with _generated_lock:
+        _generated[(current_user.id, _project_key(project_id))] = {
+            "id": uuid.uuid4().hex, "bytes": out_bytes, "filename": filename, "project_id": _project_key(project_id),
+            "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "sheets": planned,
+            "iodb_bytes": iodb_bytes, "iodb_filename": iodb_file.filename or "IODB.xlsx", "selected_jbs": jbs,
+        }
 
     registry = register_safe(
         "success", project_id=project_id, module="cable_schedule", user=current_user.username,
@@ -249,6 +299,15 @@ async def generate_cable_schedule(
                                          extra_sheets=extra_report.get("sheets") or None,
                                          extra_stats=extra_report.get("stats") or None,
                                          extra_warnings=extra_report.get("warnings") or None)
+
+
+@router.get("/generated")
+async def generated_cable_schedule(
+    project_id: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+):
+    """Metadata of the Cable Schedule the Gland / Lug / Drum generators will use (no file content)."""
+    return generated_meta(get_generated(current_user.id, project_id))
 
 
 @router.get("/download")

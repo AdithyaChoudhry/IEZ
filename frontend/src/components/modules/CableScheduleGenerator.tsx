@@ -198,7 +198,7 @@ export default function CableScheduleGenerator() {
           icon={Cable}
           iconClassName="text-red-500"
           title="Drum Schedule Generator"
-          description="Allocate the cable lengths of the IODB against the drums of a Drum Master, drum by drum, with a running balance."
+          description="Allocate the cables of the generated Cable Schedule against the drums of a Drum Master, drum by drum, with a running balance."
         />
         {viewTabs}
         <DrumScheduleGenerator />
@@ -228,7 +228,7 @@ export default function CableScheduleGenerator() {
           icon={Cable}
           iconClassName="text-red-500"
           title="Cable Lug Quantity Generator"
-          description="Physical cable quantities and cable lug quantities from a cable schedule, with an engineering view and a procurement view."
+          description="Physical cable quantities and cable lug quantities from the generated Cable Schedule, with an engineering view and a procurement view."
         />
         {viewTabs}
         <LugQuantityGenerator />
@@ -243,7 +243,7 @@ export default function CableScheduleGenerator() {
           icon={Cable}
           iconClassName="text-red-500"
           title="Cable Gland Quantity Generator"
-          description="Gland quantities from a cable schedule, and an OD-based gland size advisor (Metric / NPT / BSP / ET)."
+          description="Gland quantities from the generated Cable Schedule, and an OD-based gland size advisor (Metric / NPT / BSP / ET)."
         />
         {viewTabs}
         <GlandQuantityGenerator />
@@ -444,6 +444,9 @@ export default function CableScheduleGenerator() {
                 <Download className="w-5 h-5" />
                 Download {result.filename}
               </Button>
+              <p className="text-sm text-green-800 mt-3">
+                This Cable Schedule is now the input of the Drum Schedule, Cable Gland Quantity and Cable Lug Quantity generators (tabs above).
+              </p>
             </div>
           </div>
         </div>

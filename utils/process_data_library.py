@@ -14,6 +14,7 @@ from .process_data_fields.analyzers_a import ANALYZER_TYPES_A
 from .process_data_fields.analyzers_b import ANALYZER_TYPES_B
 from .process_data_fields.gauges_gas_custom import GAUGE_GAS_CUSTOM_TYPES
 from .process_data_fields.switches_elements import SWITCH_ELEMENT_TYPES
+from .process_data_fields.analyzer_datasheet_fields import ANALYZER_DATASHEET_TYPES, EXTRA_FIELDS as _ANALYZER_EXTRA
 
 # Always the first 8 columns of the requisition, in this order.
 IDENTIFICATION_COLUMNS = (
@@ -36,7 +37,7 @@ _ORDER = (
     "dissolved_oxygen_analyzer", "chlorine_analyzer", "ozone_analyzer", "ammonia_analyzer",
     "nitrate_analyzer", "phosphate_analyzer", "cod_analyzer", "toc_analyzer", "tss_mlss_analyzer",
     "fluoride_analyzer", "silica_analyzer", "oil_in_water_analyzer", "h2s_analyzer",
-    "o2_analyzer", "co2_analyzer", "ch4_analyzer", "biogas_analyzer", "other_gas_analyzer",
+    "phenol_analyzer", "o2_analyzer", "co2_analyzer", "ch4_analyzer", "biogas_analyzer", "other_gas_analyzer",
     "custom_analyzer", "custom_instrument",
 )
 
@@ -89,6 +90,9 @@ for _p, _col in (("operating pressure", "PRESSURE"), ("operating temperature", "
     IODB_PREFILL[f"maximum {_p}"] = f"{_col} MAX"
 IODB_PREFILL["fluid density"] = "DENSITY"
 IODB_PREFILL["normal velocity"] = "VELOCITY"
+IODB_PREFILL["velocity normal"] = "VELOCITY"
+IODB_PREFILL["maximum pressure"] = "PRESSURE MAX"
+IODB_PREFILL["maximum temperature"] = "TEMPERATURE MAX"
 
 # The IODB header is spelt VISCOSITY in real files and VISCOCITY in older ones - accept both.
 _ALTERNATE_HEADER = {"VISCOCITY": "VISCOSITY"}
@@ -119,8 +123,11 @@ def _finalize(cfg: InstrumentTypeConfig) -> InstrumentTypeConfig:
 
 def _build() -> dict:
     merged: dict = {}
-    for src in (TRANSMITTER_TYPES, ANALYZER_TYPES_A, ANALYZER_TYPES_B, GAUGE_GAS_CUSTOM_TYPES, SWITCH_ELEMENT_TYPES):
+    for src in (TRANSMITTER_TYPES, ANALYZER_TYPES_A, ANALYZER_TYPES_B, GAUGE_GAS_CUSTOM_TYPES, SWITCH_ELEMENT_TYPES,
+                ANALYZER_DATASHEET_TYPES):
         merged.update(src)
+    for k, extra in _ANALYZER_EXTRA.items():               # datasheet-only analyser fields (analyzer_datasheet_fields.py)
+        merged[k] = dataclasses.replace(merged[k], fields=tuple(merged[k].fields) + tuple(extra))
     out = {k: _finalize(merged[k]) for k in _ORDER if k in merged}
     for k, v in merged.items():  # any config not in _ORDER is still available (extensibility)
         out.setdefault(k, _finalize(v))

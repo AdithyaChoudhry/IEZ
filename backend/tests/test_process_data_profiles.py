@@ -28,6 +28,22 @@ TEN = [
     ("level_gauge", "Magnetic", "LG-Magnetic Type-R0.xls"),
     ("level_gauge", "Reflex", "LG-REFLEX TYPE-R0.xls"),
 ]
+GROUP2 = [
+    ("pressure_gauge", "Bourdon", "PG- BOURDON-R0.xls"),
+    ("pressure_gauge", "Diaphragm Seal", "PG- DIAPHRAGM SEAL-R0.xls"),
+    ("temperature_gauge", "", "TG-R0.xls"),
+    ("temperature_transmitter", "", "TT-R0.xls"),
+    ("level_transmitter", "DP Type (Open Tank)", "LT-DP Type-R0 open tank.xls"),
+    ("level_transmitter", "DP Type (Pressurized Tank)", "LT-DP Type-R0 Pressurized tank.xls"),
+]
+ANALYSERS = [
+    ("ph_analyzer", "", "pH ANALYSER-R0.xls"), ("orp_analyzer", "", "ORP ANALYSER-R0.xls"),
+    ("conductivity_analyzer", "", "CONDUCTIVITY ANALYSER-R0.xls"), ("turbidity_analyzer", "", "TURBIDITY ANALYSER-R0.xls"),
+    ("dissolved_oxygen_analyzer", "", "DO ANALYSER-R0.xls"), ("chlorine_analyzer", "", "RESIDUAL CHLORINE ANALYSER-R0.xls"),
+    ("ammonia_analyzer", "", "NH3 ANALYSER-R0.xls"), ("toc_analyzer", "", "TOC ANALYSER-R0.xls"),
+    ("tss_mlss_analyzer", "", "TSS ANALYSER-R0.xls"), ("oil_in_water_analyzer", "", "OIL ANALYSER-R0.xls"),
+    ("phenol_analyzer", "", "PHENOL ANALYSER-R0.xls"),
+]
 LEVEL_TX = [
     ("level_transmitter", "Guided Wave Radar", "LT Guided Wave Radar-R0.Xls"),
     ("level_transmitter", "Non-Contact Radar", "LT Non contact Radar Type-R0-1.xls"),
@@ -80,6 +96,44 @@ def _lt(height_unit):
 
 # Level transmitter: pressure, temperature, tank MOC and tank height are selected (the engineer's request), together with
 # the other process columns of the annexure; the tank-height unit is the printed one (none until a subtype is chosen).
+_PGP = ["Pressure Minimum (Kg/cm2 g)", "Normal Operating Pressure (Kg/cm2 g)", "Pressure Maximum (Kg/cm2 g)"]
+_PGT = ["Temperature Minimum (°C)", "Normal Temperature (°C)", "Temperature Maximum (°C)"]
+EXPECTED.update({
+    ("pressure_gauge", ""): ["Process Fluid", *_PGP, *_PGT], ("pressure_gauge", "Bourdon"): ["Process Fluid", *_PGP, *_PGT],
+    ("pressure_gauge", "Diaphragm Seal"): ["Process Fluid", *_PGP, *_PGT],
+    ("temperature_gauge", ""): ["Process Fluid", "Pressure Minimum (Kg/Cm2.g)", "Pressure Normal (Kg/Cm2.g)", "Pressure Maximum (Kg/Cm2.g)",
+                                "Temperature Minimum (°C)", "Normal Operating Temperature (°C)", "Temperature Maximum (°C)",
+                                "Flow Minimum (m3/hr)", "Flow Normal (m3/hr)", "Flow Maximum (m3/hr)",
+                                "Velocity Minimum (m/s)", "Velocity Normal (m/s)", "Velocity Maximum (m/s)"],
+    ("temperature_transmitter", ""): ["Process Fluid", "Temperature Minimum (°C)", "Normal Operating Temperature (°C)", "Temperature Maximum (°C)"],
+    ("level_transmitter", "DP Type (Open Tank)"): ["Process Fluid", "Specific Gravity", "Viscosity (cP)", *_LTP, *_LTT, "Tank MOC",
+                                                   "Tank / Vessel Height (mmWC)", "Agitation", "Presence of Fumes",
+                                                   "Level Range Low (mmWC)", "Level Range High (mmWC)"],
+    ("level_transmitter", "DP Type (Pressurized Tank)"): ["Upper Fluid", "Lower Fluid", "Viscosity (cP)", "Specific Gravity",
+                                                          "Level Range High (MM)", "Level Range Low (MM)",
+                                                          "Maximum Pressure (Kg/cm2 G)", "Operating Pressure (Kg/cm2 G)",
+                                                          "Maximum Temperature (DEG C)", "Operating Temperature (DEG C)"],
+})
+EXPECTED[("temperature_transmitter", "RTD")] = EXPECTED[("temperature_transmitter", "Thermocouple")] = EXPECTED[("temperature_transmitter", "Other")] = EXPECTED[("temperature_transmitter", "")]
+_AP_OWN = ["Pressure Minimum (Kg/Cm2.g)", "Normal Pressure (Kg/Cm2.g)", "Pressure Maximum (Kg/Cm2.g)"]
+_AP_NEW = ["Pressure Minimum (Kg/Cm2.g)", "Pressure Normal (Kg/Cm2.g)", "Pressure Maximum (Kg/Cm2.g)"]
+_AT_OWN = ["Temperature Minimum (°C)", "Normal Temperature (°C)", "Temperature Maximum (°C)"]
+_ASV = ["Specific Gravity", "Viscosity (Cp)"]
+EXPECTED.update({
+    ("ph_analyzer", ""): ["Process Fluid", "Process Pressure Minimum (Kg/Cm2.g)", "Normal Process Pressure (Kg/Cm2.g)",
+                          "Process Pressure Maximum (Kg/Cm2.g)", "Process Temperature Minimum (°C)", "Normal Process Temperature (°C)",
+                          "Process Temperature Maximum (°C)", *_ASV, "Conductivity (µs/cm)", "Operating Range"],
+    ("orp_analyzer", ""): ["Process Fluid", *_AP_OWN, *_AT_OWN, *_ASV, "Conductivity (µs/cm)", "Operating Range"],
+    ("conductivity_analyzer", ""): ["Process Fluid", *_AP_OWN, *_AT_OWN, *_ASV, "Conductivity (µs/cm)", "Operating Range"],
+    ("turbidity_analyzer", ""): ["Process Fluid", *_AP_OWN, *_AT_OWN, *_ASV, "Conductivity (µs/cm)", "Operating Range"],
+    ("toc_analyzer", ""): ["Process Fluid", *_AP_NEW, *_AT_OWN, *_ASV, "Conductivity (µs/cm)", "Operating Range (Mg/L)"],
+    ("dissolved_oxygen_analyzer", ""): ["Process Fluid", *_AP_OWN, *_AT_OWN, "DO Minimum (ppm)", "Normal DO (ppm)", "DO Maximum (ppm)"],
+    ("chlorine_analyzer", ""): ["Process Fluid", *_AP_OWN, *_AT_OWN, "Operating Range"],
+    ("ammonia_analyzer", ""): ["Process Fluid", *_AP_NEW, *_AT_OWN, "Operating Range"],
+    ("tss_mlss_analyzer", ""): ["Process Fluid", *_AP_NEW, *_AT_OWN, "Operating Range (PPM)"],
+    ("oil_in_water_analyzer", ""): ["Process Fluid", *_AP_NEW, *_AT_OWN, "Operating Range"],
+    ("phenol_analyzer", ""): ["Process Fluid", *_AP_NEW, *_AT_OWN, "Operating Range"],
+})
 EXPECTED.update({("level_transmitter", ""): _lt(""), ("level_transmitter", "Guided Wave Radar"): _lt("mtrs"),
                  ("level_transmitter", "Non-Contact Radar"): _lt("mm"), ("level_transmitter", "Ultrasonic"): _lt("mm")})
 
@@ -151,10 +205,10 @@ def _sheet(api):
 
 
 # ── Test 1: default field selection for all ten datasheets ──────────────────
-@pytest.mark.parametrize("key,subtype,_file", TEN + LEVEL_TX)
+@pytest.mark.parametrize("key,subtype,_file", TEN + LEVEL_TX + GROUP2 + ANALYSERS)
 def test_default_selection_is_the_verified_annexure_profile(api, key, subtype, _file):
     p = _profile(api, key, subtype)
-    assert p["verified"] and p["template"] == _file and p["sheet"] == "ANNEXURE-I"
+    assert p["verified"] and p["template"] == _file and p["sheet"] in ("ANNEXURE-I", "ANNEXURE-l", "ANNEXURE II", "ANNEXURE - I")
     chosen = [f["header"] for f in p["fields"] if f["name"] in p["default_fields"]]
     assert chosen == EXPECTED[(key, subtype)]
     assert all(f["default_selected"] for f in p["fields"] if f["name"] in p["default_fields"])
@@ -166,7 +220,7 @@ def _annexure_labels(path):
     sheet = next(s for s in xlrd.open_workbook(str(path)).sheets() if "ANNEX" in s.name.upper())
     norm = lambda t: re.sub(r"\s+", "", str(t)).upper()           # noqa: E731
     for r in range(sheet.nrows):
-        if str(sheet.cell_value(r, 0)).strip().upper().startswith("SL"):
+        if str(sheet.cell_value(r, 0)).strip().upper().startswith(("SL", "SI", "S.")):
             header = {c: str(sheet.cell_value(r, c)).replace("\n", " ") for c in range(sheet.ncols) if str(sheet.cell_value(r, c)).strip()}
             labels = {norm(v) for v in header.values()}
             for k in (1, 2, 3):
@@ -174,14 +228,18 @@ def _annexure_labels(path):
                     break
                 for c in range(sheet.ncols):
                     sub = str(sheet.cell_value(r + k, c)).strip()
-                    if norm(sub) in {"MIN", "NOR", "MAX", "ID(MM)", "OD(MM)"}:
+                    if norm(sub) in {"MIN", "NOR", "MAX", "ID(MM)", "OD(MM)", "LOW", "HIGH", "UPPER", "LOWER", "OPER", "NORMAL"}:
                         group = header[max(h for h in header if h <= c)]
                         labels.add(norm(f"{group} - {sub}"))
+            for c in range(sheet.ncols):               # a heading split over two rows: "INST RANGE" / "(Kg/cm2 g)"
+                t1, t2 = (str(sheet.cell_value(r + k, c)).strip() if r + k < sheet.nrows else "" for k in (1, 2))
+                if t1 and t2.startswith("("):
+                    labels.add(norm(f"{t1} {t2}"))
             return labels
     raise AssertionError(f"no SL.No. heading row in {path}")
 
 
-@pytest.mark.parametrize("key,subtype,filename", TEN + LEVEL_TX + [("pressure_transmitter", "Standard", "PRESSURE TRANSMITTER-R0.xls")])
+@pytest.mark.parametrize("key,subtype,filename", TEN + LEVEL_TX + GROUP2 + ANALYSERS + [("pressure_transmitter", "Standard", "PRESSURE TRANSMITTER-R0.xls")])
 def test_profile_headings_match_the_original_datasheet(key, subtype, filename):
     path = ROOT / filename
     if not path.exists():
@@ -191,7 +249,7 @@ def test_profile_headings_match_the_original_datasheet(key, subtype, filename):
     missing = [h.label for h in profile.headings if re.sub(r"\s+", "", h.label).upper() not in printed]
     assert not missing, f"{filename}: headings not printed on the annexure: {missing}"
     expected_printed = {re.sub(r"\s+", "", h.label).upper() for h in profile.headings}
-    groups = {x.rsplit("-", 1)[0] for x in printed if x.endswith(("-MIN", "-NOR", "-MAX", "-ID(MM)", "-OD(MM)"))}
+    groups = {x.rsplit("-", 1)[0] for x in printed if x.endswith(("-MIN", "-NOR", "-MAX", "-ID(MM)", "-OD(MM)", "-LOW", "-HIGH", "-UPPER", "-LOWER", "-OPER", "-NORMAL"))}
     unlisted = sorted(printed - expected_printed - groups)          # a group heading is covered by its MIN/NOR/MAX columns
     assert not unlisted, f"{filename}: annexure headings missing from the profile: {unlisted}"
 
@@ -293,7 +351,7 @@ def test_defaults_are_stable_and_each_type_has_its_own(api):
 
 
 def test_types_without_a_verified_profile_keep_their_behaviour(api):
-    p = _profile(api, "temperature_gauge")
+    p = _profile(api, "h2s_analyzer")                       # no datasheet in the repository for the H2S analyzer
     assert not p["verified"] and len(p["default_fields"]) == len(p["fields"])
     assert _profile(api, "flow_transmitter", "Vortex")["verified"] is False
     assert len(_profile(api, "flow_transmitter", "Vortex")["default_fields"]) == len(_profile(api, "flow_transmitter", "Vortex")["fields"])
@@ -425,3 +483,49 @@ def test_iodb_without_type_name_columns_still_matches_by_tag_prefix(api):
     assert r.status_code == 200
     assert [t["tag_no"] for t in r.json()["matched_tags"]] == ["200-LIT-1"]
     assert any("INSTRUMENT TYPE NAME" in w for w in r.json()["warnings"])
+
+
+def test_every_requested_instrument_group_has_its_own_defaults(api):
+    # pressure gauge: fluid, pressure and temperature only (range / accessories are optional)
+    for st in ("", "Bourdon", "Diaphragm Seal"):
+        p = _profile(api, "pressure_gauge", st)
+        assert p["verified"] and len(p["default_fields"]) == 7
+        assert not {"Instrument Range", "Accessories", "Design Pressure", "Process Connection"} & set(p["default_fields"])
+    # the pressure unit of the datasheet, not the configuration's bar(g)
+    assert {f["name"]: f["unit"] for f in _profile(api, "pressure_gauge", "Bourdon")["fields"]}["Pressure Minimum"] == "Kg/cm2 g"
+    assert {f["name"]: f["unit"] for f in INSTRUMENT_TYPES["pressure_gauge"].fields and _profile(api, "pressure_gauge")["fields"]}["Pressure Minimum"] == "Kg/cm2 g"
+    assert {f.name: f.unit for f in INSTRUMENT_TYPES["pressure_gauge"].fields}["Pressure Minimum"] == "bar(g)"      # the config itself is unchanged
+    # temperature gauge: MIN/NOR/MAX of pressure, temperature, flow and velocity - the single-valued fields stay optional
+    tg = _profile(api, "temperature_gauge")
+    assert len(tg["default_fields"]) == 13 and not {"Process Pressure", "Flow Rate", "Velocity", "Line MOC", "Immersion Length"} & set(tg["default_fields"])
+    # temperature transmitter: the same profile for every sensor type
+    assert {tuple(_profile(api, "temperature_transmitter", st)["default_fields"]) for st in ("", "RTD", "Thermocouple", "Other")} == {
+        ("Process Fluid", "Temperature Minimum", "Normal Operating Temperature", "Temperature Maximum")}
+    # DP level transmitters: operating MAX / OPER are separate fields, never merged with Normal
+    pz = _profile(api, "level_transmitter", "DP Type (Pressurized Tank)")
+    assert {"Operating Pressure", "Maximum Pressure"} <= set(pz["default_fields"]) and "Process Pressure Normal" not in pz["default_fields"]
+    assert {"Level Range Low", "Level Range High", "Tank MOC", "Tank / Vessel Height"} <= set(_profile(api, "level_transmitter", "DP Type (Open Tank)")["default_fields"])
+
+
+def test_analysers_select_the_annexure_process_columns_only(api):
+    for key, _st, _f in ANALYSERS:
+        p = _profile(api, key)
+        d = set(p["default_fields"])
+        assert p["verified"] and "Process Fluid" in d and "Instrument Range" not in d and "Remarks" not in d, key
+        assert len(p["fields"]) > len(d), key                         # the many other analyser parameters stay optional
+    # measured-value MIN/NOR/MAX of the analyser configuration stay optional where the annexure has only an Operating Range
+    assert not {"Expected pH Minimum", "Normal pH", "Expected pH Maximum"} & set(_profile(api, "ph_analyzer")["default_fields"])
+    assert not {"TOC Minimum", "Normal TOC", "TOC Maximum"} & set(_profile(api, "toc_analyzer")["default_fields"])
+    # DO: the printed unit is ppm, the configuration's mg/L is not silently reused
+    assert {f["name"]: f["unit"] for f in _profile(api, "dissolved_oxygen_analyzer")["fields"]}["DO Minimum"] == "ppm"
+    assert {f.name: f.unit for f in INSTRUMENT_TYPES["dissolved_oxygen_analyzer"].fields}["DO Minimum"] == "mg/L"
+    # new Phenol type matches its own tags
+    tags = _tags_of_df(api, "phenol_analyzer", pd.DataFrame({"TAG NO": ["200-AIT-1", "200-AIT-2"], "EQUIPMENT DESCRIPTION": ["a", "b"], "P&ID NO.": ["P", "P"],
+                                                              "INSTRUMENT TYPE NAME": ["Online Phenol Analyzer", "Online pH Analyzer"]}))
+    assert tags == ["200-AIT-1"]
+
+
+def _tags_of_df(api, key, df):
+    r = api.post("/api/process-data/match-tags", data={"instrument_type": key}, files={"file": ("i.xlsx", _iodb_bytes(df))})
+    assert r.status_code == 200, r.text
+    return [t["tag_no"] for t in r.json()["matched_tags"]]

@@ -90,6 +90,10 @@ PRESSURE_GAUGE_FIELDS = (
     ProcessField(name="Specific Gravity", field_type=FieldType.NUMBER),
     ProcessField(name="Hazardous Area", field_type=FieldType.BOOLEAN),
     ProcessField(name="Remarks", field_type=FieldType.TEXT),
+    # --- fields printed on the Bourdon / Diaphragm-seal pressure gauge datasheet ANNEXURE-I ---------------------------
+    ProcessField(name="Instrument Range", unit="Kg/cm2 g", field_type=FieldType.TEXT),
+    ProcessField(name="Accessories", field_type=FieldType.TEXT),
+    ProcessField(name="Process Connection", field_type=FieldType.TEXT, subtype_only=("Diaphragm Seal",)),
 )
 
 # ---------------------------------------------------------------------------
@@ -117,6 +121,21 @@ TEMPERATURE_GAUGE_FIELDS = (
     ProcessField(name="Corrosive Service", field_type=FieldType.BOOLEAN),
     ProcessField(name="Hazardous Area", field_type=FieldType.BOOLEAN),
     ProcessField(name="Remarks", field_type=FieldType.TEXT),
+    # --- fields printed on the Temperature Gauge datasheet ANNEXURE-I (Min / Nor / Max columns) -----------------------
+    ProcessField(name="Pressure Minimum", unit="Kg/Cm2.g", field_type=FieldType.NUMBER),
+    ProcessField(name="Pressure Normal", unit="Kg/Cm2.g", field_type=FieldType.NUMBER),
+    ProcessField(name="Pressure Maximum", unit="Kg/Cm2.g", field_type=FieldType.NUMBER),
+    ProcessField(name="Flow Minimum", unit="m3/hr", field_type=FieldType.NUMBER),
+    ProcessField(name="Flow Normal", unit="m3/hr", field_type=FieldType.NUMBER),
+    ProcessField(name="Flow Maximum", unit="m3/hr", field_type=FieldType.NUMBER),
+    ProcessField(name="Velocity Minimum", unit="m/s", field_type=FieldType.NUMBER),
+    ProcessField(name="Velocity Normal", unit="m/s", field_type=FieldType.NUMBER),
+    ProcessField(name="Velocity Maximum", unit="m/s", field_type=FieldType.NUMBER),
+    ProcessField(name="Pipe Inside Diameter", unit="mm", field_type=FieldType.NUMBER),
+    ProcessField(name="Pipe Outside Diameter", unit="mm", field_type=FieldType.NUMBER),
+    ProcessField(name="Immersion Length", unit="mm", field_type=FieldType.NUMBER),
+    ProcessField(name="Overall Length", unit="mm", field_type=FieldType.NUMBER),
+    ProcessField(name="Instrument Range", field_type=FieldType.TEXT),
 )
 
 # ---------------------------------------------------------------------------
@@ -193,6 +212,8 @@ PRESSURE_GAUGE = InstrumentTypeConfig(
         "DIAPHRAGM SEAL PRESSURE GAUGE",
     ),
     tag_prefixes=("PG", "PI"),
+    subtypes=("Bourdon", "Diaphragm Seal"),
+    subtype_field_name="GAUGE TYPE",
     fields=PRESSURE_GAUGE_FIELDS,
 )
 

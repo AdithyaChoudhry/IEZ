@@ -55,10 +55,10 @@ def _ref(label, note="", cls=C, action=REFERENCE_ONLY):
     return Heading(label, cls=cls, action=action, note=note)
 
 
-def _trio(label, unit, fields, action, cls=A, default=True, note=""):
+def _trio(label, unit, fields, action, cls=A, default=True, note="", subs=("MIN", "NOR", "MAX")):
     """MIN / NOR / MAX sub-columns of one grouped annexure heading -> three separate fields."""
     return tuple(Heading(f"{label} - {sub}", unit, cls, action, fld, default, note)
-                 for sub, fld in zip(("MIN", "NOR", "MAX"), fields))
+                 for sub, fld in zip(subs, fields))
 
 
 def _one(label, unit, field, cls, action, default=False, note=""):
@@ -335,8 +335,192 @@ _register(Profile("level_transmitter", "",
     *_one("PRESENCE OF AGITATION", "", "Agitation", A, EXISTS_DEFAULT, True),
     *_one("PRESENCE OF FUMES", "", "Presence of Fumes", A, EXISTS_DEFAULT, True),
     *_remarks()),
-    "Select a subtype (Guided Wave Radar / Non-Contact Radar / Ultrasonic) for the unit-specific datasheet profile. "
-    "The differential-pressure level transmitters (LT-DP Type datasheets) have a different annexure and are not configured."))
+    "Select a subtype (Guided Wave Radar / Non-Contact Radar / Ultrasonic / DP Type) for the unit-specific datasheet profile."))
+
+
+# ── 12. Pressure gauge - Bourdon / Diaphragm seal ───────────────────────────────────────────────────────
+_PG_PRESSURE = ("Pressure Minimum", "Normal Operating Pressure", "Pressure Maximum")
+_PG_TEMP = ("Temperature Minimum", "Normal Temperature", "Temperature Maximum")
+_PG_UNIT = "existing field is configured in bar(g); the datasheet prints Kg/cm2 g - the datasheet unit is used, no conversion"
+
+
+def _pg_profile(subtype, template, type_label, tail):
+    return Profile("pressure_gauge", subtype, template, "ANNEXURE-I", (
+        SL, TAG, _ref(type_label, "construction type chosen by instrumentation / vendor, not a process input", cls=B, action=NOT_APPLICABLE),
+        PID, *_fluid(True), SERVICE_ID, LOCATION, LINE, AREA,
+        *_trio("PRESSURE (Kg/cm2 g)", _KGCM2G, _PG_PRESSURE, UNIT_REVIEW, note=_PG_UNIT),
+        *_trio("TEMP. (°C)", "°C", _PG_TEMP, EXISTS_DEFAULT),
+        *_one("INST RANGE (Kg/cm2 g)", _KGCM2G, "Instrument Range", B, ADD_NEW_FIELD,
+              note="gauge range - not an operating pressure"),
+        *tail, MODEL, *_remarks()))
+
+
+_ACCESSORIES = _one("ACCESSORIES", "", "Accessories", B, ADD_NEW_FIELD)
+_register(_pg_profile("Bourdon", "PG- BOURDON-R0.xls", "TYPE", _ACCESSORIES))
+_register(_pg_profile("Diaphragm Seal", "PG- DIAPHRAGM SEAL-R0.xls", "INST.TYPE", (
+    *_one("PROCESS CONNECTION", "", "Process Connection", B, ADD_NEW_FIELD,
+          note="the existing Process Connection Type / Size fields are not reused"), *_ACCESSORIES)))
+# No subtype chosen: the columns both datasheets share.
+_register(Profile("pressure_gauge", "", "PG- BOURDON-R0.xls / PG- DIAPHRAGM SEAL-R0.xls", "ANNEXURE-I", (
+    *_fluid(True),
+    *_trio("PRESSURE (Kg/cm2 g)", _KGCM2G, _PG_PRESSURE, UNIT_REVIEW, note=_PG_UNIT),
+    *_trio("TEMP. (°C)", "°C", _PG_TEMP, EXISTS_DEFAULT),
+    *_one("INST RANGE (Kg/cm2 g)", _KGCM2G, "Instrument Range", B, ADD_NEW_FIELD),
+    *_ACCESSORIES, *_remarks()),
+    "Select a subtype (Bourdon / Diaphragm Seal) for the datasheet-specific profile."))
+
+# ── 13. Temperature gauge ───────────────────────────────────────────────────────────────────────────────
+_register(Profile("temperature_gauge", "", "TG-R0.xls", "ANNEXURE-l", (
+    _ref("Sl. No.", "numbering of the requisition (S.NO)"), _ref("Tag No.", "identification column TAG NO"),
+    *_one("Fluid", "", "Process Fluid", A, EXISTS_DEFAULT, True),
+    _ref("Location", "no identification column carries the datasheet location", cls=R, action=MAPPING_REVIEW),
+    _ref("Line No. /Equipment No.", "identification columns LINE and EQUIPMENT NO"),
+    _ref("Line Size", "identification column LINE SIZE"),
+    *_one("Line / Equipment MOC", "", "Line MOC", B, EXISTS_OPTIONAL,
+          note="the datasheet heading names line or equipment MOC; the existing field is Line MOC"),
+    _ref("P&ID No", "identification column P&ID NO."),
+    *_one("Pipe ID(mm)", "mm", "Pipe Inside Diameter", B, ADD_NEW_FIELD),
+    *_one("Pipe OD(mm)", "mm", "Pipe Outside Diameter", B, ADD_NEW_FIELD),
+    *_one("Immersion Length (mm)", "mm", "Immersion Length", B, ADD_NEW_FIELD),
+    *_one("Overall Length (mm)", "mm", "Overall Length", B, ADD_NEW_FIELD),
+    *_trio("Pressure(Kg/Cm2.g)", "Kg/Cm2.g", ("Pressure Minimum", "Pressure Normal", "Pressure Maximum"), ADD_NEW_FIELD,
+           note="the existing Process Pressure field is a single bar(g) value and is kept separate"),
+    *_trio("Temperature(ºC)", "°C", ("Temperature Minimum", "Normal Operating Temperature", "Temperature Maximum"), EXISTS_DEFAULT),
+    *_trio("Flow(m3/hr)", "m3/hr", ("Flow Minimum", "Flow Normal", "Flow Maximum"), ADD_NEW_FIELD,
+           note="the existing Flow Rate field is a single value and is kept separate"),
+    *_trio("Velocity(m/s)", "m/s", ("Velocity Minimum", "Velocity Normal", "Velocity Maximum"), ADD_NEW_FIELD,
+           note="the existing Velocity field is a single value and is kept separate"),
+    *_one("Instrument Range", "", "Instrument Range", B, ADD_NEW_FIELD),
+    _ref("Model No.", "vendor model, filled after the requisition", cls=B, action=NOT_APPLICABLE),
+    *_one("Remarks", "", "Remarks", B, EXISTS_OPTIONAL))))
+
+# ── 14. Temperature transmitter (RTD / thermocouple / other) ────────────────────────────────────────────
+_tt = Profile("temperature_transmitter", "", "TT-R0.xls", "ANNEXURE-l", (
+    _ref("SI. NO.", "numbering of the requisition (S.NO)"), _ref("TAG NO", "identification column TAG NO"),
+    *_one("FLUID", "", "Process Fluid", A, EXISTS_DEFAULT, True),
+    LOCATION, _ref("P&ID No.", "identification column P&ID NO."), _ref("LINE NO.", "identification column LINE"), AREA,
+    *_trio("TEMP. (°C)", "°C", ("Temperature Minimum", "Normal Operating Temperature", "Temperature Maximum"), EXISTS_DEFAULT),
+    *_one("INST RANGE (°C)", "°C", "Instrument Range", B, ADD_NEW_FIELD, note="sensor range - not an operating temperature"),
+    *_one("CALIBRATION RANGE (°C)", "°C", "Calibration Range", B, ADD_NEW_FIELD, note="calibrated range - not an operating temperature"),
+    _ref("MODEL NO.", "vendor model, filled after the requisition", cls=B, action=NOT_APPLICABLE),
+    *_one("REMARKS", "", "Remarks", B, EXISTS_OPTIONAL)),
+    "One datasheet covers every sensor type, so the profile applies to RTD, Thermocouple and Other alike.")
+_register(_tt, "", "RTD", "Thermocouple", "Other")
+
+# ── 15. Level transmitter - differential pressure (open tank) ───────────────────────────────────────────
+_register(Profile("level_transmitter", "DP Type (Open Tank)", "LT-DP Type-R0 open tank.xls", "ANNEXURE-I", (
+    SL, TAG, TYPE_REF, PID, *_fluid(True), SERVICE_ID, LOCATION, AREA,
+    *_one("OPERATING SPECIFIC GRAVITY", "", "Specific Gravity", A, EXISTS_DEFAULT, True,
+          "printed as the operating specific gravity"),
+    *_one("OPERATING VISCOSITY (cP)", "cP", "Viscosity", A, EXISTS_DEFAULT, True),
+    *_trio("PRESSURE(Kg/Cm2 g)", "Kg/Cm2 g", _LT_PRESSURE, UNIT_REVIEW, note=_LT_UNIT),
+    *_trio("TEMPERATURE(°C)", "°C", _LT_TEMP, EXISTS_DEFAULT),
+    *_one("TANK TAG NO", "", "Tank Tag Number", B, ADD_NEW_FIELD),
+    *_one("TANK TYPE", "", "Tank Type", B, ADD_NEW_FIELD),
+    *_one("TANK MOC", "", "Tank MOC", B, ADD_NEW_FIELD, True, "selected by default at the engineer's request"),
+    *_one("TANK HEIGHT (mmWC)", "mmWC", "Tank / Vessel Height", B, UNIT_REVIEW, True,
+          "the datasheet prints the tank height in mmWC; kept as printed. Selected by default at the engineer's request"),
+    *_one("TANK DIAMETER(mm)", "mm", "Tank / Vessel Diameter", B, UNIT_REVIEW, False, "existing field is configured in m; the datasheet prints mm"),
+    *_one("PRESENCE OF AGITATION", "", "Agitation", A, EXISTS_DEFAULT, True),
+    *_one("PRESENCE OF FUMES", "", "Presence of Fumes", A, EXISTS_DEFAULT, True),
+    *(Heading(f"LEVEL(mmWC) - {sub}", "mmWC", A, ADD_NEW_FIELD, fld, True,
+              "operating level range - not the alarm levels (Low Level / High Level)")
+      for sub, fld in (("LOW", "Level Range Low"), ("HIGH", "Level Range High"))),
+    *_one("CALIBRATION RANGE (mmWC)", "mmWC", "Calibration Range", B, ADD_NEW_FIELD),
+    *_one("INSTRUMENT RANGE (mmWC)", "mmWC", "Instrument Range", B, ADD_NEW_FIELD),
+    MODEL, *_remarks())))
+
+# ── 16. Level transmitter - differential pressure (pressurized tank) - ANNEXURE II layout ───────────────
+_register(Profile("level_transmitter", "DP Type (Pressurized Tank)", "LT-DP Type-R0 Pressurized tank.xls", "ANNEXURE II", (
+    _ref("S.No", "numbering of the requisition (S.NO)"), _ref("TAG NO.", "identification column TAG NO"),
+    _ref("INSTRUMENT DECS", "identification column EQUIPMENT DESCRIPTION"),
+    _ref("INSTRUMENT TYPE", "construction type chosen by instrumentation / vendor, not a process input", cls=B, action=NOT_APPLICABLE),
+    Heading("FLUID - UPPER", "", A, ADD_NEW_FIELD, "Upper Fluid", True, "two-fluid (interface) service: upper fluid"),
+    Heading("FLUID - LOWER", "", A, ADD_NEW_FIELD, "Lower Fluid", True, "two-fluid (interface) service: lower fluid"),
+    _ref("SERVICE / LOCATION", "identification column SERVICE"), _ref("P&ID No.", "identification column P&ID NO."),
+    *_one("VISCOSITY (CPs)", "cP", "Viscosity", A, EXISTS_DEFAULT, True, "printed CPs - the same unit as cP"),
+    *_one("SPECIFIC GRAVITY", "", "Specific Gravity", A, EXISTS_DEFAULT, True),
+    *(Heading(f"LEVEL(MM) - {sub}", "MM", A, ADD_NEW_FIELD, fld, True,
+              "operating level range - not the alarm levels (Low Level / High Level)")
+      for sub, fld in (("HIGH", "Level Range High"), ("LOW", "Level Range Low"))),
+    *(Heading(f"PRESSURE (Kg/cm2 G) - {sub}", "Kg/cm2 G", A, ADD_NEW_FIELD, fld, True,
+              "this annexure prints MAX and OPER only (no MIN / NOR / MAX); OPER is the operating value and is NOT merged "
+              "with the Normal pressure field")
+      for sub, fld in (("MAX", "Maximum Pressure"), ("OPER", "Operating Pressure"))),
+    *(Heading(f"TEMPERATURE (DEG C) - {sub}", "DEG C", A, ADD_NEW_FIELD, fld, True,
+              "this annexure prints MAX and OPER only; OPER is NOT merged with the Normal temperature field")
+      for sub, fld in (("MAX", "Maximum Temperature"), ("OPER", "Operating Temperature"))),
+    *_one("MAX DCS RANGE (MMWC)", "MMWC", "Max DCS Range", B, ADD_NEW_FIELD),
+    *_one("MIN DCS RANGE (MMWC)", "MMWC", "Min DCS Range", B, ADD_NEW_FIELD),
+    *_one("INST RANGE (MMWC)", "MMWC", "Instrument Range", B, ADD_NEW_FIELD),
+    *_one("CALIBRATION RANGE(MMWC)", "MMWC", "Calibration Range", B, ADD_NEW_FIELD),
+    *_one("DISPLAY RANGE (MTRS)", "MTRS", "Display Range", B, ADD_NEW_FIELD),
+    *_one("CAPILLARY SIZE / LENGTH", "", "Capillary Size / Length", B, ADD_NEW_FIELD),
+    _ref("MAKE", "vendor, filled after the requisition", cls=B, action=NOT_APPLICABLE),
+    _ref("MODEL NO", "vendor model, filled after the requisition", cls=B, action=NOT_APPLICABLE),
+    *_one("REMARKS", "", "Remarks", B, EXISTS_OPTIONAL)),
+    "This datasheet uses a different annexure layout (ANNEXURE II) with MAX / OPER columns."))
+
+
+# ── 17. Analysers (pH / ORP / Conductivity / Turbidity / DO / Residual Chlorine / NH3 / TOC / TSS / Oil / Phenol) ───
+_AN_P_OWN = ("Pressure Minimum", "Normal Pressure", "Pressure Maximum")          # types that already had the pressure trio
+_AN_T_OWN = ("Temperature Minimum", "Normal Temperature", "Temperature Maximum")
+_AN_P_NEW = ("Pressure Minimum", "Pressure Normal", "Pressure Maximum")           # added from the annexure
+_AN_UNIT = "existing field is configured in kg/cm2; the datasheet prints Kg/Cm2.g - the datasheet unit is used, no conversion"
+
+
+def _an_profile(type_key, filename, p_names, t_names, p_action, middle, instrument_range=True, op_unit="", sheet="ANNEXURE - I", subs=("MIN", "NOR", "MAX")):
+    operating_range = _one("Operating Range" + (f" ({op_unit})" if op_unit else ""), op_unit, "Operating Range", A, ADD_NEW_FIELD, True,
+                           "expected range of the measured value, as printed on the datasheet") if instrument_range else ()
+    return Profile(type_key, "", filename, sheet, (
+        _ref("Sl. No.", "numbering of the requisition (S.NO)"), _ref("Tag No.", "identification column TAG NO"),
+        *_one("Fluid", "", "Process Fluid", A, EXISTS_DEFAULT if type_key != "chlorine_analyzer" else ADD_NEW_FIELD, True),
+        _ref("Location", "no identification column carries the datasheet location", cls=R, action=MAPPING_REVIEW),
+        _ref("Line No. /Equipment No.", "identification columns LINE and EQUIPMENT NO"),
+        _ref("Line Size", "identification column LINE SIZE"),
+        _ref("Line / Equipment  MOC", "piping / equipment data - not a process input", cls=B, action=NOT_APPLICABLE),
+        _ref("P&ID No", "identification column P&ID NO."),
+        *_trio("Pressure(Kg/Cm2.g)", "Kg/Cm2.g", p_names, p_action, note=_AN_UNIT if p_action == UNIT_REVIEW else "", subs=subs),
+        *_trio("Temperature(ºC)", "°C", t_names, EXISTS_DEFAULT, subs=subs),
+        *middle,
+        *operating_range,
+        *_one("Instrument  Range" + (f" ({op_unit})" if op_unit else ""), op_unit, "Instrument Range", B, ADD_NEW_FIELD,
+              note="analyser measuring range - not a process value"),
+        _ref("Model No.", "vendor model, filled after the requisition", cls=B, action=NOT_APPLICABLE),
+        *_one("Remarks", "", "Remarks", B, EXISTS_OPTIONAL)))
+
+
+_SG_VISC = (*_one("Specific Gravity", "", "Specific Gravity", A, ADD_NEW_FIELD, True),
+            *_one("Viscosity(Cp)", "Cp", "Viscosity", A, ADD_NEW_FIELD, True))
+
+
+def _cond(existing):
+    return _one("Conductivity (µs/cm)", "µs/cm", "Conductivity", A, UNIT_REVIEW if existing else ADD_NEW_FIELD, True,
+                "the existing field is configured in µS/cm - the same unit" if existing else "")
+
+
+# pH: its own "Process ..." field names
+_register(_an_profile("ph_analyzer", "pH ANALYSER-R0.xls", ("Process Pressure Minimum", "Normal Process Pressure", "Process Pressure Maximum"),
+                      ("Process Temperature Minimum", "Normal Process Temperature", "Process Temperature Maximum"),
+                      UNIT_REVIEW, (*_SG_VISC, *_cond(True))))
+_register(_an_profile("orp_analyzer", "ORP ANALYSER-R0.xls", _AN_P_OWN, _AN_T_OWN, UNIT_REVIEW, (*_SG_VISC, *_cond(True))))
+_register(_an_profile("conductivity_analyzer", "CONDUCTIVITY ANALYSER-R0.xls", _AN_P_OWN, _AN_T_OWN, UNIT_REVIEW,
+                      (*_SG_VISC, *_cond(False))))
+_register(_an_profile("turbidity_analyzer", "TURBIDITY ANALYSER-R0.xls", _AN_P_OWN, _AN_T_OWN, UNIT_REVIEW,
+                      (*_SG_VISC, *_cond(False))))
+_register(_an_profile("toc_analyzer", "TOC ANALYSER-R0.xls", _AN_P_NEW, _AN_T_OWN, ADD_NEW_FIELD,
+                      (*_SG_VISC, *_cond(False)), op_unit="Mg/L"))
+_register(_an_profile("chlorine_analyzer", "RESIDUAL CHLORINE ANALYSER-R0.xls", _AN_P_OWN, _AN_T_OWN, UNIT_REVIEW, ()))
+_register(_an_profile("ammonia_analyzer", "NH3 ANALYSER-R0.xls", _AN_P_NEW, _AN_T_OWN, ADD_NEW_FIELD, ()))
+_register(_an_profile("tss_mlss_analyzer", "TSS ANALYSER-R0.xls", _AN_P_NEW, _AN_T_OWN, ADD_NEW_FIELD, (), op_unit="PPM"))
+_register(_an_profile("oil_in_water_analyzer", "OIL ANALYSER-R0.xls", _AN_P_NEW, _AN_T_OWN, ADD_NEW_FIELD, ()))
+_register(_an_profile("phenol_analyzer", "PHENOL ANALYSER-R0.xls", _AN_P_NEW, ("Temperature Minimum", "Normal Temperature", "Temperature Maximum"),
+                      ADD_NEW_FIELD, ()))
+# Dissolved oxygen: the annexure has a DO value (ppm) MIN / Normal / MAX instead of an operating range.
+_register(_an_profile("dissolved_oxygen_analyzer", "DO ANALYSER-R0.xls", _AN_P_OWN, _AN_T_OWN, UNIT_REVIEW, (
+    *_trio("DO Value(ppm)", "ppm", ("DO Minimum", "Normal DO", "DO Maximum"), UNIT_REVIEW, subs=("Min", "Normal", "Max"),
+           note="existing field is configured in mg/L; the datasheet prints ppm - the datasheet unit is used, no conversion"),
+), instrument_range=False, subs=("Min", "Normal", "Max")))
 
 
 # ── lookup / resolution ─────────────────────────────────────────────────────

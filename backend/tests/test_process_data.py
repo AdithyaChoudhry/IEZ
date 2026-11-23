@@ -55,8 +55,8 @@ def test_library_has_all_requested_types_and_field_counts():
                  "Level Gauge", "Pressure Gauge", "Temperature Gauge", "pH Analyzer", "H2S Analyzer",
                  "Biogas Analyzer", "Custom Instrument"):
         assert must in labels, must
-    # the 49 original Level Transmitter fields are unchanged and still first; 10 datasheet-only fields were added
-    assert len(INSTRUMENT_TYPES["level_transmitter"].fields) == 59
+    # the 49 original Level Transmitter fields are unchanged and still first; 22 datasheet-only fields were added
+    assert len(INSTRUMENT_TYPES["level_transmitter"].fields) == 71
     assert INSTRUMENT_TYPES["level_transmitter"].fields[1].name == "Minimum Level"
     assert [c.name for c in IDENTIFICATION_COLUMNS] == ID_HEADERS
 

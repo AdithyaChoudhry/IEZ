@@ -91,10 +91,23 @@ LEVEL_TRANSMITTER_FIELDS = (
     ProcessField("Nozzle Height", unit="mm", field_type=FieldType.NUMBER, subtype_only=("Non-Contact Radar", "Ultrasonic")),
     ProcessField("Max Fluid Level", unit="mm", field_type=FieldType.NUMBER, subtype_only=("Non-Contact Radar", "Ultrasonic")),
     ProcessField("Process Connection Flange Size", field_type=FieldType.TEXT, subtype_only=("Non-Contact Radar", "Ultrasonic")),
-    ProcessField("Calibration Range", unit="mm", field_type=FieldType.TEXT,
-                 subtype_only=("Guided Wave Radar", "Non-Contact Radar", "Ultrasonic")),
+    ProcessField("Calibration Range", unit="mm", field_type=FieldType.TEXT,        # unit per subtype comes from the profile
+                 subtype_only=("Guided Wave Radar", "Non-Contact Radar", "Ultrasonic", "DP Type (Open Tank)", "DP Type (Pressurized Tank)")),
     ProcessField("Instrument Range", unit="mm", field_type=FieldType.TEXT,
-                 subtype_only=("Guided Wave Radar", "Non-Contact Radar", "Ultrasonic")),
+                 subtype_only=("Guided Wave Radar", "Non-Contact Radar", "Ultrasonic", "DP Type (Open Tank)", "DP Type (Pressurized Tank)")),
+    # --- differential-pressure level transmitters (LT-DP Type datasheets) -------------------------------------------
+    ProcessField("Level Range Low", field_type=FieldType.NUMBER, subtype_only=("DP Type (Open Tank)", "DP Type (Pressurized Tank)")),
+    ProcessField("Level Range High", field_type=FieldType.NUMBER, subtype_only=("DP Type (Open Tank)", "DP Type (Pressurized Tank)")),
+    ProcessField("Upper Fluid", field_type=FieldType.TEXT, subtype_only=("DP Type (Pressurized Tank)",)),
+    ProcessField("Lower Fluid", field_type=FieldType.TEXT, subtype_only=("DP Type (Pressurized Tank)",)),
+    ProcessField("Maximum Pressure", unit="Kg/cm2 G", field_type=FieldType.NUMBER, subtype_only=("DP Type (Pressurized Tank)",)),
+    ProcessField("Operating Pressure", unit="Kg/cm2 G", field_type=FieldType.NUMBER, subtype_only=("DP Type (Pressurized Tank)",)),
+    ProcessField("Maximum Temperature", unit="DEG C", field_type=FieldType.NUMBER, subtype_only=("DP Type (Pressurized Tank)",)),
+    ProcessField("Operating Temperature", unit="DEG C", field_type=FieldType.NUMBER, subtype_only=("DP Type (Pressurized Tank)",)),
+    ProcessField("Max DCS Range", unit="MMWC", field_type=FieldType.TEXT, subtype_only=("DP Type (Pressurized Tank)",)),
+    ProcessField("Min DCS Range", unit="MMWC", field_type=FieldType.TEXT, subtype_only=("DP Type (Pressurized Tank)",)),
+    ProcessField("Display Range", unit="MTRS", field_type=FieldType.TEXT, subtype_only=("DP Type (Pressurized Tank)",)),
+    ProcessField("Capillary Size / Length", field_type=FieldType.TEXT, subtype_only=("DP Type (Pressurized Tank)",)),
 )
 
 LEVEL_TRANSMITTER = InstrumentTypeConfig(
@@ -111,7 +124,7 @@ LEVEL_TRANSMITTER = InstrumentTypeConfig(
         "CAPACITANCE LEVEL TRANSMITTER",
     ),
     tag_prefixes=("LIT", "LT"),
-    subtypes=("Guided Wave Radar", "Non-Contact Radar", "Ultrasonic"),
+    subtypes=("Guided Wave Radar", "Non-Contact Radar", "Ultrasonic", "DP Type (Open Tank)", "DP Type (Pressurized Tank)"),
     subtype_field_name="LEVEL TRANSMITTER TYPE",
     fields=LEVEL_TRANSMITTER_FIELDS,
 )
@@ -299,6 +312,8 @@ TEMPERATURE_TRANSMITTER_FIELDS = (
     ProcessField("Corrosive / Aggressive Service", field_type=FieldType.BOOLEAN),
     ProcessField("Hazardous Area", field_type=FieldType.BOOLEAN),
     ProcessField("Remarks", field_type=FieldType.TEXT),
+    ProcessField("Instrument Range", unit="°C", field_type=FieldType.TEXT),
+    ProcessField("Calibration Range", unit="°C", field_type=FieldType.TEXT),
 )
 
 TEMPERATURE_TRANSMITTER = InstrumentTypeConfig(

@@ -268,6 +268,7 @@ class CableGroup:
     ctype: Optional[str] = None
     length: Optional[str] = None
     conflicts: list[str] = field(default_factory=list)
+    conflict_rows: dict = field(default_factory=dict)     # field -> [(IODB row, raw value), ...] of a genuine conflict
 
 
 @dataclass
@@ -280,14 +281,27 @@ class Block:
         return sum(len(g.recs) for g in self.groups)
 
 
-def _first_value(recs: list[Rec], name: str) -> tuple[Optional[str], bool]:
-    vals = [r.f.get(name) for r in recs if not is_missing(r.f.get(name))]
-    if not vals:
+def _norm_value(name: str, value: str):
+    """Comparison form: a length is its number ('300' = '300.0' = '=100+200'); text ignores case and spacing."""
+    if "length" in name:
+        num, st = parse_length(value)
+        if st == "ok":
+            return ("N", num.normalize())
+    return ("T", re.sub(r"\s+", " ", str(value)).strip().upper())
+
+
+def _first_value(recs: list[Rec], name: str, detail: Optional[list] = None) -> tuple[Optional[str], bool]:
+    """The value of a field for one physical cable. A blank row is missing data, never a conflict; values that only
+    differ in formatting are equal. A real conflict is returned as True and its rows are added to `detail`."""
+    have = [r for r in recs if not is_missing(r.f.get(name))]
+    if not have:
         # nothing usable: '-' / NA in the IODB means "not applicable" and is shown as NA; blank/TBA stays TBA
         na = next((r.f.get(name) for r in recs if (r.f.get(name) or "").upper() in ("-", "--", "NA", "N/A", "NIL")), None)
         return na, False
-    distinct = list(OrderedDict.fromkeys(vals))
-    return vals[0], len(distinct) > 1
+    distinct = list(OrderedDict.fromkeys(_norm_value(name, r.f.get(name)) for r in have))
+    if len(distinct) > 1 and detail is not None:
+        detail.extend((r.row, r.f.get(name)) for r in have)
+    return have[0].f.get(name), len(distinct) > 1
 
 
 def plan_blocks(key: str, recs: list[Rec]) -> list[Block]:
@@ -309,11 +323,16 @@ def plan_blocks(key: str, recs: list[Rec]) -> list[Block]:
 
     by_tag: dict[str, int] = {}
     by_dev: dict[str, int] = {}
+    # MCC DI / MCC DO / MOV blocks hold ONE cable: when the IODB names a different main cable for each signal of a
+    # device, those are different physical cables and get their own blocks (never merged into the first one's tag /
+    # length). VFD / LCP blocks list several cables of one device, so a device stays one block there.
+    one_cable_blocks = not spec["cable_fields"]
     for i, r in enumerate(recs):
-        tag = None if is_missing(r.main_cable_tag) else r.main_cable_tag.upper()
+        tag = None if is_missing(r.main_cable_tag) else re.sub(r"\s+", " ", r.main_cable_tag).strip().upper()
         if tag:
             union(i, by_tag.setdefault(tag, i))          # a cable shared by several devices keeps them in one block
-        union(i, by_dev.setdefault(device_key(r), i))    # all signals of one pump / drive / MOV are one block
+        if not (one_cable_blocks and tag):
+            union(i, by_dev.setdefault(device_key(r) + ("|untagged" if one_cable_blocks else ""), i))   # signals of one device
     comp: "OrderedDict[int, list[int]]" = OrderedDict()
     for i in range(n):
         comp.setdefault(find(i), []).append(i)
@@ -323,12 +342,12 @@ def plan_blocks(key: str, recs: list[Rec]) -> list[Block]:
         rs = [recs[i] for i in members]
         groups: "OrderedDict[str, list[Rec]]" = OrderedDict()
         for r in rs:
-            # rows of the same cable type in one block are ONE cable laid to the equipment (Digha reference), whatever
-            # their individual tag cells say; the cable is shown once and the cells are merged
-            if not is_missing(r.main_cable_type):
+            # the main cable TAG identifies the physical cable; rows without a tag of the same cable type in one block are
+            # ONE cable laid to the equipment (Digha reference) - the cable is shown once and the cells are merged
+            if not is_missing(r.main_cable_tag):
+                gk = "T:" + re.sub(r"\s+", " ", r.main_cable_tag).strip().upper()
+            elif not is_missing(r.main_cable_type):
                 gk = "Y:" + re.sub(r"\s+", "", r.main_cable_type.upper())
-            elif not is_missing(r.main_cable_tag):
-                gk = "T:" + r.main_cable_tag.upper()
             elif spec["classes"]:
                 gk = "C:" + device_key(r) + "|" + spec["classes"].get(r.io, r.io)
             else:
@@ -338,13 +357,30 @@ def plan_blocks(key: str, recs: list[Rec]) -> list[Block]:
         for gk, grs in groups.items():
             cg = CableGroup(key=gk, recs=grs)
             for attr, name in (("tag", "main_cable_tag"), ("ctype", "main_cable_type"), ("length", "main_cable_length")):
-                val, conflict = _first_value(grs, name)
+                rows: list = []
+                val, conflict = _first_value(grs, name, rows)
                 setattr(cg, attr, val)
                 if conflict:
                     cg.conflicts.append(name)
+                    cg.conflict_rows[name] = rows
             cgs.append(cg)
         blocks.append(Block(devices=list(OrderedDict.fromkeys(device_key(r) for r in rs)), groups=cgs))
     return blocks
+
+
+def conflict_message(g: "CableGroup") -> str:
+    """Main Cable Conflict Detected - which cable, which IODB rows give which values, what to do."""
+    jbs = sorted({str(r.jb_tag) for r in g.recs if not is_missing(r.jb_tag)})
+    parts = []
+    for name in g.conflicts:
+        label = name.replace("main_cable_", "main cable ").replace("_", " ")
+        unit = " m" if "length" in name else ""
+        vals = "; ".join(f"IODB row {row}: {label} = {raw}{unit}" for row, raw in g.conflict_rows.get(name, [])[:6])
+        parts.append(f"{label}: {vals}")
+    return (f"Main Cable Conflict Detected - Cable Tag: {g.tag or 'not stated'}" + (f", Junction Box: {', '.join(jbs)}" if jbs else "")
+            + ". " + " | ".join(parts) + ". Issue: the same physical cable has conflicting values. Action required: verify the "
+            "correct value in the IODB. Calculation status: this cable is shown as CONFLICT and is not counted in the Cable "
+            "Summary until the IODB is corrected.")
 
 
 # ── availability / validation (messages for the screen and the generator) ────
@@ -362,8 +398,7 @@ def sheet_stats(key: str, recs: list[Rec], blocks: Optional[list[Block]] = None)
     for b in blocks:
         for g in b.groups:
             if g.conflicts:
-                warnings.append(f"Cable {g.tag or g.key}: different {', '.join(c.replace('_', ' ') for c in g.conflicts)} "
-                                "values in the IODB for the same cable; the first one is used.")
+                warnings.append(conflict_message(g))
     return {"key": key, "label": label, "records": len(recs), "devices": len({device_key(r) for r in recs}),
             "cables": len(cables) if cables else 0, "blocks": len(blocks), "spare": sum(1 for r in recs if is_spare(r)),
             "warnings": warnings[:12]}
@@ -534,6 +569,10 @@ def _block_values(key: str, block: Block, serial: int) -> dict[str, Any]:
     ln = next((g.length for g in block.groups if g.length and parse_length(g.length)[1] == "ok"), None)
     if ln is None:
         ln = next((g.length for g in block.groups if g.length), None)
+    if any("main_cable_length" in g.conflicts for g in block.groups):
+        # a genuine conflict is not resolved by picking one value: the cell shows every value for review
+        vals = OrderedDict.fromkeys(str(raw) for g in block.groups for _, raw in g.conflict_rows.get("main_cable_length", []))
+        ln = "CONFLICT: " + " / ".join(vals)
     d = {"sl": serial, "end_gland_size": show(gs), "end_gland_qty": show(gq),
          "panel_gland_size": show(ps), "panel_gland_qty": show(pq), "length": show(ln)}
     if key == "mov":

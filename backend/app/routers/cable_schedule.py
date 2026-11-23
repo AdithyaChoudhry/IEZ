@@ -37,10 +37,44 @@ cable_schedule_cache: dict = {}
 
 # The last SUCCESSFULLY generated Cable Schedule per (user, project): the single input of the Gland Quantity, Cable Lug
 # Quantity and Drum Schedule generators (they read it here, server side - the bytes never go back to the browser).
-# Written only after a generation passed every check, so a failed run never replaces a good schedule. In memory: a
-# server restart clears it and the page asks for the Cable Schedule to be generated again.
+# Written only after a generation passed every check, so a failed run never replaces a good schedule. Kept on disk (the
+# project document store) as well as in memory, so a restart / deploy or a second server process still finds it.
 _generated: dict = {}
 _generated_lock = threading.Lock()
+
+
+def _snapshot_dir(user_id, project_key: str):
+    import hashlib
+    from ..services.document_registry import _store_dir
+    return _store_dir() / "cable_schedule_generated" / hashlib.sha256(f"{user_id}|{project_key}".encode()).hexdigest()[:32]
+
+
+def _save_snapshot(user_id, project_key: str, g: dict) -> None:
+    """meta.json + the two workbooks, written to temporary names and renamed (a reader never sees half a snapshot)."""
+    d = _snapshot_dir(user_id, project_key)
+    d.mkdir(parents=True, exist_ok=True)
+    meta = {k: v for k, v in g.items() if k not in ("bytes", "iodb_bytes")}
+    for name, data in ((f"{g['id']}.xlsx", g["bytes"]), (f"{g['id']}.iodb", g["iodb_bytes"])):
+        tmp = d / (name + ".tmp")
+        tmp.write_bytes(data)
+        tmp.replace(d / name)
+    tmp = d / "meta.json.tmp"
+    tmp.write_text(json.dumps(meta))
+    tmp.replace(d / "meta.json")
+    for old in d.iterdir():                                       # keep only the current snapshot
+        if old.suffix in (".xlsx", ".iodb") and not old.name.startswith(g["id"]):
+            old.unlink(missing_ok=True)
+
+
+def _load_snapshot(user_id, project_key: str, known_id: Optional[str]) -> Optional[dict]:
+    d = _snapshot_dir(user_id, project_key)
+    try:
+        meta = json.loads((d / "meta.json").read_text())
+        if meta.get("id") == known_id:
+            return None                                           # memory is current
+        return {**meta, "bytes": (d / f"{meta['id']}.xlsx").read_bytes(), "iodb_bytes": (d / f"{meta['id']}.iodb").read_bytes()}
+    except (OSError, ValueError, KeyError):
+        return None
 NOT_GENERATED = ("No generated Cable Schedule is available. Please generate a Cable Schedule using the Cable Schedule "
                  "Generator first.")
 
@@ -52,8 +86,13 @@ def _project_key(project_id: Optional[str]) -> str:
 def get_generated(user_id, project_id: Optional[str]) -> Optional[dict]:
     """The user's last generated Cable Schedule for exactly this project ("" = no project selected); never another
     user's or another project's. The returned dict is a snapshot: its bytes do not change if a newer schedule is made."""
+    key = (user_id, _project_key(project_id))
     with _generated_lock:
-        return _generated.get((user_id, _project_key(project_id)))
+        mem = _generated.get(key)
+        disk = _load_snapshot(user_id, key[1], mem["id"] if mem else None)
+        if disk is not None and (mem is None or disk.get("generated_at", "") >= mem.get("generated_at", "")):
+            _generated[key] = mem = disk
+        return mem
 
 
 def require_generated(user_id, project_id: Optional[str], generated_id: Optional[str]) -> dict:
@@ -287,12 +326,16 @@ async def generate_cable_schedule(
         planned = [cover["cover_sheet"]] + planned
     cache_key = f"{current_user.id}_cable_schedule"
     cable_schedule_cache[cache_key] = {"bytes": out_bytes, "filename": filename}
-    with _generated_lock:
-        _generated[(current_user.id, _project_key(project_id))] = {
-            "id": uuid.uuid4().hex, "bytes": out_bytes, "filename": filename, "project_id": _project_key(project_id),
+    snap = {"id": uuid.uuid4().hex, "bytes": out_bytes, "filename": filename, "project_id": _project_key(project_id),
             "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "sheets": planned,
-            "iodb_bytes": iodb_bytes, "iodb_filename": iodb_file.filename or "IODB.xlsx", "selected_jbs": jbs,
-        }
+            "iodb_bytes": iodb_bytes, "iodb_filename": iodb_file.filename or "IODB.xlsx", "selected_jbs": jbs}
+    with _generated_lock:
+        _generated[(current_user.id, _project_key(project_id))] = snap
+        try:
+            _save_snapshot(current_user.id, _project_key(project_id), snap)
+        except OSError:
+            import logging
+            logging.getLogger("iez.cable").warning("Generated Cable Schedule kept in memory only (disk write failed)", exc_info=True)
 
     registry = register_safe(
         "success", project_id=project_id, module="cable_schedule", user=current_user.username,

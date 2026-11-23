@@ -118,6 +118,33 @@ def normalize_cable_description(value: Any) -> str:
     return "" if text.upper() in _PLACEHOLDERS else text
 
 
+def evaluate_formula(text: str) -> Optional[Decimal]:
+    """Value of a plain arithmetic Excel formula ('=98+210', '=2*(10+5)'); None for anything else (cell references,
+    functions, text). Parsed with ast and evaluated node by node - never eval()."""
+    import ast
+    import operator
+    expr = text.strip().lstrip("=").strip()
+    if not expr or len(expr) > 200 or not re.fullmatch(r"[\d.\s+\-*/()]+", expr):
+        return None
+    ops = {ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul, ast.Div: operator.truediv}
+
+    def ev(node):
+        if isinstance(node, ast.Expression):
+            return ev(node.body)
+        if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)) and not isinstance(node.value, bool):
+            return Decimal(str(node.value))
+        if isinstance(node, ast.BinOp) and type(node.op) in ops:
+            return ops[type(node.op)](ev(node.left), ev(node.right))
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.UAdd, ast.USub)):
+            v = ev(node.operand)
+            return v if isinstance(node.op, ast.UAdd) else -v
+        raise ValueError("unsupported")
+    try:
+        return ev(ast.parse(expr, mode="eval"))
+    except (ValueError, SyntaxError, ZeroDivisionError, ArithmeticError):
+        return None
+
+
 def parse_length(value: Any) -> tuple[Optional[Decimal], str]:
     """
     Returns (length, status); status is "ok", "blank" or "invalid".
@@ -133,10 +160,15 @@ def parse_length(value: Any) -> tuple[Optional[Decimal], str]:
         text = value.replace(" ", " ").strip()
         if text.upper() in _PLACEHOLDERS:
             return None, "blank"
-        try:
-            number = Decimal(text)
-        except InvalidOperation:
-            return None, "invalid"
+        if text.startswith("="):                       # '=98+210': a plain arithmetic formula is its value (308)
+            number = evaluate_formula(text)
+            if number is None:
+                return None, "invalid"
+        else:
+            try:
+                number = Decimal(text)
+            except InvalidOperation:
+                return None, "invalid"
     else:
         try:
             number = Decimal(str(value))

@@ -30,6 +30,8 @@ DOC_TYPES: dict[str, dict] = {
     "cable_schedule": {"label": "Cable Schedule", "keywords": ["CABLE SCHEDULE"]},
     "loop_wiring": {"label": "Loop Wiring", "keywords": ["LOOP WIRING", "LOOP DIAGRAM", "LOOP DRAWING"]},
     "datasheet": {"label": "Datasheet", "keywords": ["DATASHEET", "DATA SHEET"]},
+    "gland_quantity": {"label": "Cable Gland Quantity", "keywords": ["GLAND QUANTITY", "CABLE GLAND", "GLAND SCHEDULE"]},
+    "lug_quantity": {"label": "Cable Lug Quantity", "keywords": ["LUG QUANTITY", "CABLE LUG", "LUG SCHEDULE"]},
 }
 PROJECT_FIELDS = ("project_description", "client", "pmc", "contractor", "unit_no", "doc_class", "discipline", "page_no")
 DRAFT_TEXT = "DRAFT - NOT APPROVED FOR SUBMISSION"

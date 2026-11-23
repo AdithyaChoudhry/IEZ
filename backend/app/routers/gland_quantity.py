@@ -15,6 +15,7 @@ import uuid
 from typing import Optional
 
 from utils.xlsx_trim import trim_empty_tail
+from fastapi.concurrency import run_in_threadpool
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import StreamingResponse
 
@@ -123,13 +124,20 @@ async def generated_analyze(
     g = require_generated(current_user.id, project_id, generated_id)
     extra, problems = await _extra_rows(reference_file)
     try:
-        p = svc.analyze(g["bytes"], _json(settings, "settings"), _json(cable_data, "cable OD data"), _json(project, "project settings"), extra, problems)
-        xlsx = svc.to_workbook(p, g["filename"])
+        p = await run_in_threadpool(svc.analyze, g["bytes"], _json(settings, "settings"), _json(cable_data, "cable OD data"),
+                                    _json(project, "project settings"), extra, problems)
+        xlsx = await run_in_threadpool(svc.to_workbook, p, g["filename"])
     except (gq.GlandError, adv.AdviceError) as e:
         _bad(str(e))
-    gland_cache[f"{current_user.id}_gland"] = {"bytes": xlsx, "filename": "Gland_Quantity_Report.xlsx"}
+    except Exception:                                        # never a silent failure: the page shows why
+        logger.exception("Gland quantity generation failed")
+        _bad("The cable gland quantity could not be generated. Please check the generated Cable Schedule and try again.",
+             status.HTTP_500_INTERNAL_SERVER_ERROR)
+    from .deliverables import finalize                     # centralised cover sheet + the Excel / PDF downloads
+    xlsx, fname, cover = await run_in_threadpool(finalize, current_user.id, "gland_quantity", project_id, xlsx, "Gland_Quantity_Report.xlsx")
+    gland_cache[f"{current_user.id}_gland"] = {"bytes": xlsx, "filename": fname}
     out = _public(p)
-    out["filename"] = "Gland_Quantity_Report.xlsx"
+    out["filename"], out["cover"] = fname, cover
     out["source"] = _generated_source(g)
     return out
 

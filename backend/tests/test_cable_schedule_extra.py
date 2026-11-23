@@ -281,7 +281,9 @@ def test_mcc_formulas_follow_the_removed_column():
     assert ws.max_column == [c.column for c in ws[9] if c.value == "Remarks"][0]      # Remarks is the last column
 
 
-def test_one_cable_per_pump_even_when_every_row_carries_its_own_tag():
+def test_every_main_cable_tag_is_its_own_cable_even_on_one_pump():
+    """Cable_Schedule-13 review: the IODB names a different main cable for each signal - those are different physical
+    cables (one block each, own length), never merged into the first one's tag / length with a 'conflict' warning."""
     rows = [row(f"YL-ML-5{c}", "ML-5", "PUMP 5", s, "PUMP", "DI", sub="MCC", ctag=f"IC-5{c}", ctype="19Cx1.0", clen=60)
             for c, s in zip("ABCD", ("RUN", "FAULT", "READY", "L/R"))]
     rows += [row("HS-ML-5A", "ML-5", "PUMP 5", "START", "PUMP", "DO", sub="MCC", ctag="IC-5E", ctype="12Cx2.5", clen=60)]
@@ -289,10 +291,10 @@ def test_one_cable_per_pump_even_when_every_row_carries_its_own_tag():
     pd.DataFrame(rows, columns=COLS).to_excel(buf, sheet_name="IODB", index=False)
     out, err, rep = run(["mcc_di", "mcc_do"], data=buf.getvalue(), include=False)
     di = sheet(out, "MCC DI")
-    assert {str(m) for m in di.merged_cells.ranges} >= {"A11:A14", "E11:E14"}
-    assert di["E11"].value == "19Cx1.0" and all(di.cell(r, 5).value is None for r in range(12, 15))
-    assert summary(out)["19Cx1.0"] == 60                      # one cable of 60 m, not four
-    assert any("different" in w for w in rep["warnings"])
+    assert [di.cell(r, 4).value for r in range(11, 15)] == ["YL-ML-5A", "YL-ML-5B", "YL-ML-5C", "YL-ML-5D"]
+    assert [di.cell(r, 5).value for r in range(11, 15)] == ["19Cx1.0"] * 4          # four blocks, one cable each
+    assert summary(out)["19Cx1.0"] == 240                     # four physical cables of 60 m
+    assert not any("Conflict" in w or "different" in w for w in rep.get("warnings") or [])
 
 
 def test_vfd_supports_di_do_ai_ao_signal_rows():

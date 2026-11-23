@@ -351,7 +351,75 @@ def instrument_layout(ws, hdr_row: int = 7, first_row: int = 9, rows_per_tag: in
                 continue
             _merge_block(ws, s, c, s + rows_per_tag - 1, c)
     report["columns"] = [header_texts(ws, (hdr_row, hdr_row + 1), new_last).get(c, "") for c in range(1, new_last + 1)]
+    report["row_height"] = uniform_entry_heights(ws, starts, rows_per_tag, new_last)
     return report
+
+
+# ── row heights ──────────────────────────────────────────────────────────────
+ENTRY_ROW_MIN = 18.0          # points: one line of Arial 12 plus padding - every row of an entry is at least this
+LINE_PT = 15.0                # points per wrapped line of Arial 12
+CHARS_PER_WIDTH = 1 / 1.3     # Arial 12 characters per Excel column-width unit (width is in Calibri 11 characters)
+
+
+def _text_len(ws, cell):
+    """What the cell shows (text, for word wrapping); a CONCATENATE / & formula is estimated from the cells and
+    literals it joins (an int length is returned for those)."""
+    v = cell.value
+    if v is None:
+        return 0
+    if not (isinstance(v, str) and v.startswith("=")):
+        return str(v)
+    if isinstance(v, str) and v.startswith("="):
+        lits = sum(len(x) for x in re.findall(r'"([^"]*)"', v))
+        refs = 0
+        for col, row in re.findall(r"(?<![A-Z\"])\$?([A-Z]{1,3})\$?(\d+)", v.upper()):
+            try:
+                rv = ws[f"{col}{row}"].value
+            except Exception:
+                rv = None
+            refs += len(str(rv)) if rv is not None and not (isinstance(rv, str) and rv.startswith("=")) else 4
+        return lits + refs
+    return len(str(v))
+
+
+def _lines(text, width: Optional[float]) -> int:
+    """Wrapped lines Excel needs: words wrapped at the column's character capacity (explicit line breaks kept)."""
+    import textwrap
+    cap = max(1, int((width or 8.43) * CHARS_PER_WIDTH))
+    if not text:
+        return 1
+    if isinstance(text, int):
+        return max(1, math.ceil(text / cap))
+    return max(1, sum(max(1, len(textwrap.wrap(part, cap, break_long_words=True))) for part in str(text).split("\n")))
+
+
+def uniform_entry_heights(ws, starts: list[int], rows_per_tag: int, ncols: int) -> dict:
+    """
+    One height for every row of an entry (main row + terminal continuation rows), the same for every entry:
+    ENTRY_ROW_MIN, raised only when wrapped text needs more room - text merged over the entry is spread over its rows,
+    per-row text (TB number, ferrule) must fit its own row. Header / title rows are not touched. -> summary for the report.
+    """
+    widths = {c: ws.column_dimensions[get_column_letter(c)].width for c in range(1, ncols + 1)}
+    merged_top = {(m.min_row, m.min_col): m.max_row - m.min_row + 1 for m in ws.merged_cells.ranges if m.min_row in set(starts)}
+    raised = 0
+    for s in starts:
+        need = ENTRY_ROW_MIN
+        for c in range(1, ncols + 1):
+            span = merged_top.get((s, c))
+            if span:                                            # merged over the entry: its lines share the rows
+                lines = _lines(_text_len(ws, ws.cell(s, c)), widths[c])
+                need = max(need, (lines * LINE_PT + 4) / span)
+            else:
+                for i in range(rows_per_tag):
+                    cell = ws.cell(s + i, c)
+                    if not isinstance(cell, MergedCell) and cell.value is not None:
+                        need = max(need, _lines(_text_len(ws, cell), widths[c]) * LINE_PT + 3)
+        need = math.ceil(need * 4) / 4
+        if need > ENTRY_ROW_MIN:
+            raised += 1
+        for i in range(rows_per_tag):
+            ws.row_dimensions[s + i].height = need
+    return {"entries": len(starts), "base_pt": ENTRY_ROW_MIN, "raised_for_wrapped_text": raised}
 
 
 # ── MCC DI / MCC DO / VFD ────────────────────────────────────────────────────

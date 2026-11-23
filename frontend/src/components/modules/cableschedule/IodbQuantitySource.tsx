@@ -56,10 +56,22 @@ const IodbQuantitySource = forwardRef<IodbSourceHandle, Props>(function IodbQuan
     return () => { off = true; };
   }, [iodb]);
 
+  const [started, setStarted] = useState<number | null>(null);
+  const [now, setNow] = useState(Date.now());
+  const cancelled = useRef(false);
+  useEffect(() => { if (!busy) return; const t = window.setInterval(() => setNow(Date.now()), 1000); return () => window.clearInterval(t); }, [busy]);
+  const stop = (msg?: string) => {                         // every end of a run goes through here: the button is restored
+    if (timer.current) window.clearTimeout(timer.current);
+    setBusy(false); setStarted(null);
+    if (msg) p.current.setError(msg);
+  };
+  const cancel = () => { cancelled.current = true; stop('Generation cancelled. The page no longer waits for it.'); };
+
   const run = async (reuse = false) => {
     const cur = p.current;
-    if (!reuse && !iodb) return;
-    setBusy(true); cur.setError(null); setStage('Starting');
+    if ((!reuse && !iodb) || busy) return;                  // never a second request while one is running
+    cancelled.current = false;
+    setBusy(true); cur.setError(null); setStage('Starting'); setStarted(Date.now());
     try {
       const fd = new FormData();
       if (!reuse && iodb) fd.append('iodb_file', iodb);
@@ -67,18 +79,28 @@ const IodbQuantitySource = forwardRef<IodbSourceHandle, Props>(function IodbQuan
       if (reuse) fd.append('reuse', 'true');
       Object.entries(cur.fields()).forEach(([k, v]) => { if (v !== null && v !== undefined) fd.append(k, v as any); });
       const start = await api.post(cur.startUrl, fd, mp);
+      const t0 = Date.now();
+      let failures = 0;
       const poll = async () => {
+        if (cancelled.current) return;
+        if (Date.now() - t0 > 20 * 60000) { stop('Generation did not finish within 20 minutes. Please try again.'); return; }
         try {
           const r = await api.get(cur.jobUrl(start.data.job_id));
+          failures = 0;
+          if (cancelled.current) return;
           setStage(r.data.stage || '');
           if (r.data.live) p.current.onLive?.(r.data.live);
-          if (r.data.status === 'done') { generated.current = true; setBusy(false); p.current.onResult(r.data.result); return; }
-          if (r.data.status === 'error') { setBusy(false); p.current.setError(r.data.error); return; }
-          timer.current = window.setTimeout(poll, 800);
-        } catch (e: any) { setBusy(false); p.current.setError(e.response?.data?.detail || 'Lost contact with the job'); }
+          if (r.data.status === 'done') { generated.current = true; stop(); p.current.onResult(r.data.result); return; }
+          if (r.data.status === 'error') { stop(r.data.error || 'Generation failed.'); return; }
+          timer.current = window.setTimeout(poll, 1200);
+        } catch (e: any) {
+          const detail = e.response?.data?.detail;
+          if (detail || ++failures >= 3) { stop(detail || 'Lost contact with the server while generating. Please try again.'); return; }
+          timer.current = window.setTimeout(poll, 2500);         // a short network hiccup: try again
+        }
       };
       poll();
-    } catch (e: any) { setBusy(false); cur.setError(e.response?.data?.detail || 'Could not start'); }
+    } catch (e: any) { stop(e.response?.data?.detail || 'Could not start the generation.'); }
   };
   useImperativeHandle(ref, () => ({ run, hasGenerated: () => generated.current }));
 
@@ -102,7 +124,9 @@ const IodbQuantitySource = forwardRef<IodbSourceHandle, Props>(function IodbQuan
       <Button onClick={() => run(false)} loading={busy} disabled={!iodb || !val?.ok || needTemplate} size="lg" fullWidth className="text-lg py-4">
         <Package className="w-6 h-6" />{busy ? 'Generating...' : props.buttonLabel}
       </Button>
-      {busy && <p className="text-sm flex items-center gap-2" style={{ color: 'var(--t0)' }}><Loader2 className="w-4 h-4 animate-spin" style={{ color: 'var(--em)' }} />{stage || 'Working'}</p>}
+      {busy && <p className="text-sm flex items-center gap-2" style={{ color: 'var(--t0)' }}><Loader2 className="w-4 h-4 animate-spin" style={{ color: 'var(--em)' }} />{stage || 'Working'}
+        {started && <span style={{ color: 'var(--t2)' }}>· {Math.round((now - started) / 1000)} s</span>}
+        <button onClick={cancel} className="underline text-xs ml-2" style={{ color: 'var(--t1)' }}>Cancel</button></p>}
       <p className="text-xs" style={{ color: 'var(--t1)' }}>Only the IODB is needed: the Cable Schedule is generated from it automatically (existing Cable Schedule generator), then read by this module.</p>
     </div>
   );

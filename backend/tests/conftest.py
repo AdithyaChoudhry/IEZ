@@ -49,6 +49,12 @@ def make_xlsx(rows: int = 3) -> bytes:
     return buf.getvalue()
 
 
+@pytest.fixture(autouse=True)
+def _isolated_document_store(tmp_path, monkeypatch):
+    """No test writes into the real backend/document_store (e.g. the generated Cable Schedule snapshot)."""
+    monkeypatch.setattr(settings, "DOCUMENT_STORE_DIR", str(tmp_path / "store"), raising=False)
+
+
 @pytest.fixture()
 def store(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "DOCUMENT_STORE_DIR", str(tmp_path / "store"), raising=False)

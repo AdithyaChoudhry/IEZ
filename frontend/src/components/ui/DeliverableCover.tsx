@@ -11,7 +11,7 @@ import { getCurrentProject, subscribeProject } from '@/services/projectContext';
 import Card from './Card';
 import Button from './Button';
 
-export type DeliverableType = 'instrument_list' | 'io_list' | 'cable_schedule' | 'loop_wiring' | 'datasheet';
+export type DeliverableType = 'instrument_list' | 'io_list' | 'cable_schedule' | 'loop_wiring' | 'datasheet' | 'gland_quantity' | 'lug_quantity';
 
 interface MdlItem { mdl_record_id: string; document_number: string; document_name: string; full_match?: boolean }
 export interface CoverResolution {

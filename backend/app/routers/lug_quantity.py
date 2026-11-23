@@ -13,7 +13,7 @@ import uuid
 from typing import Optional
 
 from utils.xlsx_trim import trim_empty_tail
-from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import StreamingResponse
 
 from ..auth.models import User
@@ -24,6 +24,7 @@ import sys
 sys.path.insert(0, '/app')
 from utils import lug_quantity as lq  # noqa: E402
 from utils import cable_complete as cc  # noqa: E402
+from utils import lug_advisor as LA  # noqa: E402
 
 router = APIRouter(prefix="/cable-schedule/lug", tags=["Cable Lug Quantity"])
 lug_cache: dict = {}
@@ -90,9 +91,100 @@ async def generated_detect(
     return out
 
 
-def _run(data: bytes, name: str, rules, overrides, od_data, gland_cfg, progress=None):
+def _run(data: bytes, name: str, rules, overrides, od_data, gland_cfg, progress=None, advisor=None):
     out, r = lq.analyze(data, rules, overrides, od_data, gland_cfg, progress)
-    return out, lq.to_workbook(out, r, name)
+    LA.apply(out, advisor)                                   # Cable Lug Advisor: types, materials, quantities per end
+    xlsx = LA.add_sheets(lq.to_workbook(out, r, name), out)  # the Excel report has every cable end
+    adv = out["advisor"]                                     # the screen gets a lighter copy (it shows the first rows)
+    adv["ends_total"] = len(adv["ends"])
+    adv["ends"] = [{k: v for k, v in e.items() if k != "notes"} for e in adv["ends"][:1500]]
+    return out, xlsx
+
+
+def _advisor(text: Optional[str]) -> Optional[dict]:
+    a = _json(text, "lug advisor settings")
+    try:
+        LA.settings_from(a)
+    except LA.AdvisorError as e:
+        _bad(str(e))
+    return a
+
+
+# ── jobs: kept on disk as well as in memory, so a poll is answered by any server process and after a restart ──
+_STALE = 15 * 60                                              # no progress for this long = the job is gone
+
+
+def _job_dir():
+    from ..services.document_registry import _store_dir
+    d = _store_dir() / "lug_jobs"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _save_job(job_id: str) -> None:
+    with _lock:
+        j = dict(_jobs.get(job_id) or {})
+    if not j:
+        return
+    j["updated"] = time.time()
+    try:
+        tmp = _job_dir() / f"{job_id}.json.tmp"
+        tmp.write_text(json.dumps(j, default=str))
+        tmp.replace(_job_dir() / f"{job_id}.json")
+    except OSError:
+        logger.warning("Lug job %s kept in memory only", job_id[:8], exc_info=True)
+
+
+def _update(job_id: str, **kw) -> None:
+    with _lock:
+        _jobs.setdefault(job_id, {}).update(kw, updated=time.time())
+    _save_job(job_id)
+
+
+def _load_job(job_id: str) -> dict:
+    with _lock:
+        j = dict(_jobs.get(job_id) or {})
+    if j:
+        return j
+    try:
+        return json.loads((_job_dir() / f"{job_id}.json").read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def _alive(pid) -> bool:
+    import os
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except (OSError, TypeError, ValueError):
+        return False
+
+
+def _new_job(user: User) -> str:
+    import os
+    job_id = uuid.uuid4().hex
+    now = time.time()
+    with _lock:
+        for k in [k for k, v in _jobs.items() if now - v.get("created", now) > _TTL]:
+            _jobs.pop(k, None)
+        _jobs[job_id] = {"status": "processing", "created": now, "updated": now, "stage": "Queued", "user": user.username,
+                         "pid": os.getpid()}
+    _save_job(job_id)
+    try:                                                     # old job files
+        for f in _job_dir().glob("*.json"):
+            if now - f.stat().st_mtime > _TTL:
+                f.unlink(missing_ok=True)
+    except OSError:
+        pass
+    return job_id
+
+
+def _report_path(user_key: str):
+    from ..services.document_registry import _store_dir
+    d = _store_dir() / "lug_reports"
+    d.mkdir(parents=True, exist_ok=True)
+    return d / f"{user_key}.xlsx", d / f"{user_key}.name"
 
 
 @router.post("/analyze")
@@ -102,12 +194,14 @@ async def analyze(
     overrides: Optional[str] = Form(None),
     od_data: Optional[str] = Form(None),
     gland: Optional[str] = Form(None),
+    advisor: Optional[str] = Form(None),
     current_user: User = Depends(get_current_user),
 ):
     """Synchronous analysis (used by the complete package and small schedules). The screen uses /start + /job for the live preview."""
     data = await _read(file)
+    adv = _advisor(advisor)
     try:
-        out, xlsx = _run(data, file.filename or "uploaded cable schedule", _json(rules, "rules"), _json(overrides, "overrides"), _json(od_data, "cable OD data"), _json(gland, "gland settings"))
+        out, xlsx = _run(data, file.filename or "uploaded cable schedule", _json(rules, "rules"), _json(overrides, "overrides"), _json(od_data, "cable OD data"), _json(gland, "gland settings"), advisor=adv)
     except lq.GlandError as e:
         _bad(str(e))
     lug_cache[f"{current_user.id}_lug"] = {"bytes": xlsx, "filename": "Cable_Lug_Quantity_Report.xlsx"}
@@ -116,46 +210,53 @@ async def analyze(
 
 
 def _job_run(job_id: str, user_key: str, data, name: str, rules, overrides, od_data, gland_cfg, iodb=None, template=None, reuse=False,
-             generated_source=None):
+             generated_source=None, advisor=None, user_id=None, project_id=None):
     def progress(p):
-        with _lock:
-            _jobs.setdefault(job_id, {}).update(stage=p["stage"], live=p)
+        _update(job_id, stage=p["stage"], live=p)
 
     def stage(text):
-        with _lock:
-            _jobs[job_id]["stage"] = text
+        _update(job_id, stage=text)
     try:
         source = None
         if iodb is not None or reuse:
             if reuse and user_key in cc.SCHEDULE_CACHE:
                 data, source = cc.SCHEDULE_CACHE[user_key]["bytes"], cc.SCHEDULE_CACHE[user_key]["info"]
                 name = cc.SCHEDULE_CACHE[user_key]["name"]
+            elif iodb is None:
+                raise cc.CompleteError("The Cable Schedule generated from the IODB is no longer on the server (it restarted). Upload the IODB again.")
             else:
                 stage("Generating the Cable Schedule from the IODB (existing Cable Schedule generator)")
                 data, source = cc.schedule_from_iodb(iodb, template)
                 cc.SCHEDULE_CACHE[user_key] = {"bytes": data, "info": source, "name": name}
         stage("Reading the cable schedule")
-        out, xlsx = _run(data, name, rules, overrides, od_data, gland_cfg, progress)
+        out, xlsx = _run(data, name, rules, overrides, od_data, gland_cfg, progress, advisor)
         if source:
             out["source"] = {"type": "IODB", "name": name, **source}
         if generated_source:
             out["source"] = generated_source
-        lug_cache[user_key] = {"bytes": xlsx, "filename": "Cable_Lug_Quantity_Report.xlsx"}
-        out["filename"] = "Cable_Lug_Quantity_Report.xlsx"
-        with _lock:
-            _jobs[job_id].update(status="done", stage="Done", result=out)
-    except (lq.GlandError, cc.CompleteError) as e:
-        with _lock:
-            _jobs[job_id].update(status="error", error=str(e))
+        stage("Writing the report")
+        fname = "Cable_Lug_Quantity_Report.xlsx"
+        if user_id is not None:
+            from .deliverables import finalize              # centralised cover sheet + Excel / PDF downloads
+            xlsx, fname, out["cover"] = finalize(user_id, "lug_quantity", project_id, xlsx, fname)
+        lug_cache[user_key] = {"bytes": xlsx, "filename": fname}
+        try:
+            xp, np_ = _report_path(user_key)
+            xp.write_bytes(xlsx)
+            np_.write_text(fname)
+        except OSError:
+            pass
+        out["filename"] = fname
+        _update(job_id, status="done", stage="Done", result=out)
+    except (lq.GlandError, cc.CompleteError, LA.AdvisorError) as e:
+        _update(job_id, status="error", error=str(e))
     except Exception as e:                                          # never leave the page waiting
         logger.exception("Lug job %s failed", job_id[:8])
-        with _lock:
-            _jobs[job_id].update(status="error", error=f"The cable schedule could not be analysed: {e}")
+        _update(job_id, status="error", error=f"The cable lug quantity could not be generated: {e}")
 
 
 @router.post("/start", status_code=status.HTTP_202_ACCEPTED)
 async def start(
-    background_tasks: BackgroundTasks,
     file: Optional[UploadFile] = File(None),
     iodb_file: Optional[UploadFile] = File(None),
     template_file: Optional[UploadFile] = File(None),
@@ -164,17 +265,21 @@ async def start(
     overrides: Optional[str] = Form(None),
     od_data: Optional[str] = Form(None),
     gland: Optional[str] = Form(None),
+    advisor: Optional[str] = Form(None),
+    project_id: Optional[str] = Form(None),
     current_user: User = Depends(get_current_user),
 ):
     """
     Starts the analysis and returns at once; poll /job/{id} for the live extraction table, live errors and the final result.
-    Input: a cable schedule (`file`) OR an IODB (`iodb_file`: the cable schedule is generated from it first, with the optional
-    `template_file` when the server has none) OR `reuse=true` (the schedule last generated from an IODB, for re-runs with new settings).
+    Input: an IODB (`iodb_file`: the cable schedule is generated from it first, with the optional `template_file` when the
+    server has none) OR a cable schedule (`file`) OR `reuse=true` (the schedule last generated from the IODB, for re-runs
+    with new settings / lug selections).
     """
     key = f"{current_user.id}_lug"
     sources = sum(1 for x in (file, iodb_file) if x is not None)
     if sources > 1 or (sources == 0 and not (reuse and key in cc.SCHEDULE_CACHE)):
-        _bad("Upload either a Cable Schedule or an IODB.")
+        _bad("Upload either a Cable Schedule or an IODB." if not reuse
+             else "The Cable Schedule generated from the IODB is no longer on the server. Upload the IODB again.")
     data = await _read(file) if file is not None else None
     iodb = await _read(iodb_file) if iodb_file is not None else None
     template = await _read(template_file) if template_file is not None else None
@@ -185,26 +290,23 @@ async def start(
         lq.Rules.from_dict(parsed[0])
     except lq.GlandError as e:
         _bad(str(e))
-    job_id = uuid.uuid4().hex
-    now = time.time()
-    with _lock:
-        for k in [k for k, v in _jobs.items() if now - v.get("created", now) > _TTL]:
-            _jobs.pop(k, None)
-        _jobs[job_id] = {"status": "processing", "created": now, "stage": "Queued", "user": current_user.username}
+    adv = _advisor(advisor)
+    job_id = _new_job(current_user)
     name = (file or iodb_file).filename if (file or iodb_file) else "IODB"
-    background_tasks.add_task(_job_run, job_id, key, data, name or "uploaded file", *parsed, iodb, template, reuse and iodb is None and data is None)
+    threading.Thread(target=_job_run, args=(job_id, key, data, name or "uploaded file", *parsed, iodb, template, reuse and iodb is None and data is None),
+                     kwargs={"advisor": adv, "user_id": current_user.id, "project_id": project_id}, daemon=True).start()
     return {"job_id": job_id, "status": "processing"}
 
 
 @router.post("/generated/start", status_code=status.HTTP_202_ACCEPTED)
 async def generated_start(
-    background_tasks: BackgroundTasks,
     project_id: Optional[str] = Form(None),
     generated_id: Optional[str] = Form(None),
     rules: Optional[str] = Form(None),
     overrides: Optional[str] = Form(None),
     od_data: Optional[str] = Form(None),
     gland: Optional[str] = Form(None),
+    advisor: Optional[str] = Form(None),
     current_user: User = Depends(get_current_user),
 ):
     """Same as /start with a cable schedule, the input being the generated Cable Schedule. The job gets the snapshot's
@@ -215,26 +317,22 @@ async def generated_start(
         lq.Rules.from_dict(parsed[0])
     except lq.GlandError as e:
         _bad(str(e))
-    job_id = uuid.uuid4().hex
-    now = time.time()
-    with _lock:
-        for k in [k for k, v in _jobs.items() if now - v.get("created", now) > _TTL]:
-            _jobs.pop(k, None)
-        _jobs[job_id] = {"status": "processing", "created": now, "stage": "Queued", "user": current_user.username}
-    background_tasks.add_task(_generated_job, job_id, f"{current_user.id}_lug", g, *parsed)
+    adv = _advisor(advisor)
+    job_id = _new_job(current_user)
+    threading.Thread(target=_job_run, args=(job_id, f"{current_user.id}_lug", g["bytes"], g["filename"], *parsed),
+                     kwargs={"generated_source": _generated_source(g), "advisor": adv, "user_id": current_user.id,
+                             "project_id": project_id}, daemon=True).start()
     return {"job_id": job_id, "status": "processing"}
-
-
-def _generated_job(job_id: str, user_key: str, g: dict, rules, overrides, od_data, gland_cfg):
-    _job_run(job_id, user_key, g["bytes"], g["filename"], rules, overrides, od_data, gland_cfg, generated_source=_generated_source(g))
 
 
 @router.get("/job/{job_id}")
 async def job(job_id: str, current_user: User = Depends(get_current_user)):
-    with _lock:
-        j = dict(_jobs.get(job_id) or {})
+    j = _load_job(job_id)
     if not j or j.get("user") != current_user.username:
-        _bad("This analysis job was not found. Please analyse again.", status.HTTP_404_NOT_FOUND)
+        _bad("This analysis job was not found (the server may have restarted). Please run it again.", status.HTTP_404_NOT_FOUND)
+    if j["status"] == "processing" and (not _alive(j.get("pid")) or time.time() - j.get("updated", j["created"]) > _STALE):
+        # the process that ran it is gone (restart / deploy) or it stopped progressing: say so - never poll forever
+        j.update(status="error", error="The analysis stopped before it finished (the server restarted or it took too long). Please run it again.")
     out = {"status": j["status"], "stage": j.get("stage", ""), "live": j.get("live"), "elapsed": round(time.time() - j["created"], 1)}
     if j["status"] == "done":
         out["result"] = j["result"]
@@ -245,7 +343,14 @@ async def job(job_id: str, current_user: User = Depends(get_current_user)):
 
 @router.get("/download")
 async def download(current_user: User = Depends(get_current_user)):
-    cached = lug_cache.get(f"{current_user.id}_lug")
+    key = f"{current_user.id}_lug"
+    cached = lug_cache.get(key)
+    if not cached:
+        try:
+            xp, np_ = _report_path(key)
+            cached = {"bytes": xp.read_bytes(), "filename": np_.read_text()}
+        except OSError:
+            cached = None
     if not cached:
         _bad("No lug report found. Please generate it first.", status.HTTP_404_NOT_FOUND)
     return StreamingResponse(io.BytesIO(cached["bytes"]),

@@ -16,6 +16,14 @@ import Button from '../../ui/Button';
 import Alert from '../../ui/Alert';
 import FileUploadCard from '../../ui/FileUploadCard';
 import GeneratedScheduleCard, { handleSourceError, useGeneratedSchedule } from './GeneratedScheduleSource';
+import { DeliverableDownloads } from '../../ui/DeliverableCover';
+
+/** Running time shown under a generate button (the request itself has a time limit). */
+export function ElapsedNote({ started }: { started: number }) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => { const t = window.setInterval(() => setNow(Date.now()), 1000); return () => window.clearInterval(t); }, []);
+  return <p className="text-xs mt-2 text-center" style={{ color: 'var(--t1)' }}>Working on the server… {Math.round((now - started) / 1000)} s</p>;
+}
 
 type Row = Record<string, any>;
 const CONSTRUCTIONS = ['UNARMOURED', 'ARMOURED', 'BRAIDED', 'FLEXIBLE', 'FLAT', 'OTHER'];
@@ -141,23 +149,31 @@ function TabA({ project, refFile, setError }: { project: string; refFile: File |
 
   const setType = (key: string, patch: Row) => { setCd({ ...cd, [key]: { ...(cd[key] || {}), ...patch } }); setRes(null); };
 
+  const [started, setStarted] = useState<number | null>(null);
+  const [done, setDone] = useState('');
+  const blocker = !src.gen?.available ? 'Generate a Cable Schedule with the Cable Schedule Generator first.'
+    : !detect ? 'Reading the generated Cable Schedule…' : sheets.length === 0 ? 'Tick at least one cable schedule sheet in Step 1.' : '';
   const run = async () => {
-    if (!src.gen?.available) return;
-    setBusy(true); setError(null);
+    if (!src.gen?.available || busy) return;                  // no second request while one is running
+    setBusy(true); setError(null); setDone(''); setStarted(Date.now());
     try {
       const data: Record<string, Row> = {};
       Object.entries(cd).forEach(([k, v]) => { data[k] = v; });
       const r = await api.post('/cable-schedule/gland/generated/analyze', form({
         ...src.fields(), reference_file: refFile, project,
         settings: JSON.stringify({ sheets, default_qty: defaultQty, repeated_rows: repeated }), cable_data: JSON.stringify(data),
-      }), mp);
+      }), { ...mp, timeout: 330000 });
       setRes(r.data); setView('Gland Summary');
-    } catch (e: any) { handleSourceError(e, src, setError, 'Analysis failed'); } finally { setBusy(false); }
+      setDone(`Cable gland quantity generated: ${r.data.totals?.glands ?? 0} glands for ${r.data.totals?.cables ?? 0} cables.`);
+    } catch (e: any) {
+      if (e?.code === 'ECONNABORTED') setError('Generation did not finish in time. Please try again.');
+      else handleSourceError(e, src, setError, 'Cable gland quantity generation failed.');
+    } finally { setBusy(false); setStarted(null); }
   };
   const download = async () => {
     try {
       const r = await api.get('/cable-schedule/gland/download', { responseType: 'blob' });
-      const a = document.createElement('a'); a.href = window.URL.createObjectURL(new Blob([r.data])); a.setAttribute('download', 'Gland_Quantity_Report.xlsx');
+      const a = document.createElement('a'); a.href = window.URL.createObjectURL(new Blob([r.data])); a.setAttribute('download', res?.filename || 'Gland_Quantity_Report.xlsx');
       document.body.appendChild(a); a.click(); a.remove();
     } catch { setError('Download failed'); }
   };
@@ -212,11 +228,17 @@ function TabA({ project, refFile, setError }: { project: string; refFile: File |
               <select className={field} style={fieldStyle} value={repeated} onChange={(e) => { setRepeated(e.target.value); setRes(null); }}>
                 <option value="once">Count once (shared cable - default)</option><option value="sum">Add the quantities</option></select></label>
           </div>
-          <Button onClick={run} loading={busy} disabled={!src.gen?.available || sheets.length === 0} size="lg" fullWidth className="mt-5 text-lg py-4">
-            {busy ? 'Analysing...' : 'GENERATE GLAND QUANTITY'}
-          </Button>
         </Card>
       )}
+
+      <Card title="Step 3 - Generate" description="Reads the generated Cable Schedule on the server and produces the gland quantity report.">
+        <Button onClick={run} loading={busy} disabled={!!blocker} size="lg" fullWidth className="text-lg py-4" data-testid="gland-generate">
+          {busy ? 'Generating cable gland quantity…' : 'Generate Cable Gland Quantity'}
+        </Button>
+        {blocker && !busy && <p className="text-sm mt-2 text-center" style={{ color: 'var(--t1)' }}>{blocker}</p>}
+        {busy && started && <ElapsedNote started={started} />}
+        {done && !busy && <p className="text-sm mt-2 text-center text-green-600 flex items-center justify-center gap-1"><CheckCircle2 className="w-4 h-4" />{done}</p>}
+      </Card>
 
       {res && S && (
         <Card title="Gland Quantity Report" description={res.source ? `Input: ${res.source.name} (generated ${res.source.generated_at})` : undefined}>
@@ -242,7 +264,9 @@ function TabA({ project, refFile, setError }: { project: string; refFile: File |
             columns={[['cable_type', 'Cable type'], ['construction', 'Construction'], ['od', 'OD (mm)'], ['existing', 'Existing (schedule)'], ['recommended', 'Recommended'], ['alternatives', 'Alternatives'], ['result', 'Result'], ['src', 'Source'], ['message', 'Message']]} />}
           {view === 'Exceptions' && <Table empty="No exceptions." rows={res.exceptions} hl={(r) => (r.severity === 'ERROR' ? 'text-red-500' : r.severity === 'WARNING' ? 'text-amber-600' : '')}
             columns={[['severity', 'Severity'], ['kind', 'Kind'], ['ref', 'Reference'], ['message', 'Message']]} />}
-          <Button onClick={download} className="mt-5 bg-green-600 hover:bg-green-700"><Download className="w-5 h-5" /> DOWNLOAD GLAND QUANTITY REPORT</Button>
+          <div className="mt-5">
+            <DeliverableDownloads module="gland_quantity" filename={res.filename || 'Gland_Quantity_Report.xlsx'} cover={res.cover} onExcel={download} />
+          </div>
         </Card>
       )}
     </div>

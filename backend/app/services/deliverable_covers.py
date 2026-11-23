@@ -32,6 +32,7 @@ DOC_TYPES: dict[str, dict] = {
     "datasheet": {"label": "Datasheet", "keywords": ["DATASHEET", "DATA SHEET"]},
     "gland_quantity": {"label": "Cable Gland Quantity", "keywords": ["GLAND QUANTITY", "CABLE GLAND", "GLAND SCHEDULE"]},
     "lug_quantity": {"label": "Cable Lug Quantity", "keywords": ["LUG QUANTITY", "CABLE LUG", "LUG SCHEDULE"]},
+    "jb_schedule": {"label": "Junction Box Schedule", "keywords": ["JUNCTION BOX SCHEDULE", "JB SCHEDULE"]},
 }
 PROJECT_FIELDS = ("project_description", "client", "pmc", "contractor", "unit_no", "doc_class", "discipline", "page_no")
 DRAFT_TEXT = "DRAFT - NOT APPROVED FOR SUBMISSION"

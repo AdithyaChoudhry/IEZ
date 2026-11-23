@@ -17,6 +17,7 @@ import ExtraCableSheets from './cableschedule/ExtraCableSheets';
 import DrumScheduleGenerator from './cableschedule/DrumScheduleGenerator';
 import GlandQuantityGenerator from './cableschedule/GlandQuantityGenerator';
 import LugQuantityGenerator from './cableschedule/LugQuantityGenerator';
+import JunctionBoxScheduleGenerator from './cableschedule/JunctionBoxScheduleGenerator';
 import CableScheduleComplete from './cableschedule/CableScheduleComplete';
 import { DeliverableCoverCard, DeliverableDownloads, type AppliedCover } from '../ui/DeliverableCover';
 
@@ -57,7 +58,7 @@ export default function CableScheduleGenerator() {
   const [openJb, setOpenJb] = useState<string | null>(null);
   const [result, setResult] = useState<GenerateResponse | null>(null);
   // Instrument Cable Schedule group: the schedule (default on) + optional MCC DI / MCC DO / VFD / MOV / LCP sheets
-  const [view, setView] = useState<'schedule' | 'drum' | 'gland' | 'lug' | 'complete'>('schedule');
+  const [view, setView] = useState<'schedule' | 'drum' | 'gland' | 'lug' | 'jb' | 'complete'>('schedule');
   const [includeSchedule, setIncludeSchedule] = useState(true);
   const [extraSheets, setExtraSheets] = useState<string[]>([]);
   const [coverTemplate, setCoverTemplate] = useState<File | null>(null);
@@ -186,7 +187,7 @@ export default function CableScheduleGenerator() {
 
   const viewTabs = (
     <div className="flex gap-2 overflow-x-auto no-scrollbar -mx-4 px-4 sm:mx-0 sm:px-0 sm:flex-wrap" data-testid="cable-views">
-      {([['schedule', 'Cable Schedule'], ['drum', 'Drum Schedule Generator'], ['gland', 'Cable Gland Quantity Generator'], ['lug', 'Cable Lug Quantity Generator'], ['complete', 'Cable Schedule Complete ⭐']] as const).map(([k, label]) => (
+      {([['schedule', 'Cable Schedule'], ['drum', 'Drum Schedule Generator'], ['gland', 'Cable Gland Quantity Generator'], ['lug', 'Cable Lug Quantity Generator'], ['jb', 'Junction Box Schedule'], ['complete', 'Cable Schedule Complete ⭐']] as const).map(([k, label]) => (
         <button key={k} onClick={() => setView(k)} className="px-4 py-2 rounded-xl text-sm font-semibold whitespace-nowrap flex-shrink-0"
                 style={{ background: view === k ? 'var(--em)' : 'var(--s3)', color: view === k ? '#fff' : 'var(--t0)', border: '1px solid var(--b1)' }}>
           {label}
@@ -221,6 +222,21 @@ export default function CableScheduleGenerator() {
         />
         {viewTabs}
         <CableScheduleComplete />
+      </div>
+    );
+  }
+
+  if (view === 'jb') {
+    return (
+      <div className="space-y-6">
+        <PageHeader
+          icon={Cable}
+          iconClassName="text-red-500"
+          title="Junction Box Schedule Generator"
+          description="Junction boxes, connected instruments, cables and terminal capacity from the generated Cable Schedule, on the standard Junction Box Schedule template."
+        />
+        {viewTabs}
+        <JunctionBoxScheduleGenerator />
       </div>
     );
   }

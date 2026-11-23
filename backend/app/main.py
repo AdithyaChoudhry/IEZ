@@ -21,6 +21,7 @@ from .routers.cable_schedule import router as cable_schedule_router
 from .routers.drum_schedule import router as drum_schedule_router
 from .routers.gland_quantity import router as gland_quantity_router
 from .routers.lug_quantity import router as lug_quantity_router
+from .routers.junction_box_schedule import router as junction_box_schedule_router
 from .routers.cable_complete import router as cable_complete_router
 from .routers.loop_wiring import router as loop_wiring_router
 from .routers.sdie import router as sdie_router
@@ -104,6 +105,7 @@ app.include_router(cable_schedule_router, prefix="/api")
 app.include_router(drum_schedule_router, prefix="/api")
 app.include_router(gland_quantity_router, prefix="/api")
 app.include_router(lug_quantity_router, prefix="/api")
+app.include_router(junction_box_schedule_router, prefix="/api")
 app.include_router(cable_complete_router, prefix="/api")
 app.include_router(loop_wiring_router, prefix="/api")
 app.include_router(sdie_router, prefix="/api")

@@ -160,6 +160,74 @@ def _print_columns(ws) -> tuple:
     return (1, max(used)) if used else (1, 1)
 
 
+_MIN_COL_WIDTH = 10            # no column is printed cramped; wider ones keep their width
+_LINE_PT, _PAD_PT = 14.5, 8    # one wrapped text line / the space above and below it, in points
+_MIN_ROW_PT = 18
+
+
+def _polish_table(ws, first: int, last: int) -> None:
+    """
+    PDF copy only: every cell of the table gets a thin border, wrapped text, vertical centering, a minimum column
+    width, and rows tall enough for their wrapped lines (a cell that wraps to two lines gets room for two lines plus
+    padding). Row heights are only ever increased, so the template's own spacing is kept.
+    """
+    from openpyxl.styles import Alignment, Border, Side
+    side = Side(style="thin", color="000000")
+    top = 1
+    hdr = _header_rows(ws)
+    if hdr:
+        top = max(1, int(hdr.split(":")[0]) - 0)
+    bottom = ws.max_row
+    while bottom > top and not any(ws.cell(bottom, c).value is not None for c in range(first, last + 1)):
+        bottom -= 1
+    for c in range(first, last + 1):
+        letter = get_column_letter(c)
+        dim = ws.column_dimensions[letter]
+        if (dim.width or 8.43) < _MIN_COL_WIDTH and not dim.hidden:
+            dim.width = _MIN_COL_WIDTH
+    merged = {}
+    for m in ws.merged_cells.ranges:
+        for r in range(m.min_row, m.max_row + 1):
+            for c in range(m.min_col, m.max_col + 1):
+                merged[(r, c)] = m
+    need = {}                                                  # row -> height needed by its own (unmerged) cells
+    for r in range(top, bottom + 1):
+        if ws.row_dimensions[r].hidden:
+            continue
+        for c in range(first, last + 1):
+            cell = ws.cell(r, c)
+            try:
+                cell.border = Border(left=side, right=side, top=side, bottom=side)
+            except Exception:
+                pass
+            if (r, c) in merged and (r, c) != (merged[(r, c)].min_row, merged[(r, c)].min_col):
+                continue
+            al = cell.alignment
+            try:
+                cell.alignment = Alignment(horizontal=al.horizontal, vertical="center", wrap_text=True, indent=al.indent, text_rotation=al.text_rotation)
+            except Exception:
+                pass
+            v = cell.value
+            if not isinstance(v, str) or v.startswith("=") or al.text_rotation:
+                continue
+            m = merged.get((r, c))
+            span_w = sum((ws.column_dimensions[get_column_letter(k)].width or 8.43) for k in range(m.min_col, m.max_col + 1)) if m else (ws.column_dimensions[get_column_letter(c)].width or 8.43)
+            per_line = max(1, int(span_w * 1.05))
+            lines = sum(max(1, math.ceil(len(part) / per_line)) for part in v.split("\n"))
+            size = (cell.font.sz or 11) if cell.font else 11
+            h = lines * _LINE_PT * (size / 11) + _PAD_PT
+            rows = (m.max_row - m.min_row + 1) if m else 1
+            for k in range(rows):
+                need[(m.min_row if m else r) + k] = max(need.get((m.min_row if m else r) + k, 0), h / rows)
+    for r in range(top, bottom + 1):                          # no table row is printed cramped
+        if not ws.row_dimensions[r].hidden:
+            need[r] = max(need.get(r, 0), _MIN_ROW_PT)
+    for r, h in need.items():
+        cur = ws.row_dimensions[r].height
+        if cur is None or cur < h:
+            ws.row_dimensions[r].height = h
+
+
 def _header_rows(ws) -> Optional[str]:
     """The table's column-heading rows (repeated on every printed page): the most text-filled row of the first 20."""
     best, best_n = None, 0
@@ -203,6 +271,7 @@ def prepare_for_print(workbook: bytes) -> bytes:
             continue                                          # a short sheet that already fits its page (loop drawing)
         first, last = _print_columns(ws)
         cols = last - first + 1
+        _polish_table(ws, first, last)
         if ps.paperSize in _SMALL_PAPERS:
             ps.paperSize = _PAPER_A3 if cols > 12 else _PAPER_A4
         landscape = cols > 8

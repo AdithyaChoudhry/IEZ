@@ -3,7 +3,7 @@
  * Upload an IODB, pick an instrument type, match tags, optionally seed with IODB process
  * data, then generate a process data requisition document for Process Engineering.
  */
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { ClipboardList, Upload, Download, CheckCircle2, ChevronDown, ChevronRight } from 'lucide-react';
 import api from '@/services/api';
 import PageHeader from '../ui/PageHeader';
@@ -12,6 +12,7 @@ import Card from '../ui/Card';
 import Button from '../ui/Button';
 import Alert from '../ui/Alert';
 import SharedIodbCard from '../ui/SharedIodb';
+import ProcessDataAllTypes from './ProcessDataAllTypes';
 
 interface InstrumentType {
   key: string;
@@ -62,6 +63,9 @@ interface MatchTagsResponse {
   process_fields: { name: string; header: string; mandatory: boolean }[];
   default_fields?: string[];
   warnings: string[];
+  subtype?: string;
+  unresolved_tags?: (MatchedTag & { reason?: string })[];   // records of the type whose subtype is not established (not in matched_tags)
+  excluded_counts?: Record<string, number>;
 }
 
 interface GenerateResponse {
@@ -85,6 +89,9 @@ export default function ProcessDataRequisition() {
   const [iodbFile, setIodbFile] = useState<File | null>(null);
   const [selectedTypeKey, setSelectedTypeKey] = useState('');
   const [selectedSubtype, setSelectedSubtype] = useState('');
+  const [mode, setMode] = useState<'single' | 'all'>('single');   // Individual Instrument Type (default) / All Instrument Types
+  const matchSeq = useRef(0);                                     // only the latest tag search may fill Step 3
+  const matchAbort = useRef<AbortController | null>(null);
 
   const [matchResult, setMatchResult] = useState<MatchTagsResponse | null>(null);
   const [selectedTagNos, setSelectedTagNos] = useState<string[]>([]);
@@ -168,10 +175,15 @@ export default function ProcessDataRequisition() {
 
   const handleMatchTags = async () => {
     if (!iodbFile || !selectedTypeKey) return;
+    matchAbort.current?.abort();                                  // an outdated search is cancelled; its answer is ignored
+    const ctl = new AbortController();
+    matchAbort.current = ctl;
+    const seq = ++matchSeq.current;
     setMatching(true);
     setError(null);
     setResult(null);
     setMatchResult(null);
+    setSelectedTagNos([]);                                        // nothing from a previous type / subtype stays selected
 
     const formData = new FormData();
     formData.append('file', iodbFile);
@@ -181,16 +193,19 @@ export default function ProcessDataRequisition() {
     try {
       const response = await api.post<MatchTagsResponse>('/process-data/match-tags', formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
+        signal: ctl.signal,
       });
+      if (seq !== matchSeq.current) return;
       setMatchResult(response.data);
-      setSelectedTagNos(response.data.matched_tags.map((t) => t.tag_no));
+      setSelectedTagNos(response.data.matched_tags.map((t) => t.tag_no));   // the verified tags only; review records stay unselected
       // The selection is driven by the profile effect above; this only fills an empty selection (e.g. profile failed to load).
       setSelectedFieldNames((prev) => (prev.length ? prev : response.data.default_fields ?? (response.data.process_fields || []).map((f) => f.name)));
       setTagSearch('');
     } catch (err: any) {
+      if (seq !== matchSeq.current || err?.code === 'ERR_CANCELED' || err?.name === 'CanceledError') return;
       setError(err.response?.data?.detail || 'Failed to match tags');
     } finally {
-      setMatching(false);
+      if (seq === matchSeq.current) setMatching(false);
     }
   };
 
@@ -311,13 +326,29 @@ export default function ProcessDataRequisition() {
           icon={Upload}
           file={iodbFile}
           onChange={(f) => {
+            matchAbort.current?.abort();                 // a search for the previous IODB must not fill the page
+            matchSeq.current += 1;
             setIodbFile(f);
             setMatchResult(null);
+            setSelectedTagNos([]);
             setResult(null);
           }}
         />
       </Card>
 
+      {/* Selection mode: one instrument type (default) or every supported type found in the IODB */}
+      <Card title="Instrument Selection Mode" description="Prepare one instrument type, or every supported instrument type in the IODB in one operation.">
+        <div className="flex flex-wrap gap-4 text-sm" style={{ color: 'var(--t1)' }}>
+          {([['single', 'Individual Instrument Type'], ['all', 'All Instrument Types (From IODB)']] as const).map(([k, label]) => (
+            <label key={k} className="flex items-center gap-2 cursor-pointer">
+              <input type="radio" name="pdr-mode" checked={mode === k} onChange={() => { setMode(k); setResult(null); setError(null); }} />{label}
+            </label>))}
+        </div>
+      </Card>
+
+      {mode === 'all' && <ProcessDataAllTypes iodbFile={iodbFile} />}
+
+      {mode === 'single' && (<>
       {/* Step 2: Select Instrument Type */}
       <Card title="Step 2 — Select Instrument Type" description="Choose the instrument type to request process data for.">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -355,7 +386,7 @@ export default function ProcessDataRequisition() {
               </label>
               <select
                 value={selectedSubtype}
-                onChange={(e) => { setSelectedSubtype(e.target.value); setMatchResult(null); setResult(null); }}
+                onChange={(e) => { setSelectedSubtype(e.target.value); setMatchResult(null); setResult(null); setSelectedTagNos([]); }}
                 className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500"
               >
                 <option value="">Select a subtype...</option>
@@ -399,7 +430,12 @@ export default function ProcessDataRequisition() {
 
           <p className="text-sm text-gray-500 mb-2">
             Tags found: <strong>{matchResult.tag_count}</strong> &middot; Selected: <strong>{selectedTagNos.length}</strong>
+            {matchResult.subtype ? <> &middot; Subtype: <strong>{matchResult.subtype}</strong></> : null}
           </p>
+          {matchResult.excluded_counts && Object.keys(matchResult.excluded_counts).length > 0 && (
+            <p className="text-xs mb-2" style={{ color: 'var(--t2)' }}>
+              Not shown (other subtypes): {Object.entries(matchResult.excluded_counts).map(([k, n]) => `${n} ${k}`).join(', ')}.
+            </p>)}
 
           <div className="border border-gray-200 rounded-lg overflow-auto max-h-96">
             <table className="w-full text-sm whitespace-nowrap">
@@ -445,6 +481,26 @@ export default function ProcessDataRequisition() {
               </tbody>
             </table>
           </div>
+          {(matchResult.unresolved_tags?.length ?? 0) > 0 && (
+            <details className="mt-4" data-testid="unresolved-tags">
+              <summary className="cursor-pointer text-sm font-medium text-amber-700">
+                Needs classification review ({matchResult.unresolved_tags!.length}) — the IODB does not state their subtype, so they are not selected
+              </summary>
+              <p className="text-xs my-2" style={{ color: 'var(--t2)' }}>Tick a record only if you know it is a {selectedSubtype || 'matching'} instrument; it is then included in this requisition.</p>
+              <div className="border border-amber-200 rounded-lg overflow-auto max-h-64">
+                <table className="w-full text-xs whitespace-nowrap">
+                  <tbody className="divide-y divide-gray-200">
+                    {matchResult.unresolved_tags!.map((tag) => (
+                      <tr key={`u-${tag.row_index}`}>
+                        <td className="px-3 py-1.5 w-10"><input type="checkbox" checked={selectedTagNos.includes(tag.tag_no)} onChange={() => toggleTag(tag.tag_no)} aria-label={`Include ${tag.tag_no}`} /></td>
+                        <td className="px-3 py-1.5">{tag.tag_no}</td>
+                        <td className="px-3 py-1.5">{tag.equipment_description}</td>
+                        <td className="px-3 py-1.5 text-amber-700">{tag.reason}</td>
+                      </tr>))}
+                  </tbody>
+                </table>
+              </div>
+            </details>)}
         </Card>
       )}
 
@@ -667,6 +723,7 @@ export default function ProcessDataRequisition() {
           </div>
         </div>
       )}
+      </>)}
     </div>
   );
 }

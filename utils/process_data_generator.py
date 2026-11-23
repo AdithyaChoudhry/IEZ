@@ -105,12 +105,21 @@ def generate_process_data_requisition(
     Returns (xlsx_bytes, filename)."""
     cfg = INSTRUMENT_TYPES[type_key]
     fields = _resolve_fields(cfg, subtype, custom_fields, selected_fields)
-    id_names = [f.name for f in IDENTIFICATION_COLUMNS]
-    all_column_names = id_names + [column_header(f) for f in fields]
-
     wb = Workbook()
     ws = wb.active
     ws.title = "PROCESS DATA REQUISITION"
+    _fill_requisition_sheet(ws, cfg, subtype, fields, matched_rows, prefill, project_name, source_filename, custom_name)
+    _write_instructions_sheet(wb, cfg, subtype)
+    _write_field_definitions_sheet(wb, IDENTIFICATION_COLUMNS, fields)
+
+    filename = _build_filename(cfg.label, project_name)
+    return workbook_to_bytes(wb), filename
+
+
+def _fill_requisition_sheet(ws, cfg, subtype, fields, matched_rows, prefill, project_name, source_filename, custom_name=""):
+    """One instrument type's requisition: info block, the 8 identification columns, the process columns, validations."""
+    id_names = [f.name for f in IDENTIFICATION_COLUMNS]
+    all_column_names = id_names + [column_header(f) for f in fields]
 
     # info block, rows 1-3
     ws.cell(row=1, column=1, value="PROCESS DATA REQUISITION").font = Font(bold=True, size=14)
@@ -166,12 +175,6 @@ def generate_process_data_requisition(
 
     _autofit_widths(ws, all_column_names, header_row)
 
-    _write_instructions_sheet(wb, cfg, subtype)
-    _write_field_definitions_sheet(wb, IDENTIFICATION_COLUMNS, fields)
-
-    filename = _build_filename(cfg.label, project_name)
-    return workbook_to_bytes(wb), filename
-
 
 def _write_instructions_sheet(wb, cfg, subtype):
     ws = wb.create_sheet("INSTRUCTIONS")
@@ -219,3 +222,74 @@ def _write_field_definitions_sheet(wb, identification_columns, fields):
         r += 1
     for col_letter, width in zip("ABCDE", (40, 12, 14, 12, 20)):
         ws.column_dimensions[col_letter].width = width
+
+
+# ── all selected instrument types in one workbook ────────────────────────────────────────────────────────────────────
+_BAD_SHEET_CHARS = '[]:*?/\\'
+
+
+def _sheet_title(label: str, used: set) -> str:
+    """A readable, unique Excel sheet name (<= 31 characters, no forbidden characters) that keeps the instrument identity."""
+    base = "".join("-" if ch in _BAD_SHEET_CHARS else ch for ch in label).strip().strip("'") or "Instrument"
+    base = base.replace("Transmitter", "Tx").replace("Differential Pressure", "DP") if len(base) > 31 else base
+    name, n = base[:31], 2
+    while name.lower() in used:
+        suffix = f" ({n})"
+        name, n = base[:31 - len(suffix)] + suffix, n + 1
+    used.add(name.lower())
+    return name
+
+
+def generate_combined_requisition(groups: list[dict], project_name: str, source_filename: str) -> tuple[bytes, str]:
+    """
+    One workbook, one requisition sheet per selected instrument type / subtype, each with ITS OWN process columns, plus an
+    INSTRUCTIONS sheet and a FIELD DEFINITIONS sheet that lists every type's fields. A group is
+    {type_key, subtype, label, rows, prefill, selected_fields (names, or None for every field of the type)}.
+    """
+    if not groups:
+        raise ValueError("No instrument type was selected.")
+    wb = Workbook()
+    used: set = set()
+    written = []
+    for i, g in enumerate(groups):
+        cfg = INSTRUMENT_TYPES[g["type_key"]]
+        subtype = g.get("subtype") or None
+        fields = _resolve_fields(cfg, subtype, None, g.get("selected_fields"))
+        ws = wb.active if i == 0 else wb.create_sheet()
+        ws.title = _sheet_title(g.get("label") or cfg.label, used)
+        _fill_requisition_sheet(ws, cfg, subtype, fields, g["rows"], g["prefill"], project_name, source_filename)
+        written.append((g, cfg, fields, ws.title))
+    wi = wb.create_sheet("INSTRUCTIONS")
+    lines = ["PROCESS DATA REQUISITION - INSTRUCTIONS", "",
+             "One worksheet per instrument type; each has only the process-data columns requested for that type.", ""]
+    lines += [f"{title}: {g.get('label') or cfg.label} - {len(g['rows'])} tag(s)" for g, cfg, _f, title in written]
+    lines += ["",
+              "1. The identification columns (S.NO, TAG NO, EQUIPMENT DESCRIPTION, P&ID NO., SERVICE, EQUIPMENT NO, LINE, LINE SIZE)",
+              "   are derived automatically from the IODB.",
+              "2. The process-data columns are intentionally left blank for the Process Engineering team to fill in or confirm.",
+              "3. Do not alter the identification columns.",
+              "4. Return the completed file to the Instrumentation Engineering team."]
+    for i, line in enumerate(lines, start=1):
+        wi.cell(row=i, column=1, value=line)
+    wi.column_dimensions["A"].width = 100
+    wd = wb.create_sheet("FIELD DEFINITIONS")
+    headers = ["Instrument Type", "Field Name", "Unit", "Data Type", "Mandatory", "Source"]
+    for c, h in enumerate(headers, start=1):
+        cell = wd.cell(row=1, column=c, value=h)
+        cell.font, cell.fill = _HEADER_FONT, _HEADER_FILL
+    r = 2
+    for g, cfg, fields, _title in written:
+        label = g.get("label") or cfg.label
+        for f in IDENTIFICATION_COLUMNS:
+            for c, v in enumerate((label, f.name, f.unit, "Text", "Yes" if f.mandatory else "No", "IODB"), start=1):
+                wd.cell(row=r, column=c, value=v)
+            r += 1
+        for f in fields:
+            ft = getattr(f, "field_type", "")
+            for c, v in enumerate((label, f.name, getattr(f, "unit", ""), ft.value if hasattr(ft, "value") else str(ft),
+                                   "Yes" if getattr(f, "mandatory", False) else "No", "Process Engineering"), start=1):
+                wd.cell(row=r, column=c, value=v)
+            r += 1
+    for col_letter, width in zip("ABCDEF", (44, 40, 12, 14, 12, 20)):
+        wd.column_dimensions[col_letter].width = width
+    return workbook_to_bytes(wb), _build_filename("All_Instrument_Types", project_name)

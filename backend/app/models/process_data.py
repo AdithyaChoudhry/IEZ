@@ -24,6 +24,8 @@ class MatchedTag(BaseModel):
     line: str = ""
     line_size: str = ""
     row_index: int
+    subtype: str = ""            # the subtype this record was classified as (when a subtype was selected)
+    reason: str = ""             # why a record is unresolved (subtype not established)
 
 
 class ProcessFieldOption(BaseModel):
@@ -59,10 +61,39 @@ class ProcessDataMatchResponse(BaseModel):
     process_fields: List[ProcessFieldOption] = []
     default_fields: List[str] = []
     warnings: List[str] = []
+    # subtype filtering: records of the type whose subtype is not established (NOT in matched_tags) and what was left out
+    subtype: str = ""
+    unresolved_tags: List[MatchedTag] = []
+    excluded_counts: Dict[str, int] = {}
 
 
 class ProcessDataGenerateResponse(BaseModel):
     filename: str
     message: str
     registry: Optional[Dict[str, Any]] = None
+    warnings: List[str] = []
+
+
+class DetectGroup(BaseModel):
+    key: str
+    type_key: str
+    type_label: str
+    subtype: str = ""
+    label: str
+    needs_review: bool = False
+    reason: str = ""
+    category: str = ""
+    count: int
+    tags: List[MatchedTag]
+
+
+class DetectResponse(BaseModel):
+    """All Instrument Types mode: every supported type / subtype found in the IODB."""
+    groups: List[DetectGroup]
+    types_found: int
+    eligible_tags: int
+    review_tags: int
+    unsupported: List[Dict[str, Any]] = []
+    ambiguous: List[Dict[str, Any]] = []
+    ambiguous_count: int = 0
     warnings: List[str] = []

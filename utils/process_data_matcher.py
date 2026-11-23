@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+from typing import Optional
 from .list_defaults import norm_key, match_columns
 from .process_data_library import INSTRUMENT_TYPES
 from .process_data_profiles import resolve_fields
@@ -254,3 +255,172 @@ def build_prefill_values(df, matched_rows: list[dict], type_key: str, use_iodb_v
             values[f.name] = "" if norm_key(text) in _PLACEHOLDERS else text
         results.append(values)
     return results
+
+
+# ── subtype-aware matching + whole-IODB classification (Process Data Requisition only) ───────────────────────────────
+from .process_data_subtypes import classify as _classify_subtype, has_rules as _has_subtype_rules, subtype_columns  # noqa: E402
+
+_TYPE_PATTERNS: dict = {}
+_ALIAS_PATTERNS: dict = {}
+
+
+def _alias_re(alias: str):
+    p = _ALIAS_PATTERNS.get(alias)
+    if p is None:
+        p = _ALIAS_PATTERNS[alias] = re.compile(r"(?<![a-z0-9])" + re.escape(norm_key(alias)) + r"(?![a-z0-9])")
+    return p
+
+
+def _type_re(cfg):
+    """One compiled expression per type: any of its aliases as whole words (the same rule as _text_matches)."""
+    p = _TYPE_PATTERNS.get(cfg.key)
+    if p is None:
+        aliases = sorted({norm_key(a) for a in cfg.match_aliases if norm_key(a)}, key=len, reverse=True)
+        p = _TYPE_PATTERNS[cfg.key] = (re.compile(r"(?<![a-z0-9])(?:" + "|".join(re.escape(a) for a in aliases) + r")(?![a-z0-9])")
+                                       if aliases else False)
+    return p
+
+
+def _clean(v) -> str:
+    return "" if v is None or (isinstance(v, float) and v != v) else str(v).strip()
+
+
+class _Iodb:
+    """The IODB prepared once: one record per row with its identification values and its (normalised) matching texts."""
+
+    def __init__(self, df):
+        self.columns = [str(c) for c in df.columns]
+        res = resolve_match_columns(self.columns)
+        self.sub_cols = subtype_columns(self.columns)
+        by_norm = {norm_key(c): c for c in df.columns}
+        get = lambda n: by_norm.get(norm_key(n))                                       # noqa: E731
+        line_col, tag_col, type_col = get("LINE"), res.get("TAG NO"), res.get("INSTRUMENT TYPE NAME")
+        id_cols = {k: get(v) for k, v in (("tag_no", "TAG NO"), ("equipment_description", "EQUIPMENT DESCRIPTION"), ("pid_no", "P&ID NO."),
+                                          ("service", "SERVICE"), ("equipment_no", "EQUIPMENT NO"))}
+        match_cols = [res.get(f) for f in ("INSTRUMENT TYPE NAME", "INSTRUMENT MEASURING TYPE", "SIGNAL DESCRIPTION", "SERVICE")]
+        sub_cols = self.sub_cols["explicit"] + self.sub_cols["descriptive"]
+        self.warnings = [f"Column not found in IODB for matching: {f}" for f, a in res.items() if a is None]
+        self.rows = []
+        for idx, rec in zip(df.index, df.to_dict("records")):
+            texts = [norm_key(rec.get(c)) if c is not None and _clean(rec.get(c)) else "" for c in match_cols]
+            type_text = norm_key(rec.get(type_col)) if type_col is not None and _clean(rec.get(type_col)) else ""
+            line = _clean(rec.get(line_col)) if line_col else ""
+            row = {k: _clean(rec.get(c)) if c is not None else "" for k, c in id_cols.items()}
+            row.update(line=line, line_size=extract_line_size(line), row_index=int(idx) if str(idx).lstrip("-").isdigit() else idx)
+            segs = re.split(r"[^A-Z0-9]+", _clean(rec.get(tag_col)).upper()) if tag_col is not None else []
+            self.rows.append({"row": row, "texts": [t for t in texts if t and t not in _PLACEHOLDERS],
+                              "no_type": type_text in _PLACEHOLDERS | {""}, "segments": segs,
+                              "sub_values": {c: rec.get(c) for c in sub_cols}, "type_name": _clean(rec.get(type_col)) if type_col is not None else ""})
+
+    def types_of(self, r, cfgs) -> list:
+        """The type configs one row belongs to (alias in a matching text, or the tag prefix when the row has no type wording)."""
+        out = []
+        for cfg in cfgs:
+            pat = _type_re(cfg)
+            hit = bool(pat) and any(pat.search(t) for t in r["texts"])
+            if not hit and cfg.tag_prefixes and r["no_type"]:
+                hit = any(seg == p.upper() for seg in r["segments"] for p in cfg.tag_prefixes)
+            if hit:
+                out.append(cfg)
+        return out
+
+
+def _most_specific(cfgs, r) -> list:
+    """When a row fits several types, keep the one whose matched alias contains the other's ('FLOW ELEMENT - ORIFICE PLATE'
+    over 'ORIFICE PLATE'); otherwise keep them all (ambiguous)."""
+    if len(cfgs) < 2:
+        return cfgs
+    best = {}
+    for cfg in cfgs:
+        found = [norm_key(a) for a in cfg.match_aliases if any(_alias_re(a).search(t) for t in r["texts"])]
+        best[cfg.key] = max(found, key=len) if found else ""
+    keep = [c for c in cfgs if not any(o.key != c.key and best[c.key] != best[o.key] and best[c.key] in best[o.key] for o in cfgs)]
+    return keep or cfgs
+
+
+def match_tags_detailed(df, type_key: str, subtype: Optional[str] = None, iodb: "Optional[_Iodb]" = None) -> dict:
+    """
+    The tags of one instrument type, filtered by the selected SUBTYPE when one is given:
+      matched    rows whose wording establishes exactly this subtype
+      unresolved rows of the type whose subtype is not established (each with the reason) - NOT placed in any subtype
+      excluded   {other subtype: count} rows that belong to a different subtype
+    Without a subtype every row of the type is matched (the behaviour before subtypes were checked).
+    """
+    cfg = INSTRUMENT_TYPES.get(type_key)
+    if cfg is None:
+        raise ValueError(f"Unknown instrument type key: {type_key}")
+    broad, warnings = match_tags(df, type_key)
+    out = {"matched": broad, "unresolved": [], "excluded": {}, "warnings": warnings, "filtered": False}
+    if not subtype or not _has_subtype_rules(type_key):
+        return out
+    iodb = iodb or _Iodb(df)
+    by_index = {r["row"]["row_index"]: r for r in iodb.rows}
+    matched = []
+    for row in broad:
+        src = by_index.get(row["row_index"])
+        c = _classify_subtype(type_key, src["sub_values"] if src else {}, iodb.sub_cols)
+        if c["subtype"] == subtype:
+            matched.append({**row, "subtype": subtype})
+        elif c["subtype"] is None:
+            out["unresolved"].append({**row, "reason": c["reason"]})
+        else:                                                    # another subtype, or a technology that has no subtype of its own
+            name = c["subtype"] or c.get("other") or "other"
+            out["excluded"][name] = out["excluded"].get(name, 0) + 1
+    out.update(matched=matched, filtered=True)
+    return out
+
+
+def detect_groups(df) -> dict:
+    """
+    Every supported instrument type / subtype present in the IODB, in one pass. A row is assigned to one type only (a row that
+    fits several unrelated types is reported as ambiguous), then to a subtype where the type has subtypes; rows whose subtype is
+    not established form a review group (not selected by default). Duplicate worksheet rows of one tag count once; the same tag
+    with different identification data is reported.
+    """
+    iodb = _Iodb(df)
+    cfgs = [c for c in INSTRUMENT_TYPES.values() if not c.is_custom]
+    groups: dict = {}
+    unsupported: dict = {}
+    ambiguous, conflicts = [], []
+    for r in iodb.rows:
+        row = r["row"]
+        if not row["tag_no"] or norm_key(row["tag_no"]) in _PLACEHOLDERS:
+            continue
+        hits = _most_specific(iodb.types_of(r, cfgs), r)
+        if not hits:
+            name = r["type_name"] or row["equipment_description"] or "(no instrument type)"
+            unsupported.setdefault(name, set()).add(row["tag_no"])
+            continue
+        if len(hits) > 1:
+            ambiguous.append({"tag_no": row["tag_no"], "types": [h.label for h in hits]})
+            continue
+        cfg = hits[0]
+        sub, reason, other = "", "", ""
+        if _has_subtype_rules(cfg.key):
+            c = _classify_subtype(cfg.key, r["sub_values"], iodb.sub_cols)
+            sub, reason, other = c["subtype"], c["reason"], c.get("other", "")
+        review = sub is None
+        key = f"{cfg.key}|{'' if review else sub}|{'review' if review else other}"
+        g = groups.setdefault(key, {"key": key, "type_key": cfg.key, "type_label": cfg.label, "subtype": "" if review else sub,
+                                    "other": other, "needs_review": review, "reason": reason if review else "", "tags": {},
+                                    "category": cfg.category})
+        seen = g["tags"].get(row["tag_no"])
+        if seen is None:
+            g["tags"][row["tag_no"]] = {**row, **({"reason": reason} if review else {})}
+        elif any(seen[k] != row[k] for k in ("pid_no", "service", "equipment_no", "line")):
+            conflicts.append(f"{row['tag_no']} appears more than once with different data ({g['type_label']}); the first record is used.")
+    order = {k: i for i, k in enumerate(INSTRUMENT_TYPES)}
+    out_groups = []
+    for g in sorted(groups.values(), key=lambda g: (order.get(g["type_key"], 999), g["needs_review"], g["subtype"])):
+        label = g["type_label"] + (f" - {g['subtype']}" if g["subtype"] else (" - subtype not determined" if g["needs_review"]
+                                                                                  else (f" - {g['other']}" if g["other"] else "")))
+        out_groups.append({"key": g["key"], "type_key": g["type_key"], "type_label": g["type_label"], "subtype": g["subtype"],
+                           "label": label, "needs_review": g["needs_review"], "reason": g["reason"], "category": g["category"],
+                           "count": len(g["tags"]), "tags": list(g["tags"].values())})
+    eligible = sum(g["count"] for g in out_groups if not g["needs_review"])
+    return {"groups": out_groups, "types_found": len({g["type_key"] for g in out_groups if not g["needs_review"]}),
+            "eligible_tags": eligible, "review_tags": sum(g["count"] for g in out_groups if g["needs_review"]),
+            "unsupported": sorted(({"name": n, "count": len(t), "reason": "No Process Data Requisition configuration for this instrument type."}
+                                   for n, t in unsupported.items()), key=lambda x: -x["count"])[:100],
+            "ambiguous": ambiguous[:100], "ambiguous_count": len(ambiguous),
+            "warnings": iodb.warnings + conflicts[:50]}

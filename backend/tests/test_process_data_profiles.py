@@ -432,7 +432,7 @@ def test_each_type_matches_its_own_tags_and_columns(api):
     assert seen["flow_switch"][0] == ["230-FS-101", "230-FS-102"]
     assert seen["differential_pressure_switch"][0] == ["230-PDS-101"]
     assert seen["orifice_plate"][0] == ["230-FE-101"]
-    assert seen["level_gauge"][0] == ["230-LG-101"]
+    assert seen["level_gauge"][0] == []                    # "Level Gauge" does not state magnetic / reflex: unresolved, not a Magnetic gauge
     assert "230-PDS-101" not in seen["pressure_transmitter"][0] and "230-PDT-101" in seen["pressure_transmitter"][0]
     assert len({tuple(v[1]) for v in seen.values()}) == len(seen)                                # no two types share one profile
 

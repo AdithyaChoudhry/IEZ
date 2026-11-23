@@ -20,6 +20,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import textwrap
 import zipfile
 from copy import copy
 from typing import Optional
@@ -165,7 +166,7 @@ _LINE_PT, _PAD_PT = 14.5, 8    # one wrapped text line / the space above and bel
 _MIN_ROW_PT = 18
 
 
-def _polish_table(ws, first: int, last: int) -> None:
+def _polish_table(ws, first: int, last: int, borders: bool = True) -> None:
     """
     PDF copy only: every cell of the table gets a thin border, wrapped text, vertical centering, a minimum column
     width, and rows tall enough for their wrapped lines (a cell that wraps to two lines gets room for two lines plus
@@ -174,16 +175,16 @@ def _polish_table(ws, first: int, last: int) -> None:
     from openpyxl.styles import Alignment, Border, Side
     side = Side(style="thin", color="000000")
     top = 1
-    hdr = _header_rows(ws)
+    hdr = _header_rows(ws) if borders else None
     if hdr:
-        top = max(1, int(hdr.split(":")[0]) - 0)
+        top = max(1, int(hdr.split(":")[0]))
     bottom = ws.max_row
     while bottom > top and not any(ws.cell(bottom, c).value is not None for c in range(first, last + 1)):
         bottom -= 1
     for c in range(first, last + 1):
         letter = get_column_letter(c)
         dim = ws.column_dimensions[letter]
-        if (dim.width or 8.43) < _MIN_COL_WIDTH and not dim.hidden:
+        if borders and (dim.width or 8.43) < _MIN_COL_WIDTH and not dim.hidden:
             dim.width = _MIN_COL_WIDTH
     merged = {}
     for m in ws.merged_cells.ranges:
@@ -196,32 +197,53 @@ def _polish_table(ws, first: int, last: int) -> None:
             continue
         for c in range(first, last + 1):
             cell = ws.cell(r, c)
-            try:
-                cell.border = Border(left=side, right=side, top=side, bottom=side)
-            except Exception:
-                pass
+            al = cell.alignment
+            if borders:
+                try:
+                    cell.border = Border(left=side, right=side, top=side, bottom=side)
+                except Exception:
+                    pass
             if (r, c) in merged and (r, c) != (merged[(r, c)].min_row, merged[(r, c)].min_col):
                 continue
-            al = cell.alignment
-            try:
-                cell.alignment = Alignment(horizontal=al.horizontal, vertical="center", wrap_text=True, indent=al.indent, text_rotation=al.text_rotation)
-            except Exception:
-                pass
+            if borders:
+                try:
+                    cell.alignment = Alignment(horizontal=al.horizontal, vertical="center", wrap_text=True, indent=al.indent, text_rotation=al.text_rotation)
+                except Exception:
+                    pass
             v = cell.value
             if not isinstance(v, str) or v.startswith("=") or al.text_rotation:
                 continue
             m = merged.get((r, c))
             span_w = sum((ws.column_dimensions[get_column_letter(k)].width or 8.43) for k in range(m.min_col, m.max_col + 1)) if m else (ws.column_dimensions[get_column_letter(c)].width or 8.43)
-            per_line = max(1, int(span_w * 1.05))
-            lines = sum(max(1, math.ceil(len(part) / per_line)) for part in v.split("\n"))
             size = (cell.font.sz or 11) if cell.font else 11
+            bold = bool(cell.font and cell.font.b)
+            per_line = max(1, int(span_w * (0.80 if bold else 0.88) * (11 / size)))
+            wraps = borders or bool(al.wrap_text)
+            if not wraps:                                       # a one-line cell that is wider than its column: shrink it
+                spills = m is None and (c >= ws.max_column or ws.cell(r, c + 1).value is None)   # text may run into an empty neighbour
+                if not spills and len(v) > per_line * 0.8:
+                    try:
+                        cell.alignment = Alignment(horizontal=al.horizontal, vertical=al.vertical, shrink_to_fit=True, indent=al.indent)
+                    except Exception:
+                        pass
+                continue
+            lines = sum(max(1, len(textwrap.wrap(part, per_line, break_long_words=True)) if part.strip() else 1) for part in v.split("\n"))
             h = lines * _LINE_PT * (size / 11) + _PAD_PT
             rows = (m.max_row - m.min_row + 1) if m else 1
             for k in range(rows):
                 need[(m.min_row if m else r) + k] = max(need.get((m.min_row if m else r) + k, 0), h / rows)
-    for r in range(top, bottom + 1):                          # no table row is printed cramped
+    for r in range(top, bottom + 1) if borders else ():       # no table row is printed cramped
         if not ws.row_dimensions[r].hidden:
             need[r] = max(need.get(r, 0), _MIN_ROW_PT)
+    if borders and hdr:                                       # plain tables: every data row the same height (equal spacing)
+        body0 = int(hdr.split(":")[1]) + 1
+        if not any(m.max_row >= body0 for m in ws.merged_cells.ranges):
+            body = [r for r in range(body0, bottom + 1) if not ws.row_dimensions[r].hidden]
+            if body:
+                uniform = max(need.get(r, 0) for r in body)
+                for r in body:
+                    need[r] = uniform
+                    ws.row_dimensions[r].height = None        # the uniform height replaces the template's own
     for r, h in need.items():
         cur = ws.row_dimensions[r].height
         if cur is None or cur < h:
@@ -267,8 +289,13 @@ def prepare_for_print(workbook: bytes) -> bytes:
             ps.fitToWidth, ps.fitToHeight = 1, 1
             changed = True
             continue
+        if ws.max_row <= _LONG_SHEET_ROWS and ps.fitToWidth == 1 and ps.fitToHeight == 1:
+            continue                                          # a form made for exactly one page (datasheet): untouched
         if ws.max_row <= _LONG_SHEET_ROWS and props.pageSetUpPr.fitToPage:
-            continue                                          # a short sheet that already fits its page (loop drawing)
+            f0, l0 = _print_columns(ws)                       # a short sheet that already fits its page (loop drawing):
+            _polish_table(ws, f0, l0, borders=False)          # keep its layout and borders, only make its text fit
+            changed = True
+            continue
         first, last = _print_columns(ws)
         cols = last - first + 1
         _polish_table(ws, first, last)

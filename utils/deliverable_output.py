@@ -14,6 +14,7 @@ The engineering content is never changed here.
 from __future__ import annotations
 
 import io
+import math
 import os
 import re
 import shutil
@@ -24,7 +25,9 @@ from copy import copy
 from typing import Optional
 
 import openpyxl
+import openpyxl.worksheet.properties
 from openpyxl.drawing.image import Image as XLImage
+from openpyxl.utils import get_column_letter, range_boundaries
 
 COVER_SHEET_NAMES = {"coversheet", "cover", "coverpage", "documentcover", "titlesheet"}
 DRAFT_TEXT = "DRAFT - NOT APPROVED FOR SUBMISSION"
@@ -140,6 +143,23 @@ _LONG_SHEET_ROWS = 80          # a sheet taller than this is printed over as man
 _PAPER_A3, _PAPER_A4, _SMALL_PAPERS = 8, 9, {None, 1, 5}   # Letter / Legal / unset -> A3 or A4
 
 
+_MIN_SCALE = 0.5
+
+
+def _print_columns(ws) -> tuple:
+    """First and last printed column: the print area if the sheet has one, else the columns that hold data."""
+    area = str(ws.print_area or "")
+    if area:
+        try:
+            lo, _, hi, _ = range_boundaries(area.split("!")[-1].split(",")[0].replace("$", ""))
+            return lo, hi
+        except Exception:
+            pass
+    used = [c for c in range(1, ws.max_column + 1)
+            if any(ws.cell(r, c).value is not None for r in range(1, min(ws.max_row, 40) + 1))]
+    return (1, max(used)) if used else (1, 1)
+
+
 def _header_rows(ws) -> Optional[str]:
     """The table's column-heading rows (repeated on every printed page): the most text-filled row of the first 20."""
     best, best_n = None, 0
@@ -166,16 +186,38 @@ def prepare_for_print(workbook: bytes) -> bytes:
     cover = find_cover_sheet(wb)
     changed = False
     for ws in wb.worksheets:
-        if ws.title == cover or ws.sheet_state != "visible" or ws.max_row <= _LONG_SHEET_ROWS:
+        if ws.sheet_state != "visible":
             continue
-        cols = max((c for c in range(1, ws.max_column + 1) if any(ws.cell(r, c).value is not None for r in range(1, min(ws.max_row, 40) + 1))), default=1)
-        if ws.page_setup.paperSize in _SMALL_PAPERS:
-            ws.page_setup.paperSize = _PAPER_A3 if cols > 12 else _PAPER_A4
-        if cols > 8:
-            ws.page_setup.orientation = "landscape"
-        ws.sheet_properties.pageSetUpPr.fitToPage = True
-        ws.page_setup.fitToWidth, ws.page_setup.fitToHeight = 1, 0
-        if not ws.print_title_rows:
+        ps, props = ws.page_setup, ws.sheet_properties
+        if props.pageSetUpPr is None:
+            props.pageSetUpPr = openpyxl.worksheet.properties.PageSetupProperties()
+        if ws.title == cover:                                 # a cover sheet is exactly one page
+            if ps.paperSize in _SMALL_PAPERS:
+                ps.paperSize = _PAPER_A4
+            ps.orientation = "portrait"
+            props.pageSetUpPr.fitToPage = True
+            ps.fitToWidth, ps.fitToHeight = 1, 1
+            changed = True
+            continue
+        if ws.max_row <= _LONG_SHEET_ROWS and props.pageSetUpPr.fitToPage:
+            continue                                          # a short sheet that already fits its page (loop drawing)
+        first, last = _print_columns(ws)
+        cols = last - first + 1
+        if ps.paperSize in _SMALL_PAPERS:
+            ps.paperSize = _PAPER_A3 if cols > 12 else _PAPER_A4
+        landscape = cols > 8
+        if landscape:
+            ps.orientation = "landscape"
+        # Readable text: never shrink below about half size - a very wide table prints 2-4 pages wide instead, with the
+        # identifying columns repeated on each page, rather than one page of unreadably small text.
+        usable = (1100 if ps.paperSize == _PAPER_A3 else 760) if landscape else 520
+        width = sum((ws.column_dimensions[get_column_letter(c)].width or 8.43) for c in range(first, last + 1)) * 5.5
+        wide = min(4, max(1, math.ceil(width * _MIN_SCALE / usable)))
+        props.pageSetUpPr.fitToPage = True
+        ps.fitToWidth, ps.fitToHeight = wide, 0
+        if wide > 1 and cols > 6 and not ws.print_title_cols:
+            ws.print_title_cols = "A:C"
+        if ws.max_row > _LONG_SHEET_ROWS and not ws.print_title_rows:
             rows = _header_rows(ws)
             if rows:
                 ws.print_title_rows = rows

@@ -156,7 +156,7 @@ _ABBR = {
     "flowmeter": ["flow", "meter"], "flowmeters": ["flow", "meter"], "meter": ["meter"],
     "clampon": ["clamp", "on"], "ultra": ["ultrasonic"], "mag": ["magnetic"], "magnet": ["magnetic"],
     "gage": ["gauge"], "guage": ["gauge"], "temp": ["temperature"], "press": ["pressure"],
-    "gwr": ["gwr", "guided"], "indicating": ["indicator"],
+    "gwr": ["gwr", "guided"], "indicating": ["indicator"], "analyser": ["analyzer"],
 }
 
 
@@ -512,7 +512,7 @@ def fields_for(t: dict, field_scope: Optional[dict] = None, _with_options: bool 
     # Annexure-I columns say which rows are tag-wise.
     ann_labels: frozenset = frozenset()
     if eg is not None and roles.get("annexure") and not any(
-            _REF1.search(d or "") or _REF2.search(d or "") for f in specs for d in f.defaults):
+            _REF1.search(d or "") for f in specs for d in f.defaults):          # only the tag-wise marker: a guide may carry just 'REFER ANNEXURE-II' (spares)
         a = SC.parse_annexure(sheets[roles["annexure"]])
         if a is not None:
             ann_labels = frozenset(_base_label(c.header or c.label.split(" · ")[0]) for c in a.columns if c.kind == "data") | {"tag"}

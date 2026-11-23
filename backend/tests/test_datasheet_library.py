@@ -19,7 +19,9 @@ from utils import sop_consolidated as SC
 LIB = Path(DL.LIB_DIR)
 ALL = ["dps", "dpt", "fe_orifice", "fs", "ft_parshall", "ft_dp", "ft_thermal", "ft_clampon", "lg_magnetic", "lg_reflex", "lt_radar",
        "lt_radar_sop", "lt_gwr", "lt_ultrasonic", "lt_dp_open", "fi_glass", "fi_metal", "pg_bourdon",
-       "pg_diaphragm", "ps", "pt", "te_rtd", "tg", "tt"]
+       "pg_diaphragm", "ps", "pt", "te_rtd", "tg", "tt",
+       "an_ph", "an_orp", "an_conductivity", "an_turbidity", "an_do", "an_chlorine", "an_nh3", "an_toc", "an_tss", "an_oil", "an_phenol"]
+ANALYSERS = ALL[-11:]                       # the analyser SOP datasheets
 LEGACY = "lt_radar_sop"                     # the SOP LT workbook: no guide, no annexure (iEZ builds Annexure-I)
 HEADER = {"client": "GAIL (INDIA) LTD", "consultant": "PDIL", "project": "NEW WWTP", "plant": "PANIPAT", "client_doc_no": "C-001",
           "vatech_doc_no": "PC286-10P195-I0003-100", "rev": "0", "prepared_by": "AKB", "date": "20.11.2026"}
@@ -171,7 +173,7 @@ def test_inactive_template_is_not_offered():
 
 
 @pytest.mark.parametrize("text", ["Magnetic Flow Meter", "Level Transmitter", "Ultrasonic Flow Transmitter", "Coriolis Flow Transmitter",
-                                  "Flow Element", "Level Switch", "Conductivity Analyzer", "LEVEL TRANSMITTER DP TYPE CLOSED TANK",
+                                  "Flow Element", "Level Switch", "Nitrate Analyzer", "Fluoride Analyzer", "pH Switch", "Analyzer", "LEVEL TRANSMITTER DP TYPE CLOSED TANK",
                                   "Rotameter", ""])
 def test_similar_or_unknown_types_are_never_assigned(text):
     assert DL.match_type(text)["template_id"] is None
@@ -495,3 +497,49 @@ def test_api_other_users_cannot_download(api, db):
     app.dependency_overrides[get_db] = lambda: db
     other = TestClient(app).get("/api/sop-datasheet/download")
     assert other.status_code == 404
+
+
+# ── the analyser SOP datasheets ──────────────────────────────────────────────────────────────────────────────────────
+@pytest.mark.parametrize("text,tid,status", [
+    ("pH Analyzer", "an_ph", "exact"), ("Online pH Analyzer", "an_ph", "alias"), ("Online pH Analyser", "an_ph", "alias"),
+    ("ORP Analyzer", "an_orp", "exact"), ("Conductivity Analyzer", "an_conductivity", "exact"),
+    ("Online Turbidity Analyzer", "an_turbidity", "alias"), ("Dissolved Oxygen Analyzer", "an_do", "exact"),
+    ("Analyzer Indicating Transmitter - DO", "an_do", "alias"), ("Residual Chlorine Analyzer", "an_chlorine", "exact"),
+    ("Free Chlorine Analyser", "an_chlorine", "keyword"), ("Ammonia Analyzer", "an_nh3", "exact"), ("NH3 Analyser", "an_nh3", "alias"),
+    ("TOC Analyzer", "an_toc", "exact"), ("TSS Analyzer", "an_tss", "exact"), ("Oil in Water Analyzer", "an_oil", "alias"),
+    ("Phenol Analyzer", "an_phenol", "exact"),
+])
+def test_analyser_types_are_matched_to_their_own_template(text, tid, status):
+    m = DL.match_type(text)
+    assert (m["template_id"], m["status"]) == (tid, status)
+
+
+def test_analysers_are_instruments_and_each_has_its_own_category():
+    assert all(DL.entry(t)["category"] == "Analyser" for t in ANALYSERS)
+    for text in ("Online pH Analyzer", "Residual Chlorine Analyser", "TOC Analyzer"):
+        assert DL.is_instrument_type(text)
+
+
+def test_analyser_annexure_columns_come_from_each_sop_datasheet():
+    def annex(tid, n=2):
+        out, _, err, failed = DL.generate(tid, iodb_for(tid, n), tags_for(tid, n), {}, None, HEADER)
+        assert err is None and not failed
+        wb = openpyxl.load_workbook(io.BytesIO(out))
+        ws = wb[DL.roles_for(DL.entry(tid))["annexure"]]
+        heads = " | ".join(str(c.value) for row in ws.iter_rows(min_row=1, max_row=12) for c in row if c.value is not None)
+        return wb, heads
+    _, ph = annex("an_ph")
+    assert all(h in ph for h in ("Specific Gravity", "Viscosity(Cp)", "Conductivity", "Operating Range", "Instrument"))
+    _, cl = annex("an_chlorine")
+    assert "Operating Range" in cl and "Specific Gravity" not in cl                    # the chlorine annexure has no SG / viscosity
+    _, do = annex("an_do")
+    assert "DO Value(ppm)" in do and "Operating Range" not in do                       # DO has a DO value, not an operating range
+    wb, _ = annex("an_toc")
+    assert "ANNEXURE - II" in wb.sheetnames                                           # the reagent / calibration list sheet is delivered
+
+
+def test_every_analyser_main_sheet_marks_tag_data_as_refer_annexure():
+    for tid in ANALYSERS:
+        fields, _ = DL.fields_for(DL.entry(tid))
+        tagwise = {f.spec.label for f in fields if f.scope == "tag"}
+        assert {"Tag No", "P&ID No", "Fluid"} <= tagwise, (tid, tagwise)             # tag-wise rows come from the Annexure-I columns

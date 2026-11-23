@@ -1075,6 +1075,447 @@
    },
    "version": "R0",
    "active": true
+  },
+  {
+   "id": "an_ph",
+   "code": "AN-PH",
+   "display_name": "pH Analyzer",
+   "category": "Analyser",
+   "file": "an_ph.xlsx",
+   "original_filename": "pH ANALYSER-R0.xls",
+   "aliases": [
+    "pH Analyzer",
+    "pH Analyser",
+    "Online pH Analyzer",
+    "Online pH Analyser",
+    "Analyzer Indicating Transmitter - pH"
+   ],
+   "rules": [
+    {
+     "all": [
+      "ph",
+      "analyzer"
+     ],
+     "none": [
+      "switch"
+     ]
+    }
+   ],
+   "sheets": {
+    "main": "pH ANALYSER",
+    "example": "EXAMPLE",
+    "annexure": "ANNEXURE - I",
+    "annexure2": "SPARE",
+    "checklist": "checklist",
+    "cover": "COVER SHEET",
+    "index": "INDEX"
+   },
+   "version": "R0",
+   "active": true
+  },
+  {
+   "id": "an_orp",
+   "code": "AN-ORP",
+   "display_name": "ORP Analyzer",
+   "category": "Analyser",
+   "file": "an_orp.xlsx",
+   "original_filename": "ORP ANALYSER-R0.xls",
+   "aliases": [
+    "ORP Analyzer",
+    "ORP Analyser",
+    "Online ORP Analyzer",
+    "Analyzer Indicating Transmitter - ORP"
+   ],
+   "rules": [
+    {
+     "all": [
+      "orp",
+      "analyzer"
+     ],
+     "none": [
+      "switch"
+     ]
+    }
+   ],
+   "sheets": {
+    "main": "ORP ANALYSER",
+    "example": "EXAMPLE",
+    "annexure": "ANNEXURE - I",
+    "annexure2": "SPARE",
+    "checklist": "checklist",
+    "cover": "COVER SHEET",
+    "index": "INDEX"
+   },
+   "version": "R0",
+   "active": true
+  },
+  {
+   "id": "an_conductivity",
+   "code": "AN-COND",
+   "display_name": "Conductivity Analyzer",
+   "category": "Analyser",
+   "file": "an_conductivity.xlsx",
+   "original_filename": "CONDUCTIVITY ANALYSER-R0.xls",
+   "aliases": [
+    "Conductivity Analyzer",
+    "Conductivity Analyser",
+    "Online Conductivity Analyzer",
+    "Analyzer Indicating Transmitter - Conductivity"
+   ],
+   "rules": [
+    {
+     "all": [
+      "conductivity",
+      "analyzer"
+     ],
+     "none": [
+      "switch"
+     ]
+    }
+   ],
+   "sheets": {
+    "main": "CONDUCTIVITY ANALYSER",
+    "example": "EXAMPLE",
+    "annexure": "ANNEXURE - I",
+    "annexure2": "SPARE",
+    "checklist": "checklist",
+    "cover": "COVER SHEET",
+    "index": "INDEX"
+   },
+   "version": "R0",
+   "active": true
+  },
+  {
+   "id": "an_turbidity",
+   "code": "AN-TURB",
+   "display_name": "Turbidity Analyzer",
+   "category": "Analyser",
+   "file": "an_turbidity.xlsx",
+   "original_filename": "TURBIDITY ANALYSER-R0.xls",
+   "aliases": [
+    "Turbidity Analyzer",
+    "Turbidity Analyser",
+    "Online Turbidity Analyzer",
+    "Analyzer Indicating Transmitter - Turbidity"
+   ],
+   "rules": [
+    {
+     "all": [
+      "turbidity",
+      "analyzer"
+     ],
+     "none": [
+      "switch"
+     ]
+    }
+   ],
+   "sheets": {
+    "main": "TURBIDITY ANALYSER",
+    "example": "EXAMPLE",
+    "annexure": "ANNEXURE - I",
+    "annexure2": "SPARE",
+    "checklist": "checklist",
+    "cover": "COVER SHEET",
+    "index": "INDEX"
+   },
+   "version": "R0",
+   "active": true
+  },
+  {
+   "id": "an_do",
+   "code": "AN-DO",
+   "display_name": "Dissolved Oxygen Analyzer",
+   "category": "Analyser",
+   "file": "an_do.xlsx",
+   "original_filename": "DO ANALYSER-R0.xls",
+   "aliases": [
+    "Dissolved Oxygen Analyzer",
+    "Dissolved Oxygen Analyser",
+    "DO Analyzer",
+    "DO Analyser",
+    "Analyzer Indicating Transmitter - DO"
+   ],
+   "rules": [
+    {
+     "all": [
+      "dissolved",
+      "oxygen",
+      "analyzer"
+     ],
+     "none": [
+      "switch"
+     ]
+    },
+    {
+     "all": [
+      "do",
+      "analyzer"
+     ],
+     "none": [
+      "switch"
+     ]
+    }
+   ],
+   "sheets": {
+    "main": "DO ANALYSER",
+    "example": "EXAMPLE",
+    "annexure": "ANNEXURE - I",
+    "annexure2": "SPARE",
+    "checklist": "checklist",
+    "cover": "COVER SHEET",
+    "index": "INDEX"
+   },
+   "version": "R0",
+   "active": true
+  },
+  {
+   "id": "an_chlorine",
+   "code": "AN-CL2",
+   "display_name": "Residual Chlorine Analyzer",
+   "category": "Analyser",
+   "file": "an_chlorine.xlsx",
+   "original_filename": "RESIDUAL CHLORINE ANALYSER-R0.xls",
+   "aliases": [
+    "Residual Chlorine Analyzer",
+    "Residual Chlorine Analyser",
+    "Chlorine Analyzer",
+    "Chlorine Analyser",
+    "Analyzer Indicating Transmitter - Chlorine"
+   ],
+   "rules": [
+    {
+     "all": [
+      "chlorine",
+      "analyzer"
+     ],
+     "none": [
+      "switch"
+     ]
+    }
+   ],
+   "sheets": {
+    "main": "RESIDUAL CHLORINE ANALYSER",
+    "example": "EXAMPLE",
+    "annexure": "ANNEXURE - I",
+    "annexure2": "SPARE",
+    "checklist": "checklist",
+    "cover": "COVER SHEET",
+    "index": "INDEX"
+   },
+   "version": "R0",
+   "active": true
+  },
+  {
+   "id": "an_nh3",
+   "code": "AN-NH3",
+   "display_name": "Ammonia Analyzer",
+   "category": "Analyser",
+   "file": "an_nh3.xlsx",
+   "original_filename": "NH3 ANALYSER-R0.xls",
+   "aliases": [
+    "Ammonia Analyzer",
+    "Ammonia Analyser",
+    "NH3 Analyzer",
+    "NH3 Analyser",
+    "Ammonia (NH3) Analyzer",
+    "Analyzer Indicating Transmitter - Ammonia"
+   ],
+   "rules": [
+    {
+     "all": [
+      "ammonia",
+      "analyzer"
+     ],
+     "none": [
+      "switch"
+     ]
+    },
+    {
+     "all": [
+      "nh3",
+      "analyzer"
+     ],
+     "none": [
+      "switch"
+     ]
+    }
+   ],
+   "sheets": {
+    "main": "NH3 ANALYSER",
+    "example": "EXAMPLE",
+    "annexure": "ANNEXURE - I",
+    "annexure2": "SPARE",
+    "checklist": "checklist",
+    "cover": "COVER SHEET",
+    "index": "INDEX"
+   },
+   "version": "R0",
+   "active": true
+  },
+  {
+   "id": "an_toc",
+   "code": "AN-TOC",
+   "display_name": "TOC Analyzer",
+   "category": "Analyser",
+   "file": "an_toc.xlsx",
+   "original_filename": "TOC ANALYSER-R0.xls",
+   "aliases": [
+    "TOC Analyzer",
+    "TOC Analyser",
+    "Total Organic Carbon Analyzer",
+    "Analyzer Indicating Transmitter - TOC"
+   ],
+   "rules": [
+    {
+     "all": [
+      "toc",
+      "analyzer"
+     ],
+     "none": [
+      "switch"
+     ]
+    },
+    {
+     "all": [
+      "total",
+      "organic",
+      "carbon",
+      "analyzer"
+     ],
+     "none": [
+      "switch"
+     ]
+    }
+   ],
+   "sheets": {
+    "main": "TOC ANALYSER",
+    "example": "EXAMPLE",
+    "annexure": "ANNEXURE - I",
+    "annexure2": "ANNEXURE - II",
+    "checklist": "checklist",
+    "cover": "COVER SHEET",
+    "index": "INDEX"
+   },
+   "version": "R0",
+   "active": true
+  },
+  {
+   "id": "an_tss",
+   "code": "AN-TSS",
+   "display_name": "TSS Analyzer",
+   "category": "Analyser",
+   "file": "an_tss.xlsx",
+   "original_filename": "TSS ANALYSER-R0.xls",
+   "aliases": [
+    "TSS Analyzer",
+    "TSS Analyser",
+    "Total Suspended Solids Analyzer",
+    "Suspended Solids Analyzer",
+    "Analyzer Indicating Transmitter - TSS"
+   ],
+   "rules": [
+    {
+     "all": [
+      "tss",
+      "analyzer"
+     ],
+     "none": [
+      "switch"
+     ]
+    },
+    {
+     "all": [
+      "suspended",
+      "solids",
+      "analyzer"
+     ],
+     "none": [
+      "switch"
+     ]
+    }
+   ],
+   "sheets": {
+    "main": "TSS ANALYSER",
+    "example": "EXAMPLE",
+    "annexure": "ANNEXURE - I",
+    "annexure2": "SPARE",
+    "checklist": "checklist",
+    "cover": "COVER SHEET",
+    "index": "INDEX"
+   },
+   "version": "R0",
+   "active": true
+  },
+  {
+   "id": "an_oil",
+   "code": "AN-OIL",
+   "display_name": "Oil Analyzer",
+   "category": "Analyser",
+   "file": "an_oil.xlsx",
+   "original_filename": "OIL ANALYSER-R0.xls",
+   "aliases": [
+    "Oil Analyzer",
+    "Oil Analyser",
+    "Oil in Water Analyzer",
+    "Oil-in-Water Analyzer"
+   ],
+   "rules": [
+    {
+     "all": [
+      "oil",
+      "analyzer"
+     ],
+     "none": [
+      "switch"
+     ]
+    }
+   ],
+   "sheets": {
+    "main": "OIL ANALYSER",
+    "example": "EXAMPLE",
+    "annexure": "ANNEXURE - I",
+    "annexure2": "SPARE",
+    "checklist": "checklist",
+    "cover": "COVER SHEET",
+    "index": "INDEX"
+   },
+   "version": "R0",
+   "active": true
+  },
+  {
+   "id": "an_phenol",
+   "code": "AN-PHENOL",
+   "display_name": "Phenol Analyzer",
+   "category": "Analyser",
+   "file": "an_phenol.xlsx",
+   "original_filename": "PHENOL ANALYSER-R0.xls",
+   "aliases": [
+    "Phenol Analyzer",
+    "Phenol Analyser",
+    "Online Phenol Analyzer"
+   ],
+   "rules": [
+    {
+     "all": [
+      "phenol",
+      "analyzer"
+     ],
+     "none": [
+      "switch"
+     ]
+    }
+   ],
+   "sheets": {
+    "main": "PHENOL ANALYSER",
+    "example": "EXAMPLE",
+    "annexure": "ANNEXURE - I",
+    "annexure2": "SPARE",
+    "checklist": "checklist",
+    "cover": "COVER SHEET",
+    "index": "INDEX"
+   },
+   "version": "R0",
+   "active": true
   }
  ]
 }

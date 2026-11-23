@@ -264,9 +264,10 @@ def test_the_iodb_frame_is_not_modified():
 
 
 # ── workbook: the layout of the reference DRUM SCHEDULE / DRUM MASTER sheets ──
-# CABLE DESCRIPTION and REMARKS are not part of the delivered DRUM SCHEDULE (source references stay on the TRACE sheet)
+# CABLE DESCRIPTION is not part of the delivered DRUM SCHEDULE; REMARKS keeps its heading and its rows stay empty (the source
+# references are on the TRACE sheet)
 REF_SCHEDULE_HEADERS = ["DRUM ID", "CABLE TYPE", "CABLE TAG NUMBER", "IS / NIS", "MANUFACTURER", "DRUM LENGTH (M)",
-                        "USABLE DRUM LENGTH (M)", "ALLOCATED LENGTH (M)", "AVAILABLE LENGTH (M)", "STATUS"]
+                        "USABLE DRUM LENGTH (M)", "ALLOCATED LENGTH (M)", "AVAILABLE LENGTH (M)", "STATUS", "REMARKS"]
 
 
 def example_result():
@@ -279,10 +280,11 @@ def test_drum_schedule_sheet_has_the_reference_columns_formulas_and_style():
     assert wb.sheetnames == ["DRUM SCHEDULE", "DRUM SCHEDULE - TRACE", "CABLE TYPE SUMMARY", "DRUM UTILIZATION", "SHORTAGE REPORT",
                              "EXCESS - BALANCE REPORT", "VALIDATION - EXCEPTIONS", "DRUM MASTER"]
     ws = wb["DRUM SCHEDULE"]
-    assert ws["A1"].value == "DRUM SCHEDULE" and "A1:J1" in {str(m) for m in ws.merged_cells.ranges}
-    assert [ws.cell(3, c).value for c in range(1, 11)] == REF_SCHEDULE_HEADERS and ws.freeze_panes == "A4"
-    assert all(ws.cell(r, c).value is None for r in range(3, 8) for c in (11, 12))                 # no placeholder columns left
-    assert "CABLE DESCRIPTION" not in [c.value for c in ws[3]] and "REMARKS" not in [c.value for c in ws[3]]
+    assert ws["A1"].value == "DRUM SCHEDULE" and "A1:K1" in {str(m) for m in ws.merged_cells.ranges}
+    assert [ws.cell(3, c).value for c in range(1, 12)] == REF_SCHEDULE_HEADERS and ws.freeze_panes == "A4"
+    assert all(ws.cell(r, c).value is None for r in range(3, 8) for c in (12, 13))                 # no placeholder columns beyond
+    assert "CABLE DESCRIPTION" not in [c.value for c in ws[3]]
+    assert ws.cell(3, 11).value == "REMARKS" and all(ws.cell(r, 11).value is None for r in range(4, 308))   # heading kept, rows empty
     rows = [[ws.cell(r, c).value for c in range(1, 11)] for r in range(4, 8)]
     assert [r[0] for r in rows] == ["DM-1-001"] * 3 + ["DM-1-002"]
     assert [r[2] for r in rows] == ["IC-001", "IC-002", "IC-003", "IC-004"]

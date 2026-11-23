@@ -41,6 +41,7 @@ MODULE = "jb_schedule"
 # found in the project's MDL by keyword, or chosen by the engineer in the Cover Sheet Generator.
 TEMPLATE_PATH = Path(__file__).resolve().parent.parent / "templates" / "junction_box_schedule" / "JB_SCHEDULE_TEMPLATE.xlsx"
 NOT_GENERATED = "No generated Cable Schedule is available. Please generate the Cable Schedule first."
+NO_COVER_NOTE = "The schedule was generated without a cover sheet (optional)."
 NO_COVER = ("The Junction Box Schedule cover sheet is not available. Please generate or configure the appropriate cover sheet "
             "in the Cover Sheet Generator.")
 
@@ -175,26 +176,30 @@ async def jb_generate(body: JBRequest, user: User = Depends(get_current_user), d
             "message": f"{len(blocked)} junction box(es) need attention before the schedule can be generated. {first['jb_no']}: {why}",
             "evaluation": ev})
     cover = _cover_state(db, body.project_id)
-    if not cover["available"]:
-        _bad(NO_COVER, status.HTTP_409_CONFLICT)
     if not TEMPLATE_PATH.exists():
         _bad("The standard Junction Box Schedule template is not installed on the server.", status.HTTP_500_INTERNAL_SERVER_ERROR)
     meta = _meta_for(db, body.project_id, cover, ev["results"])
+    template = TEMPLATE_PATH.read_bytes()
 
     def make():
-        data = jbs.build_workbook(TEMPLATE_PATH.read_bytes(), ev["results"], meta)
-        out, name, info = finalize(user.id, MODULE, body.project_id, data, "Junction_Box_Schedule.xlsx", db=db)
-        return out, name, info
+        # The cover sheet is optional: with one, the workbook is COVERSHEET + JB_SCHEDULE; without, JB_SCHEDULE alone.
+        if cover["available"]:
+            data = jbs.build_workbook(template, ev["results"], meta, cover_placeholder=True)
+            out, name, info = finalize(user.id, MODULE, body.project_id, data, "Junction_Box_Schedule.xlsx", db=db)
+            if info.get("applied"):
+                return out, name, info
+        data = jbs.build_workbook(template, ev["results"], {**meta, "document_number": "", "revision": ""} if not cover["available"] else meta,
+                                  cover_placeholder=False)
+        return finalize(user.id, MODULE, body.project_id, data, "Junction_Box_Schedule.xlsx", db=db)
     try:
         out, name, info = await run_in_threadpool(make)
     except jbs.JBError as e:
         _bad(str(e))
-    if not info.get("applied"):
-        _bad(NO_COVER, status.HTTP_409_CONFLICT)
     import openpyxl
     names = openpyxl.load_workbook(io.BytesIO(out), read_only=True).sheetnames
     problems = jbs.formula_problems(out)
-    if names != ["COVERSHEET", "JB_SCHEDULE"] or problems:
+    expected = ["COVERSHEET", "JB_SCHEDULE"] if info.get("applied") else ["JB_SCHEDULE"]
+    if names != expected or problems:
         logger.error("JB schedule workbook failed its structure check: %s %s", names, problems[:5])
         _bad("The generated workbook failed its integrity check (" + ("; ".join(problems[:3]) or f"sheets {names}") + ").",
              status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -202,7 +207,8 @@ async def jb_generate(body: JBRequest, user: User = Depends(get_current_user), d
         _outputs[user.id] = {"bytes": out, "filename": name, "generated_id": g["id"]}
     n_warn = sum(len(r["warnings"]) for r in ev["results"])
     return {"filename": name, "message": f"Junction Box Schedule generated: {len(ev['results'])} junction box(es).",
-            "cover": {k: info.get(k) for k in ("applied", "draft", "document_number", "document_title", "revision", "approved", "message")},
+            "cover": {**{k: info.get(k) for k in ("applied", "draft", "document_number", "document_title", "revision", "approved")},
+                      "message": info.get("message") if info.get("applied") else f"{NO_COVER_NOTE} {info.get('message') or cover.get('message') or ''}".strip()},
             "warnings": n_warn, "submission_ready": ev["submission_ready"],
             "missing_for_submission": {r["jb_no"]: r["missing_submission"] for r in ev["results"] if r["missing_submission"]},
             "evaluation": ev}

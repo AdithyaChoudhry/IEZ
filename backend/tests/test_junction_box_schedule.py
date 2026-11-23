@@ -325,14 +325,24 @@ def ready_configs():
     return out
 
 
-def test_generation_needs_the_jb_cover_sheet(client):
+def test_cover_sheet_is_optional_the_schedule_downloads_without_it(client):
     put_schedule()
     g = client.post("/api/cable-schedule/jb/generate", json={"project_id": PID, "jbs": ready_configs()})
-    assert g.status_code == 409 and g.json()["detail"] == (
-        "The Junction Box Schedule cover sheet is not available. Please generate or configure the appropriate cover sheet in the Cover Sheet Generator.")
-    # another document's cover is never attached: an MDL with no matching document stays "not available"
+    assert g.status_code == 200, g.text
+    body = g.json()
+    assert body["cover"]["applied"] is False and "without a cover sheet" in body["cover"]["message"]
+    d = client.get("/api/cable-schedule/jb/download")
+    assert d.status_code == 200
+    wb = openpyxl.load_workbook(io.BytesIO(d.content))
+    assert wb.sheetnames == ["JB_SCHEDULE"] and J.formula_problems(d.content) == []             # no empty placeholder sheet is left behind
+    assert wb["JB_SCHEDULE"]["AD2"].value in (None, "")                                         # no document number is invented
+    # another document's cover is never attached: an MDL without a matching document gives the same cover-less schedule
     add_cover(client, name="Instrument Cable Schedule for New WWTP")
-    assert client.post("/api/cable-schedule/jb/generate", json={"project_id": PID, "jbs": ready_configs()}).status_code == 409
+    g = client.post("/api/cable-schedule/jb/generate", json={"project_id": PID, "jbs": ready_configs()})
+    assert g.status_code == 200 and g.json()["cover"]["applied"] is False
+    assert openpyxl.load_workbook(io.BytesIO(client.get("/api/cable-schedule/jb/download").content)).sheetnames == ["JB_SCHEDULE"]
+    st = client.get("/api/cable-schedule/jb/status", params={"project_id": PID}).json()
+    assert st["cover"]["available"] is False and "cover sheet is not available" in st["cover"]["message"]
 
 
 def test_final_workbook_is_coversheet_and_jb_schedule_only_without_broken_formulas(client):
@@ -363,7 +373,8 @@ def test_final_workbook_is_coversheet_and_jb_schedule_only_without_broken_formul
     assert ws.cell(r1, 20).value == "MC-1" and ws.cell(r1, 18).value == "M20"
     smb = by_jb["XXXX-SMB-001"]
     assert ws.cell(smb, 27).value is None and ws.cell(smb, 28).value == 9 and ws.cell(smb, 29).value == 0.75
-    assert ws.cell(by_jb["JB-004"], 27).value == 2 and "USER-CONFIRMED" in (ws.cell(by_jb["JB-004"], 31).value or "")
+    assert ws.cell(by_jb["JB-004"], 27).value == 2                                              # user-confirmed terminals per instrument
+    assert ws.cell(9, 31).value == "REMARKS" and all(ws.cell(r, 31).value is None for r in range(10, 15))   # heading kept, rows empty
     assert ws.print_area and "$AE$14" in str(ws.print_area) and ws.page_setup.orientation == "landscape"
     assert ws["C1"].value == "NEW WWTP" and ws["AD2"].value == "PC286-10P195-J0007-001" and ws["AD3"].value == "R0"
     assert len(ws.data_validations.dataValidation) >= 5                                        # the lists survive as in-cell drop-downs

@@ -50,7 +50,7 @@ const DETAILS: [string, string, string][] = [
   ['branch_gland_size', 'Branch gland size', 'gland_size'], ['branch_gland_type', 'Branch gland type', 'gland_type'],
   ['main_cable_no', 'Main cable no.', ''], ['main_cable_type', 'Main cable type', 'cable'],
   ['main_gland_size', 'Main cable gland size', 'gland_size'], ['main_gland_type', 'Main cable gland type', 'gland_type'],
-  ['spare_entries', 'Spare entries (qty)', ''], ['spare_entry_size', 'Spare entry size', 'gland_size'], ['remarks', 'Remarks', ''],
+  ['spare_entries', 'Spare entries (qty)', ''], ['spare_entry_size', 'Spare entry size', 'gland_size'],
 ];
 const SOURCE_NOTE: Record<string, string> = { user: 'entered by you', '': '' };
 
@@ -147,7 +147,7 @@ export default function JunctionBoxScheduleGenerator() {
     (ev?.results ?? []).forEach((r) => r.missing_submission.forEach((f) => { (m[f] ||= []).push(r.jb_no); }));
     return m;
   }, [ev]);
-  const canGenerate = !!ev?.ready && !!cover?.available && !generating;
+  const canGenerate = !!ev?.ready && !generating;               // the cover sheet is optional
   const num = (v: any) => (v === null || v === undefined || v === '' ? '—' : v);
 
   return (
@@ -258,9 +258,9 @@ export default function JunctionBoxScheduleGenerator() {
           </Card>
 
           <Card title="Section 4 — Review, Generate & Download" icon={Download}
-                description="The result is exactly two worksheets: COVERSHEET and JB_SCHEDULE.">
+                description="JB_SCHEDULE, with the cover sheet (COVERSHEET) in front when one is available. The cover sheet is optional.">
             <DeliverableCoverCard docType={'jb_schedule' as any} />
-            {cover && !cover.available && <div className="mt-3"><Alert variant="warning" title="Cover sheet not available">{cover.message}</Alert></div>}
+            {cover && !cover.available && <div className="mt-3"><Alert variant="info" title="No cover sheet available">{cover.message} The Junction Box Schedule can still be generated and downloaded without it.</Alert></div>}
             {ev && (ev.results.some((r) => r.warnings.length || r.errors.length)) && (
               <details className="mt-3 text-sm" open={ev.results.some((r) => r.errors.length)}>
                 <summary className="cursor-pointer font-medium" style={{ color: 'var(--t0)' }}>
@@ -276,7 +276,7 @@ export default function JunctionBoxScheduleGenerator() {
             </div>
             {!canGenerate && !generating && (
               <p className="text-xs mt-2" style={{ color: 'var(--t2)' }}>
-                {!cover?.available ? 'The cover sheet is needed first.' : ev?.duplicates.length ? 'A junction box appears twice.'
+                {ev?.duplicates.length ? 'A junction box appears twice.'
                   : `${(ev?.summary['Input Required'] || 0) + (ev?.summary['Error'] || 0)} junction box(es) still need input or have an error.`}</p>)}
             {generating && <p className="text-xs mt-2" style={{ color: 'var(--t1)' }}>Building the workbook…</p>}
             {result && (

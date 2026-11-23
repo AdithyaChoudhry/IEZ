@@ -779,7 +779,7 @@ def to_workbook(res: Result) -> bytes:
 
     # ── DRUM SCHEDULE: the reference columns, running balance as the reference formulas ──
     ws = wb["DRUM SCHEDULE"]
-    _drop_columns(ws, ("L", "C"))            # REMARKS and CABLE DESCRIPTION are not part of the delivered DRUM SCHEDULE
+    _drop_columns(ws, ("C",))                # CABLE DESCRIPTION is not part of the delivered DRUM SCHEDULE (REMARKS stays, rows empty)
     body, prev = [], None
     for k, r in enumerate(rows):
         excel_row = 4 + k
@@ -791,12 +791,12 @@ def to_workbook(res: Result) -> bytes:
             usable = avail = None
         body.append([r["drum_id"] or "NO DRUM", r["cable_type"], r["cable_tag"],
                      r["is_nis"] if r["is_nis"] in ("IS", "NIS") else "NA", r["manufacturer"] or None,
-                     r["drum_length"], usable, r["allocated"], avail, r["status"]])
+                     r["drum_length"], usable, r["allocated"], avail, r["status"], None])
         prev = r["drum_id"] or None
-    last = _fill_reference_sheet(ws, body, 10)
+    last = _fill_reference_sheet(ws, body, 11)
     last = max(last, 302)
     for rr in range(4 + len(body), last + 1):                      # the reference sheet keeps styled blank rows
-        for c in range(1, 11):
+        for c in range(1, 12):
             ws.cell(rr, c)._style = copy(ws.cell(4, c)._style)
     ws.data_validations.dataValidation = []
     for col, formula in (("D", '"IS,NIS,BOTH,NA"'), ("J", f'"{STATUS_LIST}"')):

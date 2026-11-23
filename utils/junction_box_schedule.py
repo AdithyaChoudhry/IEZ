@@ -535,10 +535,10 @@ _WRAP = ("B", "E", "G", "H", "I", "J", "L", "M", "O", "R", "S", "T", "U", "W", "
 _MAX_ROW_PT = 400.0            # Excel stops at 409.5 pt
 
 
-def build_workbook(template: bytes, results: list, meta: dict) -> bytes:
+def build_workbook(template: bytes, results: list, meta: dict, cover_placeholder: bool = True) -> bytes:
     """
-    Fill the standard JB_SCHEDULE. Only that sheet is kept (plus an empty COVERSHEET placeholder that the cover-sheet service
-    replaces); the helper / check columns AF:AR and every formula that depended on the deleted sheets are removed - the checks
+    Fill the standard JB_SCHEDULE. Only that sheet is kept (plus, when a cover sheet is available, an empty COVERSHEET
+    placeholder that the cover-sheet service replaces); the helper / check columns AF:AR and every formula that depended on the deleted sheets are removed - the checks
     are calculated here and nothing in the output refers to another sheet.
     meta: project_info (dict), document_number, revision, date.
     """
@@ -590,10 +590,7 @@ def build_workbook(template: bytes, results: list, meta: dict) -> bytes:
         values = dict(row)
         values["jb_no"] = res["jb_no"]
         values["rev"] = meta.get("revision") or ""
-        notes = [s for s in (row.get("remarks"),) if s]
-        if row.get("terminals_method") != "auto" and row.get("terminals_used") is not None:
-            notes.append("TERMINALS USED: USER-CONFIRMED")
-        values["remarks"] = "; ".join(notes)
+        values["remarks"] = None                                   # the REMARKS column stays in the template, its rows stay empty
         ws.cell(r, 1).value = i + 1
         lines = 1
         for field, col in _COLS.items():
@@ -609,11 +606,7 @@ def build_workbook(template: bytes, results: list, meta: dict) -> bytes:
             if isinstance(v, str):
                 width = ws.column_dimensions[col].width or 10
                 lines = max(lines, sum(max(1, math.ceil(len(p) / max(1.0, width * 1.05))) for p in v.split("\n")))
-        height = 10.5 * lines + 4
-        if height > _MAX_ROW_PT:                                    # a very long list of cable numbers: the cell keeps every value
-            ws.cell(r, column_index_from_string("AE")).value = "; ".join(
-                x for x in (values["remarks"], "LONG LIST OF CABLE NUMBERS IN THIS ROW - SEE THE CELL CONTENT") if x)
-        ws.row_dimensions[r].height = min(max(15.0, height), _MAX_ROW_PT)
+        ws.row_dimensions[r].height = min(max(15.0, 10.5 * lines + 4), _MAX_ROW_PT)
     # 5. controlled lists as in-cell drop-downs (the LOOKUPS sheet is not delivered)
     ws.data_validations.dataValidation = []
     for col, key in _LIST_COLUMNS.items():
@@ -627,8 +620,9 @@ def build_workbook(template: bytes, results: list, meta: dict) -> bytes:
     # 6. print setup
     ws.print_area = f"A1:AE{9 + n}"
     # 7. the cover-sheet placeholder (replaced in place by the centralised cover sheet)
-    cover = wb.create_sheet("COVERSHEET", 0)
-    cover["A1"] = "COVER SHEET"
+    if cover_placeholder:
+        cover = wb.create_sheet("COVERSHEET", 0)
+        cover["A1"] = "COVER SHEET"
     wb.active = 0
     buf = io.BytesIO()
     wb.save(buf)

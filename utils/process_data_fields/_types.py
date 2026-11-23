@@ -17,6 +17,10 @@ class ProcessField:
     options: tuple = ()
     iodb_aliases: tuple = ()
     subtype_only: tuple = ()
+    # Verified-profile metadata (see process_data_profiles.py). Plain fields keep the defaults.
+    category: str = "process"          # process | additional | review
+    default_selected: bool = False
+    annexure_label: str = ""          # the exact ANNEXURE-I heading this field comes from
 
 @dataclass(frozen=True)
 class InstrumentTypeConfig:

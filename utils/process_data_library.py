@@ -13,6 +13,7 @@ from .process_data_fields.transmitters import TRANSMITTER_TYPES
 from .process_data_fields.analyzers_a import ANALYZER_TYPES_A
 from .process_data_fields.analyzers_b import ANALYZER_TYPES_B
 from .process_data_fields.gauges_gas_custom import GAUGE_GAS_CUSTOM_TYPES
+from .process_data_fields.switches_elements import SWITCH_ELEMENT_TYPES
 
 # Always the first 8 columns of the requisition, in this order.
 IDENTIFICATION_COLUMNS = (
@@ -30,6 +31,7 @@ IDENTIFICATION_COLUMNS = (
 _ORDER = (
     "level_transmitter", "flow_transmitter", "temperature_transmitter", "pressure_transmitter",
     "level_gauge", "pressure_gauge", "temperature_gauge",
+    "flow_switch", "differential_pressure_switch", "orifice_plate",
     "ph_analyzer", "orp_analyzer", "conductivity_analyzer", "turbidity_analyzer",
     "dissolved_oxygen_analyzer", "chlorine_analyzer", "ozone_analyzer", "ammonia_analyzer",
     "nitrate_analyzer", "phosphate_analyzer", "cod_analyzer", "toc_analyzer", "tss_mlss_analyzer",
@@ -80,9 +82,23 @@ for _p, _col in (("process temperature", "TEMPERATURE"), ("temperature", "TEMPER
         IODB_PREFILL[f"{_p} {_hi}"] = f"{_col} MAX"
 
 
+# Fields of the datasheet-derived profiles (process_data_profiles.py): Min / Max from the IODB's MIN / MAX columns,
+# single-valued IODB columns seed the Normal / plain field only.
+for _p, _col in (("operating pressure", "PRESSURE"), ("operating temperature", "TEMPERATURE"), ("flow", "FLOW")):
+    IODB_PREFILL[f"minimum {_p}"] = f"{_col} MIN"
+    IODB_PREFILL[f"maximum {_p}"] = f"{_col} MAX"
+IODB_PREFILL["fluid density"] = "DENSITY"
+IODB_PREFILL["normal velocity"] = "VELOCITY"
+
+# The IODB header is spelt VISCOSITY in real files and VISCOCITY in older ones - accept both.
+_ALTERNATE_HEADER = {"VISCOCITY": "VISCOSITY"}
+
+
 def iodb_aliases_for(field_name: str) -> tuple:
     col = IODB_PREFILL.get(" ".join(str(field_name).lower().split()))
-    return (col,) if col else ()
+    if not col:
+        return ()
+    return (col, _ALTERNATE_HEADER[col]) if col in _ALTERNATE_HEADER else (col,)
 
 
 def _finalize(cfg: InstrumentTypeConfig) -> InstrumentTypeConfig:
@@ -103,7 +119,7 @@ def _finalize(cfg: InstrumentTypeConfig) -> InstrumentTypeConfig:
 
 def _build() -> dict:
     merged: dict = {}
-    for src in (TRANSMITTER_TYPES, ANALYZER_TYPES_A, ANALYZER_TYPES_B, GAUGE_GAS_CUSTOM_TYPES):
+    for src in (TRANSMITTER_TYPES, ANALYZER_TYPES_A, ANALYZER_TYPES_B, GAUGE_GAS_CUSTOM_TYPES, SWITCH_ELEMENT_TYPES):
         merged.update(src)
     out = {k: _finalize(merged[k]) for k in _ORDER if k in merged}
     for k, v in merged.items():  # any config not in _ORDER is still available (extensibility)

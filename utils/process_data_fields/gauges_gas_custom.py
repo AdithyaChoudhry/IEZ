@@ -51,6 +51,14 @@ LEVEL_GAUGE_FIELDS = (
     ProcessField(name="Centre-to-Centre Distance", unit="mm", field_type=FieldType.NUMBER),
     ProcessField(name="Hazardous Area", field_type=FieldType.BOOLEAN),
     ProcessField(name="Remarks", field_type=FieldType.TEXT),
+    # --- fields that exist only on the datasheet ANNEXURE-I of the Magnetic / Reflex level gauge ------------------
+    ProcessField(name="Tank Tag Number", field_type=FieldType.TEXT, subtype_only=("Magnetic", "Reflex")),
+    ProcessField(name="Tank Type", field_type=FieldType.TEXT, subtype_only=("Magnetic", "Reflex")),
+    ProcessField(name="Tank MOC", field_type=FieldType.TEXT, subtype_only=("Magnetic", "Reflex")),
+    ProcessField(name="Presence of Agitation", field_type=FieldType.BOOLEAN, subtype_only=("Magnetic", "Reflex")),
+    ProcessField(name="Presence of Fumes", field_type=FieldType.BOOLEAN, subtype_only=("Magnetic", "Reflex")),
+    ProcessField(name="Overall Visible Length", unit="mm", field_type=FieldType.NUMBER, subtype_only=("Reflex",)),
+    ProcessField(name="Number of Glasses x Size", unit="mm", field_type=FieldType.TEXT, subtype_only=("Reflex",)),
 )
 
 # ---------------------------------------------------------------------------
@@ -170,6 +178,8 @@ LEVEL_GAUGE = InstrumentTypeConfig(
         "MAGNETIC LEVEL GAUGE",
     ),
     tag_prefixes=("LG",),
+    subtypes=("Magnetic", "Reflex"),
+    subtype_field_name="GAUGE TYPE",
     fields=LEVEL_GAUGE_FIELDS,
 )
 

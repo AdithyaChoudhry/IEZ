@@ -4,6 +4,7 @@ from __future__ import annotations
 import re
 from .list_defaults import norm_key, match_columns
 from .process_data_library import INSTRUMENT_TYPES
+from .process_data_profiles import resolve_fields
 
 MATCH_FIELDS = ("INSTRUMENT TYPE NAME", "INSTRUMENT MEASURING TYPE",
                 "SIGNAL DESCRIPTION", "SERVICE", "TAG NO")
@@ -196,33 +197,57 @@ def match_tags(df, type_key: str) -> tuple[list[dict], list[str]]:
     return matched_rows, warnings
 
 
-def build_prefill_values(df, matched_rows: list[dict], type_key: str, use_iodb_values: bool) -> list[dict]:
+def _unit_key(unit) -> str:
+    """A unit reduced to a comparable form: case, spacing, superscripts and a gauge suffix are ignored
+    ('Kg/cm2 g' == 'kg/cm2', 'deg C' == '°C'). Nothing is converted - two different units stay different."""
+    u = re.sub(r"\s+", "", str(unit or "").lower().replace("²", "2").replace("³", "3").replace("º", "°"))
+    u = u.replace("degc", "c").replace("°c", "c").replace("℃", "c").replace("/hr", "/h")
+    return re.sub(r"[.(]?g\)?$", "", u) if u.startswith(("kg/cm2", "kg/cm")) else u
+
+
+def _header_unit(header) -> str:
+    m = re.search(r"\(([^)]*)\)\s*$", str(header))
+    return m.group(1).strip() if m else ""
+
+
+def build_prefill_values(df, matched_rows: list[dict], type_key: str, use_iodb_values: bool,
+                         subtype=None, notes=None) -> list[dict]:
     """For each matched row, return a dict of {process_field_name: value}.
     If use_iodb_values is False: every value is "" for every field, always - never fabricate.
     If True: for each ProcessField with non-empty iodb_aliases, resolve those alias column names
     against df.columns (case/whitespace-insensitive via list_defaults.match_columns) and copy the
-    cell value as-is from df.iloc[row['row_index']] - no computation/derivation, copy only."""
+    cell value as-is from df.iloc[row['row_index']] - no computation/derivation, copy only.
+    A value is NOT copied when the IODB header states a unit that differs from the unit the datasheet prints for
+    that column (e.g. IODB kg/cm2 vs a datasheet column in mmWC): units are never converted, the cell stays blank
+    for the process team and the reason is appended to `notes` (a list) when one is given."""
     cfg = INSTRUMENT_TYPES.get(type_key)
     if cfg is None or cfg.is_custom:
         return [{} for _ in matched_rows]
+    fields = resolve_fields(cfg, subtype)
     if not use_iodb_values:
-        return [{f.name: "" for f in cfg.fields} for _ in matched_rows]
+        return [{f.name: "" for f in fields} for _ in matched_rows]
 
     columns = [str(c) for c in df.columns]
     field_column_map: dict[str, str | None] = {}
-    for f in cfg.fields:
+    for f in fields:
         col = None
         for alias in f.iodb_aliases:
             col = _find_header(columns, alias)
             if col:
                 break
+        have = _header_unit(col) if col else ""
+        if col and have and f.unit and _unit_key(have) != _unit_key(f.unit):
+            if notes is not None:
+                notes.append(f"IODB column '{col}' was not copied into '{f.name} ({f.unit})': the units differ and no "
+                             "conversion is applied - the cell is left blank for the Process team.")
+            col = None
         field_column_map[f.name] = col
 
     results = []
     for row_info in matched_rows:
         row = df.iloc[row_info["row_index"]]
         values = {}
-        for f in cfg.fields:
+        for f in fields:
             actual_col = field_column_map.get(f.name)
             raw = row.get(actual_col) if actual_col else None
             text = "" if raw is None or (isinstance(raw, float) and raw != raw) else str(raw).strip()

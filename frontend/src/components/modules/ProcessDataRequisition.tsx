@@ -4,7 +4,7 @@
  * data, then generate a process data requisition document for Process Engineering.
  */
 import { useState, useMemo, useEffect } from 'react';
-import { ClipboardList, Upload, Download, CheckCircle2 } from 'lucide-react';
+import { ClipboardList, Upload, Download, CheckCircle2, ChevronDown, ChevronRight } from 'lucide-react';
 import api from '@/services/api';
 import PageHeader from '../ui/PageHeader';
 import ProjectSelector from '../ui/ProjectSelector';
@@ -18,6 +18,28 @@ interface InstrumentType {
   label: string;
   category: string;
   subtypes: string[];
+  verified_subtypes?: string[];
+}
+
+interface ProfileField {
+  name: string;
+  header: string;
+  mandatory: boolean;
+  unit: string;
+  category: string;
+  default_selected: boolean;
+  source_annexure_label: string;
+}
+
+interface ProfileResponse {
+  instrument_type: string;
+  subtype: string;
+  verified: boolean;
+  template: string;
+  sheet: string;
+  note: string;
+  fields: ProfileField[];
+  default_fields: string[];
 }
 
 interface MatchedTag {
@@ -38,6 +60,7 @@ interface MatchTagsResponse {
   identification_columns: string[];
   process_columns: string[];
   process_fields: { name: string; header: string; mandatory: boolean }[];
+  default_fields?: string[];
   warnings: string[];
 }
 
@@ -45,6 +68,7 @@ interface GenerateResponse {
   filename: string;
   message: string;
   registry?: unknown;
+  warnings?: string[];
 }
 
 interface CustomRow {
@@ -67,6 +91,12 @@ export default function ProcessDataRequisition() {
   const [tagSearch, setTagSearch] = useState('');
 
   const [selectedFieldNames, setSelectedFieldNames] = useState<string[]>([]);
+  // The datasheet profile of the chosen type / subtype (the backend is the source of the defaults), and the selection
+  // the user made for each type / subtype during this session.
+  const [profile, setProfile] = useState<ProfileResponse | null>(null);
+  const [profileError, setProfileError] = useState<string | null>(null);
+  const [selectionByKey, setSelectionByKey] = useState<Record<string, string[]>>({});
+  const [showOptional, setShowOptional] = useState(false);
   const [useIodbValues, setUseIodbValues] = useState(false);
   const [customRows, setCustomRows] = useState<CustomRow[]>([]);
   const [customName, setCustomName] = useState('');
@@ -88,6 +118,44 @@ export default function ProcessDataRequisition() {
     [instrumentTypes, selectedTypeKey]
   );
   const isCustomType = selectedType?.category === 'Custom';
+  const profileKey = `${selectedTypeKey}|${selectedSubtype}`;
+
+  const updateSelection = (names: string[]) => {
+    setSelectedFieldNames(names);
+    setSelectionByKey((prev) => ({ ...prev, [profileKey]: names }));
+  };
+
+  // Load the verified default parameters whenever the instrument type or subtype changes. Each type / subtype keeps
+  // its own selection for the session; a type seen for the first time starts from its recommended defaults.
+  useEffect(() => {
+    setProfile(null);
+    setProfileError(null);
+    setShowOptional(false);
+    if (!selectedTypeKey || isCustomType) { setSelectedFieldNames([]); return; }
+    let cancelled = false;
+    api
+      .get<ProfileResponse>('/process-data/profile', {
+        params: { instrument_type: selectedTypeKey, ...(selectedSubtype ? { subtype: selectedSubtype } : {}) },
+      })
+      .then((r) => {
+        if (cancelled) return;
+        setProfile(r.data);
+        setSelectedFieldNames(selectionByKey[profileKey] ?? r.data.default_fields);
+      })
+      .catch((err: any) => {
+        if (!cancelled) setProfileError(err.response?.data?.detail || 'Failed to load the parameter profile');
+      });
+    return () => { cancelled = true; };
+  }, [selectedTypeKey, selectedSubtype, isCustomType]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const defaultFields = useMemo(
+    () => (profile ? profile.fields.filter((f) => profile.default_fields.includes(f.name)) : []),
+    [profile]);
+  const optionalFields = useMemo(
+    () => (profile ? profile.fields.filter((f) => !profile.default_fields.includes(f.name)) : []),
+    [profile]);
+  const optionalSelectedCount = optionalFields.filter((f) => selectedFieldNames.includes(f.name)).length;
+  const hasVerifiedSubtypes = !!selectedType?.verified_subtypes?.some((s) => s);
 
   const groupedTypes = useMemo(() => {
     const groups: Record<string, InstrumentType[]> = {};
@@ -116,7 +184,8 @@ export default function ProcessDataRequisition() {
       });
       setMatchResult(response.data);
       setSelectedTagNos(response.data.matched_tags.map((t) => t.tag_no));
-      setSelectedFieldNames((response.data.process_fields || []).map((f) => f.name));
+      // The selection is driven by the profile effect above; this only fills an empty selection (e.g. profile failed to load).
+      setSelectedFieldNames((prev) => (prev.length ? prev : response.data.default_fields ?? (response.data.process_fields || []).map((f) => f.name)));
       setTagSearch('');
     } catch (err: any) {
       setError(err.response?.data?.detail || 'Failed to match tags');
@@ -124,6 +193,11 @@ export default function ProcessDataRequisition() {
       setMatching(false);
     }
   };
+
+  // IODB uploaded and a type chosen: find the tags straight away, so Generate is available without extra clicks.
+  useEffect(() => {
+    if (iodbFile && selectedTypeKey) handleMatchTags();
+  }, [iodbFile, selectedTypeKey, selectedSubtype]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const filteredTags = useMemo(() => {
     if (!matchResult) return [];
@@ -154,10 +228,13 @@ export default function ProcessDataRequisition() {
 
   const validCustomRows = customRows.filter((r) => r.parameter.trim());
   const canGenerate = selectedTagNos.length > 0 &&
-    (isCustomType ? validCustomRows.length > 0 : selectedFieldNames.length > 0);
+    (isCustomType ? validCustomRows.length > 0 : selectedFieldNames.length > 0 && (!!profile || !!profileError));
 
   const toggleField = (name: string) =>
-    setSelectedFieldNames((prev) => (prev.includes(name) ? prev.filter((n) => n !== name) : [...prev, name]));
+    updateSelection(selectedFieldNames.includes(name) ? selectedFieldNames.filter((n) => n !== name) : [...selectedFieldNames, name]);
+  const restoreDefaults = () => updateSelection(profile ? [...profile.default_fields] : []);
+  const selectAllParameters = () => updateSelection((profile?.fields ?? matchResult?.process_fields ?? []).map((f) => f.name));
+  const clearOptional = () => updateSelection(selectedFieldNames.filter((n) => profile?.default_fields.includes(n)));
 
   const handleGenerate = async () => {
     if (!iodbFile || !selectedTypeKey || !canGenerate) return;
@@ -437,7 +514,7 @@ export default function ProcessDataRequisition() {
 
       {/* Step 5: Preview */}
       {matchResult && (
-        <Card title="Step 5 — Preview & Columns" description="Choose which process data columns to request, then generate.">
+        <Card title="Step 5 — Preview & Columns" description="The recommended parameters for this instrument are already selected - generate, or adjust them first.">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
             <div>
               <p className="text-xs" style={{ color: 'var(--t2)' }}>Instrument Type</p>
@@ -459,35 +536,95 @@ export default function ProcessDataRequisition() {
           <p className="text-sm mt-3" style={{ color: 'var(--t1)' }}>
             Total columns: <strong>{totalColumns}</strong>
           </p>
-          {!isCustomType && matchResult.process_fields.length > 0 && (
-            <div className="mt-4">
-              <div className="flex items-center justify-between gap-3 mb-2 flex-wrap">
-                <p className="text-sm font-medium" style={{ color: 'var(--t0)' }}>
-                  Process data columns to request ({selectedFieldNames.length} of {matchResult.process_fields.length})
+          {!isCustomType && profileError && (
+            <p className="text-xs mt-3 text-red-500">{profileError}</p>
+          )}
+          {!isCustomType && profile && profile.fields.length > 0 && (
+            <div className="mt-4 space-y-4" data-testid="parameter-selection">
+              {profile.verified ? (
+                <p className="text-xs" style={{ color: 'var(--t2)' }}>
+                  Recommended parameters come from the verified datasheet <strong>{profile.template}</strong> ({profile.sheet}).
+                  Units are the ones printed on that datasheet.
                 </p>
-                <div className="flex gap-2">
-                  <Button variant="ghost" size="sm"
-                    onClick={() => setSelectedFieldNames(matchResult.process_fields.map((f) => f.name))}>
-                    Select All
-                  </Button>
-                  <Button variant="ghost" size="sm" onClick={() => setSelectedFieldNames([])}>Clear All</Button>
+              ) : (
+                <Alert variant="warning" title="No verified datasheet profile for this type yet">
+                  {profile.note} Choose the parameters to request below.
+                </Alert>
+              )}
+              {profile.verified && profile.note && (
+                <p className="text-xs" style={{ color: 'var(--t2)' }}>{profile.note}</p>
+              )}
+              {hasVerifiedSubtypes && !selectedSubtype && (
+                <p className="text-xs text-amber-600">
+                  Select a subtype in Step 2 to load its verified datasheet parameters.
+                </p>
+              )}
+
+              {/* Default parameters - already selected */}
+              <div>
+                <div className="flex items-center justify-between gap-3 mb-2 flex-wrap">
+                  <p className="text-sm font-medium" style={{ color: 'var(--t0)' }}>
+                    {profile.verified ? 'Default Parameters — Automatically Selected' : 'Parameters'}
+                    {' '}({defaultFields.filter((f) => selectedFieldNames.includes(f.name)).length} of {defaultFields.length} selected)
+                  </p>
+                  <div className="flex gap-2 flex-wrap">
+                    <Button variant="ghost" size="sm" onClick={restoreDefaults}>Restore Recommended Defaults</Button>
+                    <Button variant="ghost" size="sm" onClick={selectAllParameters}>Select All Available Parameters</Button>
+                    {optionalFields.length > 0 && (
+                      <Button variant="ghost" size="sm" onClick={clearOptional}>Clear Optional Selections</Button>
+                    )}
+                  </div>
+                </div>
+                <div className="border border-gray-200 rounded-lg p-3 max-h-80 overflow-auto grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-1">
+                  {defaultFields.map((f) => (
+                    <label key={f.name} className="flex items-start gap-2 text-sm cursor-pointer" style={{ color: 'var(--t1)' }}>
+                      <input
+                        type="checkbox"
+                        checked={selectedFieldNames.includes(f.name)}
+                        onChange={() => toggleField(f.name)}
+                        className="w-4 h-4 mt-0.5 text-primary-600 border-gray-300 rounded"
+                      />
+                      <span>{f.header}</span>
+                    </label>
+                  ))}
                 </div>
               </div>
-              <div className="border border-gray-200 rounded-lg p-3 max-h-80 overflow-auto grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-1">
-                {matchResult.process_fields.map((f) => (
-                  <label key={f.name} className="flex items-start gap-2 text-sm cursor-pointer" style={{ color: 'var(--t1)' }}>
-                    <input
-                      type="checkbox"
-                      checked={selectedFieldNames.includes(f.name)}
-                      onChange={() => toggleField(f.name)}
-                      className="w-4 h-4 mt-0.5 text-primary-600 border-gray-300 rounded"
-                    />
-                    <span>{f.header}</span>
-                  </label>
-                ))}
-              </div>
+
+              {/* Additional parameters - optional, collapsed by default */}
+              {optionalFields.length > 0 && (
+                <div>
+                  <button
+                    type="button"
+                    onClick={() => setShowOptional((v) => !v)}
+                    className="flex items-center gap-1 text-sm font-medium"
+                    style={{ color: 'var(--t0)' }}
+                    aria-expanded={showOptional}
+                  >
+                    {showOptional ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+                    Additional Parameters — Optional ({optionalSelectedCount} of {optionalFields.length} selected)
+                  </button>
+                  {!showOptional && (
+                    <Button variant="ghost" size="sm" className="mt-1" onClick={() => setShowOptional(true)}>Add Parameters</Button>
+                  )}
+                  {showOptional && (
+                    <div className="border border-gray-200 rounded-lg p-3 mt-2 max-h-80 overflow-auto grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-1">
+                      {optionalFields.map((f) => (
+                        <label key={f.name} className="flex items-start gap-2 text-sm cursor-pointer" style={{ color: 'var(--t1)' }}>
+                          <input
+                            type="checkbox"
+                            checked={selectedFieldNames.includes(f.name)}
+                            onChange={() => toggleField(f.name)}
+                            className="w-4 h-4 mt-0.5 text-primary-600 border-gray-300 rounded"
+                          />
+                          <span>{f.header}</span>
+                        </label>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
               {selectedFieldNames.length === 0 && (
-                <p className="text-xs mt-2 text-red-500">Select at least one process data column.</p>
+                <p className="text-xs text-red-500">Select at least one process data column.</p>
               )}
             </div>
           )}
@@ -517,6 +654,11 @@ export default function ProcessDataRequisition() {
             <div className="flex-1">
               <h3 className="text-xl font-bold text-green-800 mb-2">Process Data Requisition Generated!</h3>
               <p className="text-green-700 mb-4">{result.message}</p>
+              {result.warnings && result.warnings.length > 0 && (
+                <ul className="list-disc pl-5 text-sm text-amber-700 mb-4 space-y-0.5">
+                  {result.warnings.map((w, i) => <li key={i}>{w}</li>)}
+                </ul>
+              )}
               <Button onClick={handleDownload} className="bg-green-600 hover:bg-green-700">
                 <Download className="w-5 h-5" />
                 Download {result.filename}

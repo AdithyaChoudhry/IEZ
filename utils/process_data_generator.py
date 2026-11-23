@@ -8,6 +8,7 @@ from datetime import datetime
 from .file_handler import workbook_to_bytes
 from .process_data_library import INSTRUMENT_TYPES, IDENTIFICATION_COLUMNS
 from .process_data_fields._types import FieldType, ProcessField
+from .process_data_profiles import resolve_fields, default_field_names
 
 _THIN = Side(style="thin", color="999999")
 _BORDER = Border(left=_THIN, right=_THIN, top=_THIN, bottom=_THIN)
@@ -46,14 +47,19 @@ def _resolve_fields(cfg, subtype, custom_fields, selected_fields=None):
     (list of dicts: {"parameter": str, "unit": str, ...}) instead of cfg.fields."""
     if cfg.is_custom:
         return [f for cf in (custom_fields or []) for f in _make_custom_fields(cf)]
-    result = []
-    for f in cfg.fields:
-        if f.subtype_only and subtype not in f.subtype_only:
-            continue
-        if selected_fields is not None and f.name not in selected_fields:
-            continue
-        result.append(f)
-    return result
+    # Verified profiles (process_data_profiles.py) give the annexure order and the datasheet units; a type without
+    # a profile keeps its own field order and units.
+    fields = resolve_fields(cfg, subtype)
+    if selected_fields is None:
+        return fields
+    wanted = set(selected_fields)                      # a name listed twice still produces one column
+    return [f for f in fields if f.name in wanted]
+
+
+def default_fields(cfg, subtype):
+    """Fields written when the caller does not send a selection: the verified profile's defaults (every field of a
+    type that has no verified profile - the behaviour before profiles existed)."""
+    return default_field_names(cfg, subtype)
 
 
 def column_header(f) -> str:

@@ -190,6 +190,26 @@ FLOW_TRANSMITTER_SUBTYPE_FIELDS = (
         options=("Rectangular", "Trapezoidal", "V-Notch", "Other"),
         subtype_only=("Open Channel",),
     ),
+    # --- fields that exist only on the datasheet ANNEXURE-I of a specific flow transmitter type -------------------
+    # (ULTRASONIC PARSHALL FLUME / FT-DP / THERMAL MASS / ULTRASONIC CLAMP ON). Shown only for that subtype.
+    ProcessField("Channel Material", field_type=FieldType.TEXT, subtype_only=("Ultrasonic Parshall Flume",)),
+    ProcessField("Height at Operating Flow", unit="mm", field_type=FieldType.NUMBER, subtype_only=("Ultrasonic Parshall Flume",)),
+    ProcessField("Height at Maximum Flow", unit="mm", field_type=FieldType.NUMBER, subtype_only=("Ultrasonic Parshall Flume",)),
+    ProcessField("Throat Width", unit="mm", field_type=FieldType.NUMBER, subtype_only=("Ultrasonic Parshall Flume",)),
+    ProcessField("Liquid Depth", unit="mm", field_type=FieldType.NUMBER, subtype_only=("Ultrasonic Parshall Flume",)),
+    ProcessField("Calibration Range", unit="Mtrs", field_type=FieldType.TEXT, subtype_only=("Ultrasonic Parshall Flume",)),
+    ProcessField("Instrument Range", field_type=FieldType.TEXT,           # unit comes from the profile (mmWC for DP, Mtrs for Parshall flume)
+                 subtype_only=("Differential Pressure", "Ultrasonic Parshall Flume")),
+    ProcessField("Differential Pressure Range", unit="mmWC", field_type=FieldType.TEXT, subtype_only=("Differential Pressure",)),
+    ProcessField("Viscosity", unit="Cp", field_type=FieldType.NUMBER,
+                 subtype_only=("Ultrasonic Parshall Flume", "Ultrasonic Clamp-On")),
+    ProcessField("Minimum Velocity", unit="m/s", field_type=FieldType.NUMBER, subtype_only=("Ultrasonic Clamp-On",)),
+    ProcessField("Normal Velocity", unit="m/s", field_type=FieldType.NUMBER, subtype_only=("Ultrasonic Clamp-On",)),
+    ProcessField("Maximum Velocity", unit="m/s", field_type=FieldType.NUMBER, subtype_only=("Ultrasonic Clamp-On",)),
+    ProcessField("Line Size / Material", field_type=FieldType.TEXT, subtype_only=("Ultrasonic Clamp-On",)),
+    ProcessField("Measuring Range", unit="m3/hr", field_type=FieldType.TEXT, subtype_only=("Ultrasonic Clamp-On",)),
+    ProcessField("Meter Range Minimum", unit="Nm3/hr", field_type=FieldType.NUMBER, subtype_only=("Thermal Mass",)),
+    ProcessField("Meter Range Maximum", unit="Nm3/hr", field_type=FieldType.NUMBER, subtype_only=("Thermal Mass",)),
 )
 
 FLOW_TRANSMITTER_FIELDS = FLOW_TRANSMITTER_GENERIC_FIELDS + FLOW_TRANSMITTER_SUBTYPE_FIELDS
@@ -208,7 +228,8 @@ FLOW_TRANSMITTER = InstrumentTypeConfig(
         "DIFFERENTIAL PRESSURE FLOW TRANSMITTER",
     ),
     tag_prefixes=("FIT", "FT"),
-    subtypes=("Magnetic", "Coriolis", "Ultrasonic", "Vortex", "Differential Pressure", "Open Channel", "Other"),
+    subtypes=("Magnetic", "Coriolis", "Ultrasonic", "Vortex", "Differential Pressure", "Open Channel",
+              "Thermal Mass", "Ultrasonic Clamp-On", "Ultrasonic Parshall Flume", "Other"),
     subtype_field_name="FLOW METER TYPE",
     fields=FLOW_TRANSMITTER_FIELDS,
 )
@@ -328,6 +349,8 @@ PRESSURE_TRANSMITTER_GENERIC_FIELDS = (
     ProcessField("Remote Seal Required", field_type=FieldType.BOOLEAN),
     ProcessField("Capillary Requirement / Constraint", field_type=FieldType.TEXT),
     ProcessField("Remarks", field_type=FieldType.TEXT),
+    ProcessField("Instrument Range", unit="Kg/cm2 g", field_type=FieldType.TEXT),
+    ProcessField("Calibrated Range", unit="Kg/cm2 g", field_type=FieldType.TEXT),
 )
 
 PRESSURE_TRANSMITTER_DP_FIELDS = (

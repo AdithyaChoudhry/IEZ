@@ -9,7 +9,7 @@ from ..deps import get_current_user
 from ..auth.models import User
 from ..models.process_data import (
     InstrumentTypeOption, InstrumentTypesResponse, MatchedTag, ProcessFieldOption,
-    ProcessDataMatchResponse, ProcessDataGenerateResponse,
+    ProcessDataMatchResponse, ProcessDataGenerateResponse, ProcessProfileResponse,
 )
 
 # Import existing business logic
@@ -18,7 +18,8 @@ sys.path.insert(0, '/app')
 from utils.file_handler import read_iodb
 from utils.process_data_library import INSTRUMENT_TYPES
 from utils.process_data_matcher import match_tags, build_prefill_values, all_tags
-from utils.process_data_generator import generate_process_data_requisition
+from utils.process_data_generator import generate_process_data_requisition, column_header
+from utils.process_data_profiles import PROFILES, resolve_fields, default_field_names, profile_info
 
 
 router = APIRouter(prefix="/process-data", tags=["Process Data Requisition"])
@@ -29,16 +30,47 @@ IDENTIFICATION_COLUMNS = ["S.NO", "TAG NO", "EQUIPMENT DESCRIPTION", "P&ID NO.",
                           "SERVICE", "EQUIPMENT NO", "LINE", "LINE SIZE"]
 
 
+def _field_options(cfg, subtype):
+    return [ProcessFieldOption(
+        name=f.name, header=column_header(f), mandatory=f.mandatory, unit=f.unit, category=f.category,
+        default_selected=f.default_selected, source_annexure_label=f.annexure_label,
+        field_type=f.field_type.value, options=list(f.options))
+        for f in resolve_fields(cfg, subtype)]
+
+
+def _check_subtype(cfg, subtype):
+    if subtype and subtype not in cfg.subtypes:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                             detail=f"Unknown subtype '{subtype}' for {cfg.label}.")
+
+
 @router.get("/instrument-types", response_model=InstrumentTypesResponse)
 async def list_instrument_types(current_user: User = Depends(get_current_user)):
     options = [
         InstrumentTypeOption(
             key=cfg.key, label=cfg.label, category=cfg.category,
             subtypes=list(cfg.subtypes),
+            verified_subtypes=sorted(st for (t, st) in PROFILES if t == cfg.key),
         )
         for cfg in INSTRUMENT_TYPES.values()
     ]
     return InstrumentTypesResponse(instrument_types=options)
+
+
+@router.get("/profile", response_model=ProcessProfileResponse)
+async def get_profile_endpoint(instrument_type: str, subtype: Optional[str] = None,
+                               current_user: User = Depends(get_current_user)):
+    """The parameters of one instrument type / subtype: every available field with its unit and category, and
+    which of them the verified datasheet profile selects by default. The backend configuration is authoritative."""
+    cfg = INSTRUMENT_TYPES.get(instrument_type)
+    if cfg is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Unknown instrument type: {instrument_type}")
+    _check_subtype(cfg, subtype)
+    if cfg.is_custom:
+        return ProcessProfileResponse(instrument_type=instrument_type, subtype=subtype or "")
+    return ProcessProfileResponse(instrument_type=instrument_type, subtype=subtype or "",
+                                  fields=_field_options(cfg, subtype),
+                                  default_fields=default_field_names(cfg, subtype), **profile_info(cfg, subtype))
 
 
 @router.post("/match-tags", response_model=ProcessDataMatchResponse)
@@ -78,9 +110,9 @@ async def match_tags_endpoint(
             detail=f"No matching {cfg.label} tags were found in the IODB.",
         )
 
-    from utils.process_data_generator import _resolve_fields, column_header
-    fields = _resolve_fields(cfg, subtype, None)
-    process_columns = [column_header(f) for f in fields]
+    _check_subtype(cfg, subtype)
+    options = _field_options(cfg, subtype)
+    process_columns = [o.header for o in options]
 
     return ProcessDataMatchResponse(
         instrument_type=instrument_type,
@@ -88,7 +120,8 @@ async def match_tags_endpoint(
         tag_count=len(matched_rows),
         identification_columns=IDENTIFICATION_COLUMNS,
         process_columns=process_columns,
-        process_fields=[ProcessFieldOption(name=f.name, header=column_header(f), mandatory=f.mandatory) for f in fields],
+        process_fields=options,
+        default_fields=default_field_names(cfg, subtype),
         warnings=warnings,
     )
 
@@ -133,6 +166,7 @@ async def generate_process_data(
             detail="At least one custom process-data field must be defined before generating.",
         )
 
+    _check_subtype(cfg, subtype)
     selected_fields_list = None
     if selected_fields and not cfg.is_custom:
         try:
@@ -142,14 +176,19 @@ async def generate_process_data(
         except Exception as e:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
                                  detail=f"Invalid selected_fields format: {e}")
-        valid = {f.name for f in cfg.fields}
+        valid = {f.name for f in resolve_fields(cfg, subtype)}
         unknown = [x for x in selected_fields_list if x not in valid]
         if unknown:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
-                                 detail=f"Unknown process data column(s): {', '.join(unknown[:5])}")
+                                 detail=f"Unknown process data column(s) for {cfg.label}"
+                                        f"{' / ' + subtype if subtype else ''}: {', '.join(unknown[:5])}")
+        selected_fields_list = list(dict.fromkeys(selected_fields_list))        # no duplicate columns
         if not selected_fields_list:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
                                  detail="Select at least one process data column to request.")
+    elif not cfg.is_custom:
+        # No selection sent: the verified profile's defaults (all fields for a type without a verified profile).
+        selected_fields_list = default_field_names(cfg, subtype)
 
     iodb_bytes = await iodb_file.read()
     df, err = read_iodb(io.BytesIO(iodb_bytes))
@@ -170,8 +209,9 @@ async def generate_process_data(
     if not matched_rows:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
                              detail="None of the selected tags matched the IODB.")
+    notes: list = []
     prefill = ([{} for _ in matched_rows] if cfg.is_custom
-               else build_prefill_values(df, matched_rows, instrument_type, use_iodb_values))
+               else build_prefill_values(df, matched_rows, instrument_type, use_iodb_values, subtype=subtype, notes=notes))
 
     project_name = project_id or "Project"
     out_bytes, filename = generate_process_data_requisition(
@@ -188,6 +228,7 @@ async def generate_process_data(
     return ProcessDataGenerateResponse(
         filename=filename,
         message=f"Process Data Requisition generated: {len(matched_rows)} {cfg.label} tag(s).",
+        warnings=list(dict.fromkeys(notes)),
     )
 
 

@@ -17,8 +17,11 @@ from typing import Any, Optional
 # type key -> subtype -> aliases (whole-word, punctuation-insensitive). A subtype without aliases is never matched automatically.
 SUBTYPE_RULES: dict = {
     "level_transmitter": {
-        "Guided Wave Radar": ["GUIDED WAVE RADAR", "GUIDED RADAR", "GWR"],
-        "Non-Contact Radar": ["NON CONTACT RADAR", "NONCONTACT RADAR", "CONTACTLESS RADAR", "NON CONTACTING RADAR"],
+        # Project convention: a plain "Radar Level Transmitter" is the non-contact type; guided wave radar is always named as such.
+        "Guided Wave Radar": ["GUIDED WAVE RADAR", "GUIDED WAVE RADAR LEVEL", "GUIDED WAVE RADAR LEVEL TRANSMITTER", "GUIDED RADAR",
+                              "GUIDED RADAR LEVEL", "GUIDED RADAR LEVEL TRANSMITTER", "GWR", "GWR LEVEL", "GWR LEVEL TRANSMITTER"],
+        "Non-Contact Radar": ["NON CONTACT RADAR", "NONCONTACT RADAR", "CONTACTLESS RADAR", "NON CONTACTING RADAR",
+                              "RADAR LEVEL TRANSMITTER", "RADAR LEVEL"],
         "Ultrasonic": ["ULTRASONIC LEVEL", "ULTRASONIC LEVEL TRANSMITTER"],
         "DP Type (Open Tank)": ["DP LEVEL OPEN TANK", "DIFFERENTIAL PRESSURE LEVEL OPEN TANK", "DP TYPE OPEN TANK"],
         "DP Type (Pressurized Tank)": ["DP LEVEL PRESSURIZED TANK", "DIFFERENTIAL PRESSURE LEVEL PRESSURIZED TANK",

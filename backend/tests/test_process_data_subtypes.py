@@ -49,20 +49,24 @@ def tags(rows):
 def test_non_contact_radar_shows_only_non_contact_radar_tags():
     df = iodb(LEVELS)
     r = M.match_tags_detailed(df, "level_transmitter", "Non-Contact Radar")
-    assert tags(r["matched"]) == ["LT-001", "LT-005"]                       # exactly the two verified ones
-    assert tags(r["unresolved"]) == ["LT-006", "LT-007"]                    # generic radar / no technology: reviewed, never guessed
+    assert tags(r["matched"]) == ["LT-001", "LT-005", "LT-006"]             # named non-contact, and the plain "Radar Level Transmitter"
+    assert tags(r["unresolved"]) == ["LT-007"]                              # no technology at all: reviewed, never guessed
     assert r["excluded"] == {"Ultrasonic": 1, "Guided Wave Radar": 1, "Submersible": 1}
 
 
-@pytest.mark.parametrize("subtype,expected", [("Guided Wave Radar", ["LT-003"]), ("Ultrasonic", ["LT-002"]), ("Non-Contact Radar", ["LT-001", "LT-005"]),
+@pytest.mark.parametrize("subtype,expected", [("Guided Wave Radar", ["LT-003"]), ("Ultrasonic", ["LT-002"]), ("Non-Contact Radar", ["LT-001", "LT-005", "LT-006"]),
                                               ("DP Type (Open Tank)", []), ("DP Type (Pressurized Tank)", [])])
 def test_each_level_subtype_shows_only_its_own_tags(subtype, expected):
     assert tags(M.match_tags_detailed(iodb(LEVELS), "level_transmitter", subtype)["matched"]) == expected
 
 
-def test_radar_wording_alone_never_decides_between_non_contact_and_guided_wave():
-    c = classify("level_transmitter", {"INSTRUMENT TYPE NAME": "Radar Level Transmitter"}, subtype_columns(["INSTRUMENT TYPE NAME"]))
-    assert c["subtype"] is None and "non-contact or guided wave" in c["reason"]
+def test_plain_radar_is_non_contact_and_guided_wave_must_be_named():
+    cols = subtype_columns(["INSTRUMENT TYPE NAME"])
+    plain = classify("level_transmitter", {"INSTRUMENT TYPE NAME": "Radar Level Transmitter"}, cols)
+    assert plain["subtype"] == "Non-Contact Radar"                                          # the project's convention
+    gwr = classify("level_transmitter", {"INSTRUMENT TYPE NAME": "Guided Wave Radar Level Transmitter"}, cols)
+    assert gwr["subtype"] == "Guided Wave Radar"                                            # "radar level" inside it does not make it non-contact
+    assert classify("level_transmitter", {"INSTRUMENT TYPE NAME": "Level Transmitter"}, cols)["subtype"] is None
     # the tag prefix decides nothing
     df = iodb([("LIT-1", "Level Transmitter")])
     assert tags(M.match_tags_detailed(df, "level_transmitter", "Non-Contact Radar")["matched"]) == []
@@ -70,7 +74,7 @@ def test_radar_wording_alone_never_decides_between_non_contact_and_guided_wave()
 
 def test_an_explicit_subtype_column_is_the_first_evidence():
     df = iodb([("LT-1", "Radar Level Transmitter", "Non-Contact Radar"), ("LT-2", "Radar Level Transmitter", "Guided Wave Radar"),
-               ("LT-3", "Radar Level Transmitter", "")], extra=["INSTRUMENT SUBTYPE"])
+               ("LT-3", "Level Transmitter", "")], extra=["INSTRUMENT SUBTYPE"])
     assert tags(M.match_tags_detailed(df, "level_transmitter", "Non-Contact Radar")["matched"]) == ["LT-1"]
     assert tags(M.match_tags_detailed(df, "level_transmitter", "Guided Wave Radar")["matched"]) == ["LT-2"]
     assert tags(M.match_tags_detailed(df, "level_transmitter", "Guided Wave Radar")["unresolved"]) == ["LT-3"]
@@ -130,8 +134,8 @@ def test_match_tags_endpoint_returns_only_the_selected_subtype_and_the_review_li
     r = match(api, iodb(LEVELS), "level_transmitter", "Non-Contact Radar")
     assert r.status_code == 200, r.text
     b = r.json()
-    assert [t["tag_no"] for t in b["matched_tags"]] == ["LT-001", "LT-005"] and b["tag_count"] == 2 and b["subtype"] == "Non-Contact Radar"
-    assert [t["tag_no"] for t in b["unresolved_tags"]] == ["LT-006", "LT-007"] and all(t["reason"] for t in b["unresolved_tags"])
+    assert [t["tag_no"] for t in b["matched_tags"]] == ["LT-001", "LT-005", "LT-006"] and b["tag_count"] == 3 and b["subtype"] == "Non-Contact Radar"
+    assert [t["tag_no"] for t in b["unresolved_tags"]] == ["LT-007"] and all(t["reason"] for t in b["unresolved_tags"])
     assert b["excluded_counts"]["Ultrasonic"] == 1
     assert any("not placed in" in w for w in b["warnings"])
     # a subtype with nothing established still answers (200) - the records are offered for review
@@ -153,7 +157,7 @@ def test_generate_refuses_tags_of_another_subtype_but_accepts_explicit_review_pi
     assert gen(["LT-001", "LT-005"]).status_code == 200
     ws = load_workbook(io.BytesIO(api.get("/api/process-data/download").content))["PROCESS DATA REQUISITION"]
     assert [row[1].value for row in ws.iter_rows(min_row=6, max_row=ws.max_row)] == ["LT-001", "LT-005"]
-    assert gen(["LT-001", "LT-006"]).status_code == 200              # LT-006 (generic radar) added explicitly by the engineer
+    assert gen(["LT-001", "LT-007"]).status_code == 200              # LT-007 (no technology stated) added explicitly by the engineer
 
 
 # ── Requirement 2: All Instrument Types ──────────────────────────────────────
@@ -172,12 +176,12 @@ def detect(api, df):
 def test_all_types_detects_groups_counts_and_reports_what_it_cannot_classify(api):
     d = detect(api, iodb(MIX))
     groups = {g["label"]: g for g in d["groups"]}
-    assert groups["Level Transmitter - Non-Contact Radar"]["count"] == 1 and groups["Level Transmitter - Ultrasonic"]["count"] == 1
+    assert groups["Level Transmitter - Non-Contact Radar"]["count"] == 2 and groups["Level Transmitter - Ultrasonic"]["count"] == 1   # LT-001 + plain radar LT-003
     assert groups["Pressure Transmitter - Standard"]["count"] == 2                          # PT-001 listed twice counts once
     assert groups["Pressure Transmitter - Differential Pressure"]["count"] == 1 and groups["Flow Switch"]["count"] == 2
     review = [g for g in d["groups"] if g["needs_review"]]
-    assert {g["type_key"] for g in review} == {"level_transmitter", "temperature_transmitter"} and all(g["reason"] or g["tags"][0]["reason"] for g in review)
-    assert d["eligible_tags"] == 1 + 1 + 2 + 1 + 2 and d["review_tags"] == 2 and d["types_found"] == 3
+    assert {g["type_key"] for g in review} == {"temperature_transmitter"} and all(g["reason"] or g["tags"][0]["reason"] for g in review)
+    assert d["eligible_tags"] == 2 + 1 + 2 + 1 + 2 and d["review_tags"] == 1 and d["types_found"] == 3
     assert {u["name"]: u["count"] for u in d["unsupported"]} == {"Motor - DOL": 2, "Pneumatic On/Off Valve": 1}      # never forced into a type
     assert all(u["reason"] for u in d["unsupported"])
     assert not any(t["tag_no"] in ("M-001", "XV-001") for g in d["groups"] for t in g["tags"])
@@ -201,7 +205,7 @@ def test_all_types_generates_one_workbook_with_a_sheet_and_its_own_parameters_pe
     pt = next(v for k, v in by_label.items() if "Pressure Transmitter (Standard)" in k)
     assert fs[2] == ["FS-001", "FS-002"] and "Flow Setpoint (lpm)" in fs[1] and "Flow Setpoint (lpm)" not in pt[1]    # each type keeps its own columns
     assert pt[2] == ["PT-001", "PT-002"] and "Normal Operating Pressure (Kg/cm2 g)" in pt[1] and "Viscosity (Cp)" not in pt[1]
-    assert not any(t in ("M-001", "XV-001", "LT-003", "TT-001") for _t, _h, tg in by_label.values() for t in tg)       # only the selected groups / tags
+    assert not any(t in ("M-001", "XV-001", "TT-001") for _t, _h, tg in by_label.values() for t in tg)                 # only the selected groups / tags
     defs = wb["FIELD DEFINITIONS"]
     assert defs["A1"].value == "Instrument Type" and {defs.cell(r, 1).value for r in range(2, defs.max_row + 1)} >= {"Flow Switch", "Level Transmitter - Ultrasonic"}
 

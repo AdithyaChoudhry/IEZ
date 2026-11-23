@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 A, B, C, R = "A", "B", "C", "R"
+NO_UNIT = "-"      # the datasheet variants print different units, so none is shown until a subtype is chosen
 EXISTS_DEFAULT, EXISTS_OPTIONAL, ADD_NEW_FIELD = "EXISTS_DEFAULT", "EXISTS_OPTIONAL", "ADD_NEW_FIELD"
 UNIT_REVIEW, MAPPING_REVIEW, REFERENCE_ONLY, NOT_APPLICABLE = "UNIT_REVIEW", "MAPPING_REVIEW", "REFERENCE_ONLY", "NOT_APPLICABLE"
 
@@ -270,6 +271,74 @@ _register(Profile("level_gauge", "Reflex", "LG-REFLEX TYPE-R0.xls", "ANNEXURE-I"
     "This annexure has no viscosity column, so viscosity is not part of the Reflex profile."))
 
 
+# ── 11. Level transmitter - Guided Wave Radar / Non-Contact Radar / Ultrasonic ─────────────────────────
+_LT_PRESSURE = ("Process Pressure Min", "Process Pressure Normal", "Process Pressure Max")
+_LT_TEMP = ("Process Temperature Min", "Process Temperature Normal", "Process Temperature Max")
+_LT_UNIT = ("existing field is configured in kg/cm2; the datasheet prints Kg/Cm2 g - the datasheet unit is used, "
+            "no conversion is applied")
+
+
+def _lt_profile(subtype, template, height_unit, height_label, dia_label, tail):
+    """The three level transmitter annexures share the process columns; they differ in the tank-dimension unit
+    (mtrs on the guided-wave radar, mm on the others) and in their trailing instrument columns."""
+    h_note = f"existing field is configured in m; this datasheet prints {height_unit}"
+    return Profile("level_transmitter", subtype, template, "ANNEXURE-I", (
+        SL, TAG, TYPE_REF, PID, *_fluid(True), SERVICE_ID, LOCATION, AREA,
+        *_one("SPECIFIC GRAVITY", "", "Specific Gravity", A, EXISTS_DEFAULT, True),
+        *_one("VISCOSITY (cP)", "cP", "Viscosity", A, ADD_NEW_FIELD, True,
+              "existing Level Transmitter had density but no viscosity field"),
+        *_trio("PRESSURE(Kg/Cm2 g)", "Kg/Cm2 g", _LT_PRESSURE, UNIT_REVIEW, note=_LT_UNIT),
+        *_trio("TEMPERATURE(°C)", "°C", _LT_TEMP, EXISTS_DEFAULT),
+        *_one("TANK TAG NO", "", "Tank Tag Number", B, ADD_NEW_FIELD, note="may come from process, mechanical or equipment engineering"),
+        *_one("TANK TYPE", "", "Tank Type", B, ADD_NEW_FIELD),
+        *_one("TANK MOC", "", "Tank MOC", B, ADD_NEW_FIELD, True,
+              "selected by default at the engineer's request - tank material is needed with the process data"),
+        *_one(height_label, height_unit, "Tank / Vessel Height", B, UNIT_REVIEW if height_unit != "m" else EXISTS_DEFAULT, True,
+              h_note + "; selected by default at the engineer's request"),
+        *_one(dia_label, height_unit, "Tank / Vessel Diameter", B, UNIT_REVIEW if height_unit != "m" else EXISTS_OPTIONAL, False, h_note),
+        *_one("PRESENCE OF AGITATION", "", "Agitation", A, EXISTS_DEFAULT, True),
+        *_one("PRESENCE OF FUMES", "", "Presence of Fumes", A, EXISTS_DEFAULT, True),
+        *tail,
+        MODEL, *_remarks()))
+
+
+_register(_lt_profile("Guided Wave Radar", "LT Guided Wave Radar-R0.Xls", "mtrs", "TANK HEIGHT (mtrs)", "TANK DIAMETER(mtrs)", (
+    *_one("PROCESS CONNECTION", "", "Process Connection", B, ADD_NEW_FIELD),
+    *_one("CALIBRATION RANGE (mm)", "mm", "Calibration Range", B, ADD_NEW_FIELD),
+    *_one("INSTRUMENT RANGE (mm)", "mm", "Instrument Range", B, ADD_NEW_FIELD))))
+_NOZZLE_TAIL = (
+    *_one("NOZZLE SIZE(NB)", "NB", "Nozzle Size", B, UNIT_REVIEW, note="existing field is configured in inches; the datasheet prints NB"),
+    *_one("NOZZLE HEIGHT(mm)", "mm", "Nozzle Height", B, ADD_NEW_FIELD),
+    *_one("MAX FLUID LEVEL(mm)", "mm", "Max Fluid Level", B, ADD_NEW_FIELD),
+    *_one("PROCESS CONNECTION FLANGE SIZE", "", "Process Connection Flange Size", B, ADD_NEW_FIELD),
+    *_one("CALIBRATION RANGE (mm)", "mm", "Calibration Range", B, ADD_NEW_FIELD),
+    *_one("INSTRUMENT RANGE (mm)", "mm", "Instrument Range", B, ADD_NEW_FIELD))
+_register(_lt_profile("Non-Contact Radar", "LT Non contact Radar Type-R0-1.xls", "mm", "TANK HEIGHT (mm)", "TANK DIAMETER(mm)", _NOZZLE_TAIL))
+_register(_lt_profile("Ultrasonic", "LT Ultrasonic TypeR0.xls", "mm", "TANK HEIGHT (mm)", "TANK DIAMETER(mm)", _NOZZLE_TAIL))
+
+# No subtype chosen: the process columns the three annexures have in common. The tank dimensions are printed in
+# different units (mtrs / mm), so their unit is left out until a subtype is chosen.
+_register(Profile("level_transmitter", "",
+                  "LT Guided Wave Radar-R0.Xls / LT Non contact Radar Type-R0-1.xls / LT Ultrasonic TypeR0.xls", "ANNEXURE-I", (
+    *_fluid(True),
+    *_one("SPECIFIC GRAVITY", "", "Specific Gravity", A, EXISTS_DEFAULT, True),
+    *_one("VISCOSITY (cP)", "cP", "Viscosity", A, ADD_NEW_FIELD, True),
+    *_trio("PRESSURE(Kg/Cm2 g)", "Kg/Cm2 g", _LT_PRESSURE, UNIT_REVIEW, note=_LT_UNIT),
+    *_trio("TEMPERATURE(°C)", "°C", _LT_TEMP, EXISTS_DEFAULT),
+    *_one("TANK TAG NO", "", "Tank Tag Number", B, ADD_NEW_FIELD),
+    *_one("TANK TYPE", "", "Tank Type", B, ADD_NEW_FIELD),
+    *_one("TANK MOC", "", "Tank MOC", B, ADD_NEW_FIELD, True),
+    *_one("TANK HEIGHT", NO_UNIT, "Tank / Vessel Height", B, UNIT_REVIEW, True,
+          "the datasheets print mtrs (guided wave radar) or mm (others); choose a subtype to show the unit"),
+    *_one("TANK DIAMETER", NO_UNIT, "Tank / Vessel Diameter", B, UNIT_REVIEW, False,
+          "the datasheets print mtrs (guided wave radar) or mm (others); choose a subtype to show the unit"),
+    *_one("PRESENCE OF AGITATION", "", "Agitation", A, EXISTS_DEFAULT, True),
+    *_one("PRESENCE OF FUMES", "", "Presence of Fumes", A, EXISTS_DEFAULT, True),
+    *_remarks()),
+    "Select a subtype (Guided Wave Radar / Non-Contact Radar / Ultrasonic) for the unit-specific datasheet profile. "
+    "The differential-pressure level transmitters (LT-DP Type datasheets) have a different annexure and are not configured."))
+
+
 # ── lookup / resolution ─────────────────────────────────────────────────────
 def get_profile(type_key: str, subtype: Optional[str] = None) -> Optional[Profile]:
     return PROFILES.get((type_key, subtype or "")) or (PROFILES.get((type_key, "")) if not subtype else None)
@@ -294,12 +363,12 @@ def resolve_fields(cfg, subtype: Optional[str] = None) -> list:
         if f is None or f.name in used:
             continue
         used.add(f.name)
-        out.append(dataclasses.replace(f, unit=h.unit or f.unit, category="process" if h.cls == A else "additional",
+        out.append(dataclasses.replace(f, unit=("" if h.unit == NO_UNIT else (h.unit or f.unit)), category="process" if h.cls == A else "additional",
                                        default_selected=h.default, annexure_label=h.label))
     for f in base:
         if f.name not in used:
             out.append(dataclasses.replace(f, category="additional", default_selected=False))
-    return out
+    return [f for f in out if f.name != "Remarks"] + [f for f in out if f.name == "Remarks"]      # Remarks stays last
 
 
 def default_field_names(cfg, subtype: Optional[str] = None) -> list:

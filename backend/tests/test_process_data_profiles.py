@@ -28,6 +28,11 @@ TEN = [
     ("level_gauge", "Magnetic", "LG-Magnetic Type-R0.xls"),
     ("level_gauge", "Reflex", "LG-REFLEX TYPE-R0.xls"),
 ]
+LEVEL_TX = [
+    ("level_transmitter", "Guided Wave Radar", "LT Guided Wave Radar-R0.Xls"),
+    ("level_transmitter", "Non-Contact Radar", "LT Non contact Radar Type-R0-1.xls"),
+    ("level_transmitter", "Ultrasonic", "LT Ultrasonic TypeR0.xls"),
+]
 
 # Default parameters per profile, taken from the verified ANNEXURE-I of each datasheet (header = name + printed unit).
 _P = ["Minimum Operating Pressure (Kg/cm2 g)", "Normal Operating Pressure (Kg/cm2 g)", "Maximum Operating Pressure (Kg/cm2 g)"]
@@ -64,6 +69,19 @@ EXPECTED = {
                                   "Presence of Agitation", "Presence of Fumes"],
     ("level_gauge", "Reflex"): ["Process Fluid", "Specific Gravity", *_LGP, *_LGT, "Presence of Agitation", "Presence of Fumes"],
 }
+_LTP = ["Process Pressure Min (Kg/Cm2 g)", "Process Pressure Normal (Kg/Cm2 g)", "Process Pressure Max (Kg/Cm2 g)"]
+_LTT = ["Process Temperature Min (°C)", "Process Temperature Normal (°C)", "Process Temperature Max (°C)"]
+
+
+def _lt(height_unit):
+    h = f"Tank / Vessel Height ({height_unit})" if height_unit else "Tank / Vessel Height"
+    return ["Process Fluid", "Specific Gravity", "Viscosity (cP)", *_LTP, *_LTT, "Tank MOC", h, "Agitation", "Presence of Fumes"]
+
+
+# Level transmitter: pressure, temperature, tank MOC and tank height are selected (the engineer's request), together with
+# the other process columns of the annexure; the tank-height unit is the printed one (none until a subtype is chosen).
+EXPECTED.update({("level_transmitter", ""): _lt(""), ("level_transmitter", "Guided Wave Radar"): _lt("mtrs"),
+                 ("level_transmitter", "Non-Contact Radar"): _lt("mm"), ("level_transmitter", "Ultrasonic"): _lt("mm")})
 
 
 def _iodb_df():
@@ -133,7 +151,7 @@ def _sheet(api):
 
 
 # ── Test 1: default field selection for all ten datasheets ──────────────────
-@pytest.mark.parametrize("key,subtype,_file", TEN)
+@pytest.mark.parametrize("key,subtype,_file", TEN + LEVEL_TX)
 def test_default_selection_is_the_verified_annexure_profile(api, key, subtype, _file):
     p = _profile(api, key, subtype)
     assert p["verified"] and p["template"] == _file and p["sheet"] == "ANNEXURE-I"
@@ -163,7 +181,7 @@ def _annexure_labels(path):
     raise AssertionError(f"no SL.No. heading row in {path}")
 
 
-@pytest.mark.parametrize("key,subtype,filename", TEN + [("pressure_transmitter", "Standard", "PRESSURE TRANSMITTER-R0.xls")])
+@pytest.mark.parametrize("key,subtype,filename", TEN + LEVEL_TX + [("pressure_transmitter", "Standard", "PRESSURE TRANSMITTER-R0.xls")])
 def test_profile_headings_match_the_original_datasheet(key, subtype, filename):
     path = ROOT / filename
     if not path.exists():
@@ -191,7 +209,10 @@ def test_comparison_actions_agree_with_the_configuration():
         names = {f.name for f in resolve_fields(cfg, r["subtype"] or None)}
         assert r["field"] in names, r            # every mapped heading exists in the generator configuration
         if r["default"]:
-            assert r["classification"] == "Process", r   # only process data is selected by default
+            # only process data is selected by default; the two tank fields of the level transmitter are the engineer's
+            # explicit request and say so in their note
+            assert r["classification"] == "Process" or "engineer's request" in r["note"] or (
+                r["type"] == "level_transmitter" and r["field"] in ("Tank MOC", "Tank / Vessel Height")), r
 
 
 def test_distinct_engineering_quantities_stay_separate():
@@ -272,12 +293,10 @@ def test_defaults_are_stable_and_each_type_has_its_own(api):
 
 
 def test_types_without_a_verified_profile_keep_their_behaviour(api):
-    p = _profile(api, "level_transmitter")
-    assert not p["verified"] and len(p["fields"]) == 49 and len(p["default_fields"]) == 49
+    p = _profile(api, "temperature_gauge")
+    assert not p["verified"] and len(p["default_fields"]) == len(p["fields"])
     assert _profile(api, "flow_transmitter", "Vortex")["verified"] is False
     assert len(_profile(api, "flow_transmitter", "Vortex")["default_fields"]) == len(_profile(api, "flow_transmitter", "Vortex")["fields"])
-    g = _generate(api, "level_transmitter", tags=["200-LIT-001"])
-    assert g.status_code == 400 or g.status_code == 200      # no LIT tag in this IODB is fine - matching is unchanged
 
 
 # ── Test 7: engineering units ───────────────────────────────────────────────
@@ -374,3 +393,35 @@ def test_existing_selected_fields_flow_still_works(api):
     assert set(ft["verified_subtypes"]) == {"Differential Pressure", "Thermal Mass", "Ultrasonic Clamp-On", "Ultrasonic Parshall Flume"}
     assert api.get("/api/process-data/profile", params={"instrument_type": "nope"}).status_code == 400
     assert api.get("/api/process-data/profile", params={"instrument_type": "flow_switch", "subtype": "x"}).status_code == 400
+
+
+def test_level_transmitter_selects_only_the_important_parameters_by_default(api):
+    """Reported case: every one of the 49 Level Transmitter parameters came up selected."""
+    for st in ("", "Guided Wave Radar", "Non-Contact Radar", "Ultrasonic"):
+        p = _profile(api, "level_transmitter", st)
+        assert p["verified"] and len(p["default_fields"]) == 13 and len(p["fields"]) > 13
+        d = set(p["default_fields"])
+        assert {"Process Pressure Min", "Process Pressure Max", "Process Temperature Min", "Tank / Vessel Height", "Tank MOC"} <= d
+        assert not {"Tank Tag Number", "Tank Type", "Tank / Vessel Diameter", "Instrument Range", "Calibration Range", "Design Flow",
+                    "Minimum Level", "Remarks", "Hazardous Area"} & d
+    # generate with no selection sent -> only the 13 defaults
+    df = _iodb_df()
+    g = api.post("/api/process-data/generate", data={"instrument_type": "level_transmitter", "selected_tags": '["x"]'},
+                 files={"iodb_file": ("i.xlsx", _iodb_bytes(pd.DataFrame({"TAG NO": ["200-LIT-1"], "EQUIPMENT DESCRIPTION": ["LT"], "P&ID NO.": ["P"],
+                                                                         "INSTRUMENT TYPE NAME": ["Level Transmitter"]})))})
+    assert g.status_code == 400                                   # 'x' is not a tag
+    g = api.post("/api/process-data/generate", data={"instrument_type": "level_transmitter", "selected_tags": '["200-LIT-1"]'},
+                 files={"iodb_file": ("i.xlsx", _iodb_bytes(pd.DataFrame({"TAG NO": ["200-LIT-1"], "EQUIPMENT DESCRIPTION": ["LT"], "P&ID NO.": ["P"],
+                                                                         "INSTRUMENT TYPE NAME": ["Level Transmitter"]})))})
+    assert g.status_code == 200, g.text
+    _, headers = _sheet(api)
+    assert headers == EXPECTED[("level_transmitter", "")] and len(headers) == 13
+
+
+def test_iodb_without_type_name_columns_still_matches_by_tag_prefix(api):
+    """The 'Column not found ... INSTRUMENT TYPE NAME' warning: tags are then matched on the TAG NO prefix (LIT / LT)."""
+    iodb = pd.DataFrame({"TAG NO": ["200-LIT-1", "200-FIT-1"], "EQUIPMENT DESCRIPTION": ["a", "b"], "P&ID NO.": ["P", "P"]})
+    r = api.post("/api/process-data/match-tags", data={"instrument_type": "level_transmitter"}, files={"file": ("i.xlsx", _iodb_bytes(iodb))})
+    assert r.status_code == 200
+    assert [t["tag_no"] for t in r.json()["matched_tags"]] == ["200-LIT-1"]
+    assert any("INSTRUMENT TYPE NAME" in w for w in r.json()["warnings"])

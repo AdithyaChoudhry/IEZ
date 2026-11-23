@@ -81,6 +81,20 @@ LEVEL_TRANSMITTER_FIELDS = (
     ProcessField("Hazardous Area", field_type=FieldType.BOOLEAN),
     ProcessField("Corrosive / Aggressive Service", field_type=FieldType.BOOLEAN),
     ProcessField("Remarks", field_type=FieldType.TEXT),
+    # --- fields printed on the datasheet ANNEXURE-I of the Guided Wave Radar / Non-Contact Radar / Ultrasonic level
+    # transmitters (see process_data_profiles.py) ------------------------------------------------------------------
+    ProcessField("Viscosity", unit="cP", field_type=FieldType.NUMBER),
+    ProcessField("Tank Tag Number", field_type=FieldType.TEXT),
+    ProcessField("Tank Type", field_type=FieldType.TEXT),
+    ProcessField("Tank MOC", field_type=FieldType.TEXT),
+    ProcessField("Process Connection", field_type=FieldType.TEXT, subtype_only=("Guided Wave Radar",)),
+    ProcessField("Nozzle Height", unit="mm", field_type=FieldType.NUMBER, subtype_only=("Non-Contact Radar", "Ultrasonic")),
+    ProcessField("Max Fluid Level", unit="mm", field_type=FieldType.NUMBER, subtype_only=("Non-Contact Radar", "Ultrasonic")),
+    ProcessField("Process Connection Flange Size", field_type=FieldType.TEXT, subtype_only=("Non-Contact Radar", "Ultrasonic")),
+    ProcessField("Calibration Range", unit="mm", field_type=FieldType.TEXT,
+                 subtype_only=("Guided Wave Radar", "Non-Contact Radar", "Ultrasonic")),
+    ProcessField("Instrument Range", unit="mm", field_type=FieldType.TEXT,
+                 subtype_only=("Guided Wave Radar", "Non-Contact Radar", "Ultrasonic")),
 )
 
 LEVEL_TRANSMITTER = InstrumentTypeConfig(
@@ -97,6 +111,8 @@ LEVEL_TRANSMITTER = InstrumentTypeConfig(
         "CAPACITANCE LEVEL TRANSMITTER",
     ),
     tag_prefixes=("LIT", "LT"),
+    subtypes=("Guided Wave Radar", "Non-Contact Radar", "Ultrasonic"),
+    subtype_field_name="LEVEL TRANSMITTER TYPE",
     fields=LEVEL_TRANSMITTER_FIELDS,
 )
 

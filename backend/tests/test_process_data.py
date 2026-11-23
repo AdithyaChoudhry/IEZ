@@ -55,7 +55,9 @@ def test_library_has_all_requested_types_and_field_counts():
                  "Level Gauge", "Pressure Gauge", "Temperature Gauge", "pH Analyzer", "H2S Analyzer",
                  "Biogas Analyzer", "Custom Instrument"):
         assert must in labels, must
-    assert len(INSTRUMENT_TYPES["level_transmitter"].fields) == 49
+    # the 49 original Level Transmitter fields are unchanged and still first; 10 datasheet-only fields were added
+    assert len(INSTRUMENT_TYPES["level_transmitter"].fields) == 59
+    assert INSTRUMENT_TYPES["level_transmitter"].fields[1].name == "Minimum Level"
     assert [c.name for c in IDENTIFICATION_COLUMNS] == ID_HEADERS
 
 
@@ -86,8 +88,9 @@ def test_workbook_identification_columns_and_blank_process_cells():
     hdr = [c.value for c in ws[5]]
     assert hdr[:8] == ID_HEADERS
     cfg = INSTRUMENT_TYPES["level_transmitter"]
-    assert hdr[8:] == [column_header(f) for f in cfg.fields]
-    assert len(hdr) == 8 + 49
+    from utils.process_data_profiles import resolve_fields
+    assert hdr[8:] == [column_header(f) for f in resolve_fields(cfg, None)]      # no selection: every field, annexure order first
+    assert len(hdr) == 8 + 53 and "Minimum Level (m)" in hdr
     data = [[c.value for c in r] for r in ws.iter_rows(min_row=6, max_row=ws.max_row)]
     assert [d[1] for d in data] == ["200-LIT-001", "200-LIT-002"]
     assert [d[0] for d in data] == [1, 2]
@@ -207,7 +210,7 @@ def test_api_types_list(api):
 def test_api_match_generate_download(api):
     m = _post_match(api, "level_transmitter")
     assert m.status_code == 200 and m.json()["tag_count"] == 2
-    assert len(m.json()["process_columns"]) == 49
+    assert len(m.json()["process_columns"]) == 53
     g = api.post("/api/process-data/generate", data={
         "instrument_type": "level_transmitter", "selected_tags": '["200-LIT-001"]',
         "use_iodb_values": "true", "project_id": "10P211"},
@@ -250,7 +253,7 @@ def test_api_custom_type_pick_tags_and_parameters(api):
 
 def test_api_selected_process_columns_only(api):
     m = _post_match(api, "level_transmitter").json()
-    assert len(m["process_fields"]) == 49 and m["process_fields"][1]["header"] == "Minimum Level (m)"
+    assert len(m["process_fields"]) == 53 and "Minimum Level (m)" in [f["header"] for f in m["process_fields"]]
     pick = ["Minimum Level", "Remarks"]
     g = api.post("/api/process-data/generate", data={
         "instrument_type": "level_transmitter", "selected_tags": '["200-LIT-001"]',

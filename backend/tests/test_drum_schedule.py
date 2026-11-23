@@ -264,8 +264,9 @@ def test_the_iodb_frame_is_not_modified():
 
 
 # ── workbook: the layout of the reference DRUM SCHEDULE / DRUM MASTER sheets ──
-REF_SCHEDULE_HEADERS = ["DRUM ID", "CABLE TYPE", "CABLE DESCRIPTION", "CABLE TAG NUMBER", "IS / NIS", "MANUFACTURER", "DRUM LENGTH (M)",
-                        "USABLE DRUM LENGTH (M)", "ALLOCATED LENGTH (M)", "AVAILABLE LENGTH (M)", "STATUS", "REMARKS"]
+# CABLE DESCRIPTION and REMARKS are not part of the delivered DRUM SCHEDULE (source references stay on the TRACE sheet)
+REF_SCHEDULE_HEADERS = ["DRUM ID", "CABLE TYPE", "CABLE TAG NUMBER", "IS / NIS", "MANUFACTURER", "DRUM LENGTH (M)",
+                        "USABLE DRUM LENGTH (M)", "ALLOCATED LENGTH (M)", "AVAILABLE LENGTH (M)", "STATUS"]
 
 
 def example_result():
@@ -278,24 +279,27 @@ def test_drum_schedule_sheet_has_the_reference_columns_formulas_and_style():
     assert wb.sheetnames == ["DRUM SCHEDULE", "DRUM SCHEDULE - TRACE", "CABLE TYPE SUMMARY", "DRUM UTILIZATION", "SHORTAGE REPORT",
                              "EXCESS - BALANCE REPORT", "VALIDATION - EXCEPTIONS", "DRUM MASTER"]
     ws = wb["DRUM SCHEDULE"]
-    assert ws["A1"].value == "DRUM SCHEDULE" and "A1:L1" in {str(m) for m in ws.merged_cells.ranges}
-    assert [ws.cell(3, c).value for c in range(1, 13)] == REF_SCHEDULE_HEADERS and ws.freeze_panes == "A4"
-    rows = [[ws.cell(r, c).value for c in range(1, 13)] for r in range(4, 8)]
+    assert ws["A1"].value == "DRUM SCHEDULE" and "A1:J1" in {str(m) for m in ws.merged_cells.ranges}
+    assert [ws.cell(3, c).value for c in range(1, 11)] == REF_SCHEDULE_HEADERS and ws.freeze_panes == "A4"
+    assert all(ws.cell(r, c).value is None for r in range(3, 8) for c in (11, 12))                 # no placeholder columns left
+    assert "CABLE DESCRIPTION" not in [c.value for c in ws[3]] and "REMARKS" not in [c.value for c in ws[3]]
+    rows = [[ws.cell(r, c).value for c in range(1, 11)] for r in range(4, 8)]
     assert [r[0] for r in rows] == ["DM-1-001"] * 3 + ["DM-1-002"]
-    assert [r[3] for r in rows] == ["IC-001", "IC-002", "IC-003", "IC-004"]
-    assert rows[0][1:3] == ["1P x 1.5 Sq.mm", "FIELD TO 200-AJB-003"]
-    assert rows[0][4:8] == ["NIS", "Polycab", 500, 500]
-    # reference formulas: first row of a drum = usable length, then = previous AVAILABLE; AVAILABLE = MAX(0, H - I)
-    assert [r[7] for r in rows] == [500, "=J4", "=J5", 500]
-    assert [ws.cell(r, 10).value for r in range(4, 8)] == ["=MAX(0,H4-I4)", "=MAX(0,H5-I5)", "=MAX(0,H6-I6)", "=MAX(0,H7-I7)"]
-    assert [r[8] for r in rows] == [120, 150, 180, 100] and [r[10] for r in rows] == ["AVAILABLE", "AVAILABLE", "AVAILABLE", "AVAILABLE"]
-    assert "IODB row 2" in rows[0][11] and "DM-1 (Drum Master row 3)" in rows[0][11]
+    assert [r[2] for r in rows] == ["IC-001", "IC-002", "IC-003", "IC-004"]
+    assert rows[0][1] == "1P x 1.5 Sq.mm"
+    assert rows[0][3:7] == ["NIS", "Polycab", 500, 500]
+    # reference formulas: first row of a drum = usable length, then = previous AVAILABLE; AVAILABLE = MAX(0, G - H)
+    assert [r[6] for r in rows] == [500, "=I4", "=I5", 500]
+    assert [ws.cell(r, 9).value for r in range(4, 8)] == ["=MAX(0,G4-H4)", "=MAX(0,G5-H5)", "=MAX(0,G6-H6)", "=MAX(0,G7-H7)"]
+    assert [r[7] for r in rows] == [120, 150, 180, 100] and [r[9] for r in rows] == ["AVAILABLE", "AVAILABLE", "AVAILABLE", "AVAILABLE"]
+    tr = wb["DRUM SCHEDULE - TRACE"]                                    # the source references live on the trace sheet
+    assert "IODB row 2" in tr.cell(4, 17).value and "DM-1 (Drum Master row 3)" in tr.cell(4, 17).value
     c = ws["A4"]
     assert (c.font.name, c.font.sz, c.alignment.vertical, c.alignment.wrap_text) == ("Carlito", 10, "center", True)
-    assert ws["A3"].fill.fgColor.rgb.endswith("163A5F") and ws["J4"].number_format == "0.0"
+    assert ws["A3"].fill.fgColor.rgb.endswith("163A5F") and ws["I4"].number_format == "0.0"
     dvs = {str(d.sqref): d.formula1 for d in ws.data_validations.dataValidation}
     assert '"IS,NIS,BOTH,NA"' in dvs.values() and any("AVAILABLE" in v and "EMPTY" in v for v in dvs.values())
-    assert any("J4:J302" in str(r.sqref) for r in ws.conditional_formatting)
+    assert any("I4:I302" in str(r.sqref) for r in ws.conditional_formatting)
 
 
 def test_formula_balance_chain_equals_the_engine_balances():
@@ -303,18 +307,19 @@ def test_formula_balance_chain_equals_the_engine_balances():
     ws = openpyxl.load_workbook(io.BytesIO(ds.to_workbook(res)))["DRUM SCHEDULE"]
     bal = {}
     for r in range(4, 8):
-        h = ws.cell(r, 8).value
+        h = ws.cell(r, 7).value
         h = bal[r - 1] if isinstance(h, str) else h
-        bal[r] = max(0, h - ws.cell(r, 9).value)
+        bal[r] = max(0, h - ws.cell(r, 8).value)
     assert [bal[r] for r in range(4, 8)] == [x["after"] for x in ds.schedule_rows(res)] == [380, 230, 50, 400]
 
 
 def test_shortage_rows_are_visible_in_the_drum_schedule_sheet():
     res = run([rec("A", "IC-1", T1, 600), rec("B", "IC-2", "19C x 1.5 Sq.mm", 50)], [lot(length=500, qty=1, split="NO")])
     ws = openpyxl.load_workbook(io.BytesIO(ds.to_workbook(res)))["DRUM SCHEDULE"]
-    assert [(ws.cell(r, 1).value, ws.cell(r, 4).value, ws.cell(r, 9).value, ws.cell(r, 11).value, ws.cell(r, 10).value) for r in (4, 5)] == [
+    assert [(ws.cell(r, 1).value, ws.cell(r, 3).value, ws.cell(r, 8).value, ws.cell(r, 10).value, ws.cell(r, 9).value) for r in (4, 5)] == [
         ("NO DRUM", "IC-1", 0, "SHORTAGE", None), ("NO DRUM", "IC-2", 0, "NOT MATCHED", None)]
-    assert "SHORTAGE 600 m" in ws["L4"].value
+    wb = openpyxl.load_workbook(io.BytesIO(ds.to_workbook(res)))
+    assert "SHORTAGE 600 m" in wb["DRUM SCHEDULE - TRACE"].cell(4, 17).value            # the reason is on the trace sheet
 
 
 def test_drum_master_sheet_keeps_the_input_columns_and_traceability_sheet_exists():

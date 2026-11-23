@@ -746,6 +746,28 @@ def _fill_reference_sheet(ws, rows: list[list], ncols: int, first_row: int = 4):
     return first_row + max(len(rows), 1) - 1
 
 
+def _drop_columns(ws, letters) -> None:
+    """Remove whole columns of a reference sheet: cells with their styles move left; the things openpyxl does not move
+    itself - column widths and the merged title bar - follow."""
+    from openpyxl.utils import column_index_from_string
+    title_end = next((m.max_col for m in ws.merged_cells.ranges if m.min_row == m.max_row == 1), None)
+    for rng in [str(m) for m in ws.merged_cells.ranges]:
+        ws.unmerge_cells(rng)
+    widths = {c: ws.column_dimensions[get_column_letter(c)].width for c in range(1, ws.max_column + 1)}
+    for idx in sorted((column_index_from_string(x) for x in letters), reverse=True):    # right to left
+        ws.delete_cols(idx)
+        widths = {(c if c < idx else c - 1): w for c, w in widths.items() if c != idx}
+        title_end = title_end - 1 if title_end and title_end >= idx else title_end
+    for c in range(1, max(widths) + 2):
+        w = widths.get(c)
+        if w is not None:
+            ws.column_dimensions[get_column_letter(c)].width = w
+        elif get_column_letter(c) in ws.column_dimensions:
+            del ws.column_dimensions[get_column_letter(c)]
+    if title_end:
+        ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=title_end)
+
+
 def to_workbook(res: Result) -> bytes:
     from openpyxl.formatting.rule import CellIsRule
     from openpyxl.worksheet.datavalidation import DataValidation
@@ -757,32 +779,33 @@ def to_workbook(res: Result) -> bytes:
 
     # ── DRUM SCHEDULE: the reference columns, running balance as the reference formulas ──
     ws = wb["DRUM SCHEDULE"]
+    _drop_columns(ws, ("L", "C"))            # REMARKS and CABLE DESCRIPTION are not part of the delivered DRUM SCHEDULE
     body, prev = [], None
     for k, r in enumerate(rows):
         excel_row = 4 + k
         first_of_drum = r["drum_id"] != prev
         if r["drum_id"]:
-            usable = r["usable"] if first_of_drum else f"=J{excel_row - 1}"
-            avail = f"=MAX(0,H{excel_row}-I{excel_row})"
+            usable = r["usable"] if first_of_drum else f"=I{excel_row - 1}"
+            avail = f"=MAX(0,G{excel_row}-H{excel_row})"
         else:
             usable = avail = None
-        body.append([r["drum_id"] or "NO DRUM", r["cable_type"], r["description"], r["cable_tag"],
+        body.append([r["drum_id"] or "NO DRUM", r["cable_type"], r["cable_tag"],
                      r["is_nis"] if r["is_nis"] in ("IS", "NIS") else "NA", r["manufacturer"] or None,
-                     r["drum_length"], usable, r["allocated"], avail, r["status"], r["remarks"]])
+                     r["drum_length"], usable, r["allocated"], avail, r["status"]])
         prev = r["drum_id"] or None
-    last = _fill_reference_sheet(ws, body, 12)
+    last = _fill_reference_sheet(ws, body, 10)
     last = max(last, 302)
     for rr in range(4 + len(body), last + 1):                      # the reference sheet keeps styled blank rows
-        for c in range(1, 13):
+        for c in range(1, 11):
             ws.cell(rr, c)._style = copy(ws.cell(4, c)._style)
     ws.data_validations.dataValidation = []
-    for col, formula in (("E", '"IS,NIS,BOTH,NA"'), ("K", f'"{STATUS_LIST}"')):
+    for col, formula in (("D", '"IS,NIS,BOTH,NA"'), ("J", f'"{STATUS_LIST}"')):
         dv = DataValidation(type="list", formula1=formula, allow_blank=False)
         dv.add(f"{col}4:{col}{last}")
         ws.add_data_validation(dv)
     from openpyxl.formatting.formatting import ConditionalFormattingList
     ws.conditional_formatting = ConditionalFormattingList()
-    ws.conditional_formatting.add(f"J4:J{last}", CellIsRule(operator="lessThanOrEqual", formula=["20"],
+    ws.conditional_formatting.add(f"I4:I{last}", CellIsRule(operator="lessThanOrEqual", formula=["20"],
                                                             fill=PatternFill(bgColor="FFF4CC", fill_type="solid")))
     ws.cell(2, 1, note).font = Font(name="Carlito", size=10, italic=True, color="1F2937")
     wb.calculation.fullCalcOnLoad = True

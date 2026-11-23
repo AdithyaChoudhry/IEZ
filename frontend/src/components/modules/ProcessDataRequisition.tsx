@@ -81,6 +81,7 @@ interface CustomRow {
 }
 
 const emptyCustomRow = (): CustomRow => ({ parameter: '', unit: '' });
+const ALL_TYPES = '__all__';          // dropdown value of "Select All Available Instruments"
 
 export default function ProcessDataRequisition() {
   const [instrumentTypes, setInstrumentTypes] = useState<InstrumentType[]>([]);
@@ -336,19 +337,6 @@ export default function ProcessDataRequisition() {
         />
       </Card>
 
-      {/* Selection mode: one instrument type (default) or every supported type found in the IODB */}
-      <Card title="Instrument Selection Mode" description="Prepare one instrument type, or every supported instrument type in the IODB in one operation.">
-        <div className="flex flex-wrap gap-4 text-sm" style={{ color: 'var(--t1)' }}>
-          {([['single', 'Individual Instrument Type'], ['all', 'All Instrument Types (From IODB)']] as const).map(([k, label]) => (
-            <label key={k} className="flex items-center gap-2 cursor-pointer">
-              <input type="radio" name="pdr-mode" checked={mode === k} onChange={() => { setMode(k); setResult(null); setError(null); }} />{label}
-            </label>))}
-        </div>
-      </Card>
-
-      {mode === 'all' && <ProcessDataAllTypes iodbFile={iodbFile} />}
-
-      {mode === 'single' && (<>
       {/* Step 2: Select Instrument Type */}
       <Card title="Step 2 — Select Instrument Type" description="Choose the instrument type to request process data for.">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -357,8 +345,21 @@ export default function ProcessDataRequisition() {
               Instrument Type
             </label>
             <select
-              value={selectedTypeKey}
+              value={mode === 'all' ? ALL_TYPES : selectedTypeKey}
               onChange={(e) => {
+                if (e.target.value === ALL_TYPES) {            // every supported instrument type in the IODB, in one operation
+                  matchAbort.current?.abort();
+                  matchSeq.current += 1;
+                  setMode('all');
+                  setSelectedTypeKey('');
+                  setSelectedSubtype('');
+                  setMatchResult(null);
+                  setSelectedTagNos([]);
+                  setResult(null);
+                  setError(null);
+                  return;
+                }
+                setMode('single');
                 setSelectedTypeKey(e.target.value);
                 setSelectedSubtype('');
                 setMatchResult(null);
@@ -369,6 +370,7 @@ export default function ProcessDataRequisition() {
               className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500"
             >
               <option value="">Select an instrument type...</option>
+              <option value={ALL_TYPES}>Select All Available Instruments</option>
               {Object.entries(groupedTypes).map(([category, types]) => (
                 <optgroup key={category} label={category}>
                   {types.map((t) => (
@@ -398,16 +400,24 @@ export default function ProcessDataRequisition() {
           )}
         </div>
 
-        <Button
-          onClick={handleMatchTags}
-          disabled={!iodbFile || !selectedTypeKey}
-          loading={matching}
-          className="mt-4"
-        >
-          {matching ? 'Finding Tags...' : 'Find Matching Tags'}
-        </Button>
+        {mode === 'single' && (
+          <Button
+            onClick={handleMatchTags}
+            disabled={!iodbFile || !selectedTypeKey}
+            loading={matching}
+            className="mt-4"
+          >
+            {matching ? 'Finding Tags...' : 'Find Matching Tags'}
+          </Button>)}
+        {mode === 'all' && (
+          <p className="text-xs mt-3" style={{ color: 'var(--t2)' }}>
+            Every supported instrument type found in the IODB is detected below; each keeps its own process parameters.
+          </p>)}
       </Card>
 
+      {mode === 'all' && <ProcessDataAllTypes iodbFile={iodbFile} />}
+
+      {mode === 'single' && (<>
       {/* Step 3: Tag table (custom types list every IODB tag) */}
       {matchResult && (
         <Card

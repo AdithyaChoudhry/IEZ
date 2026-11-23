@@ -44,7 +44,7 @@ const BADGE: Record<string, string> = { Ready: 'bg-green-100 text-green-700', 'I
 // Details the engineer can edit for one junction box: [config key, label, list key (drop-down) or '']
 const DETAILS: [string, string, string][] = [
   ['category', 'JB category', 'category'], ['jb_desc', 'JB description', ''], ['isnis', 'IS / NIS', 'isnis'], ['unit_name', 'Unit / area name', ''],
-  ['location', 'Location', ''], ['equip_ref', 'Near equipment tag', ''], ['dest_panel', 'Destination panel', ''], ['dest_room', 'Destination room / building', ''],
+  ['location', 'Location', ''],
   ['gas_group', 'Gas group / temp class', ''], ['protection', 'Enclosure protection', 'protection'], ['material', 'Enclosure material', 'material'],
   ['terminal_type', 'Terminal type', 'term_type'], ['cable_entry', 'Cable entry', 'entry'],
   ['branch_gland_size', 'Branch gland size', 'gland_size'], ['branch_gland_type', 'Branch gland type', 'gland_type'],

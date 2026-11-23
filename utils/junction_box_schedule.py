@@ -341,7 +341,7 @@ def _suggest(key: str, tags: list, io_types: Counter, info: dict) -> dict:
 # ── 4. one confirmed junction box -> results ─────────────────────────────────────────────────────────────────────────
 FIELDS_GENERATION = ("category", "terminal_capacity")
 FIELDS_SUBMISSION = [("unit_name", "UNIT / AREA NAME"), ("jb_desc", "JB DESCRIPTION"), ("isnis", "IS / NIS"), ("location", "LOCATION"),
-                     ("dest_panel", "DESTINATION PANEL"), ("protection", "ENCLOSURE PROTECTION"), ("material", "ENCLOSURE MATERIAL"),
+                     ("protection", "ENCLOSURE PROTECTION"), ("material", "ENCLOSURE MATERIAL"),
                      ("main_cable_no", "MAIN CABLE NO."), ("main_cable_type", "MAIN CABLE TYPE"),
                      ("main_gland_size", "MAIN CABLE GLAND SIZE"), ("main_gland_type", "MAIN CABLE GLAND TYPE")]
 FIELDS_SUBMISSION_NON_SMB = [("branch_gland_size", "BRANCH GLAND SIZE"), ("branch_gland_type", "BRANCH GLAND TYPE")]
@@ -417,7 +417,7 @@ def evaluate(jb: dict, cfg: Optional[dict], design: Optional[dict] = None) -> di
         warnings.append(f"IS and NIS signals are both connected to this junction box in the IODB ({', '.join(iod['isnis'])}); "
                         "they never share a box - choose IS / NIS for this JB or correct the IODB.")
     pick("unit_name")
-    for f in ("location", "equip_ref", "dest_panel", "dest_room", "gas_group", "protection", "material", "terminal_type",
+    for f in ("location", "gas_group", "protection", "material", "terminal_type",
               "cable_entry", "spare_entry_size", "remarks", "branch_gland_type", "main_gland_type"):
         v = _s(cfg.get(f))
         row[f], src[f] = (v, "user") if v else ("", "")
@@ -522,25 +522,38 @@ def evaluate_all(analysis: dict, configs: dict, design: Optional[dict] = None) -
 
 
 # ── 5. the output workbook ───────────────────────────────────────────────────────────────────────────────────────────
-_COLS = {"unit_name": "B", "jb_no": "C", "category": "D", "jb_desc": "E", "isnis": "F", "location": "G", "equip_ref": "H",
-         "dest_panel": "I", "dest_room": "J", "gas_group": "K", "protection": "L", "material": "M", "terminal_capacity": "N",
+# Template columns removed from the delivered schedule (by the engineer's request): H NEAR EQUIPMENT TAG, I DESTINATION PANEL,
+# J DESTINATION ROOM / BUILDING. Rows 7 (group headings) and 8 (field codes) are removed too: the column headings are row 7 and
+# the junction boxes start in row 8.
+_REMOVED_COLS = (8, 10)                       # H:J (first, last column index)
+HEADER_ROW, FIRST_DATA_ROW, TITLE_ROW = 7, 8, 6
+
+
+def _new(letter: str) -> str:
+    """Column letter of the template in the delivered sheet (everything right of J moved three columns left)."""
+    idx = column_index_from_string(letter)
+    return get_column_letter(idx - 3 if idx > _REMOVED_COLS[1] else idx)
+
+
+_COLS = {"unit_name": "B", "jb_no": "C", "category": "D", "jb_desc": "E", "isnis": "F", "location": "G",
+         "gas_group": "K", "protection": "L", "material": "M", "terminal_capacity": "N",
          "terminal_type": "O", "cable_entry": "P", "branch_cable_count": "Q", "branch_gland_size": "R", "branch_gland_type": "S",
          "main_cable_no": "T", "main_cable_type": "U", "main_cable_count": "V", "main_gland_size": "W", "main_gland_type": "X",
          "spare_entries": "Y", "spare_entry_size": "Z", "terminals_used": "AA", "spare_terminals": "AB", "spare_pct": "AC",
-         "rev": "AD", "remarks": "AE"}
+         "rev": "AD", "remarks": "AE"}                                    # template letters; _new() gives the delivered ones
 _LIST_COLUMNS = {"D": "category", "F": "isnis", "L": "protection", "M": "material", "O": "term_type", "P": "entry",
                  "R": "gland_size", "W": "gland_size", "Z": "gland_size", "S": "gland_type", "X": "gland_type", "U": "cable"}
 _HELPER_FIRST, _HELPER_LAST = column_index_from_string("AF"), column_index_from_string("AR")
-_WRAP = ("B", "E", "G", "H", "I", "J", "L", "M", "O", "R", "S", "T", "U", "W", "X", "Z", "AE")
 _MAX_ROW_PT = 400.0            # Excel stops at 409.5 pt
 
 
 def build_workbook(template: bytes, results: list, meta: dict, cover_placeholder: bool = True) -> bytes:
     """
     Fill the standard JB_SCHEDULE. Only that sheet is kept (plus, when a cover sheet is available, an empty COVERSHEET
-    placeholder that the cover-sheet service replaces); the helper / check columns AF:AR and every formula that depended on the deleted sheets are removed - the checks
-    are calculated here and nothing in the output refers to another sheet.
-    meta: project_info (dict), document_number, revision, date.
+    placeholder that the cover-sheet service replaces). Removed from the template: the helper / check columns AF:AR, the columns
+    NEAR EQUIPMENT TAG / DESTINATION PANEL / DESTINATION ROOM, rows 7-8 (group headings, field codes) and every formula that
+    depended on the deleted sheets - the checks are calculated here and nothing in the output refers to another sheet.
+    All table cells are centred. meta: project_info (dict), document_number, revision, date.
     """
     wb = openpyxl.load_workbook(io.BytesIO(template))
     for name in list(wb.sheetnames):
@@ -553,21 +566,32 @@ def build_workbook(template: bytes, results: list, meta: dict, cover_placeholder
     n = len(rows)
     if n == 0:
         raise JBError("There are no junction boxes to write.")
-    # 1. remove the helper / check columns (AF:AR) and what spans them
-    for rng in [str(m) for m in ws.merged_cells.ranges if m.max_col >= _HELPER_FIRST]:
+    widths = {c: ws.column_dimensions[get_column_letter(c)].width for c in range(1, _HELPER_FIRST)}
+    # 1. remove the helper / check columns, the three columns and rows 7-8; the merged bands go with them
+    for rng in [str(m) for m in ws.merged_cells.ranges]:
         ws.unmerge_cells(rng)
     for r in range(1, ws.max_row + 1):
         for c in range(_HELPER_FIRST, _HELPER_LAST + 1):
             ws.cell(r, c).value = None
     ws.delete_cols(_HELPER_FIRST, _HELPER_LAST - _HELPER_FIRST + 1)
-    for c in range(_HELPER_FIRST, _HELPER_LAST + 1):
-        ws.column_dimensions[get_column_letter(c)].hidden = False
-    ws.merge_cells("A6:AE6")
+    ws.delete_cols(_REMOVED_COLS[0], _REMOVED_COLS[1] - _REMOVED_COLS[0] + 1)
+    ws.delete_rows(7, 2)
+    for c in range(_HELPER_FIRST - 3, _HELPER_LAST + 2):
+        key = get_column_letter(c)
+        if key in ws.column_dimensions:
+            del ws.column_dimensions[key]
+    for old, w in widths.items():
+        if w is not None and not _REMOVED_COLS[0] <= old <= _REMOVED_COLS[1]:
+            ws.column_dimensions[get_column_letter(old - 3 if old > _REMOVED_COLS[1] else old)].width = w
+    last_col = column_index_from_string(_new("AE"))                       # the REMARKS column
+    last_letter = get_column_letter(last_col)
+    ws.merge_cells(start_row=TITLE_ROW, start_column=1, end_row=TITLE_ROW, end_column=last_col)
+    ws.row_dimensions[HEADER_ROW].height = 46.0                            # the column-heading row (row heights do not move with rows)
     ws.conditional_formatting = type(ws.conditional_formatting)()
-    # 2. unused template rows
-    last_template = 509
-    if 10 + n <= last_template:
-        ws.delete_rows(10 + n, last_template - (10 + n) + 1)
+    # 2. unused template rows (the template has 500 data rows)
+    last_template = FIRST_DATA_ROW + 499
+    if FIRST_DATA_ROW + n <= last_template:
+        ws.delete_rows(FIRST_DATA_ROW + n, last_template - (FIRST_DATA_ROW + n) + 1)
     # 3. title block - plain values (the template's formulas pointed to the COVER sheet's named cells)
     info = meta.get("project_info") or {}
     units = meta.get("unit_names") or _unique(r["row"].get("unit_name") for r in rows)
@@ -576,16 +600,17 @@ def build_workbook(template: bytes, results: list, meta: dict, cover_placeholder
     ws["C5"] = info.get("unit_no") or ", ".join(units)
     for r, (label, value) in zip((2, 3, 4), (("DOCUMENT NO. :", meta.get("document_number") or ""),
                                               ("REVISION :", meta.get("revision") or ""), ("DATE :", meta.get("date") or ""))):
-        lab = ws.cell(r, column_index_from_string("AB"))
-        val = ws.cell(r, column_index_from_string("AD"))
+        lab = ws.cell(r, column_index_from_string(_new("AB")))
+        val = ws.cell(r, column_index_from_string(_new("AD")))
         lab.value, val.value = label, value
         lab.font = openpyxl.styles.Font(name="Arial", size=9, bold=True)
         val.font = openpyxl.styles.Font(name="Arial", size=9)
         val.alignment = openpyxl.styles.Alignment(horizontal="left")
         val.number_format = "General"
     # 4. data rows
+    centre = openpyxl.styles.Alignment(horizontal="center", vertical="center", wrap_text=True)
     for i, res in enumerate(rows):
-        r = 10 + i
+        r = FIRST_DATA_ROW + i
         row = res["row"]
         values = dict(row)
         values["jb_no"] = res["jb_no"]
@@ -593,7 +618,8 @@ def build_workbook(template: bytes, results: list, meta: dict, cover_placeholder
         values["remarks"] = None                                   # the REMARKS column stays in the template, its rows stay empty
         ws.cell(r, 1).value = i + 1
         lines = 1
-        for field, col in _COLS.items():
+        for field, tcol in _COLS.items():
+            col = _new(tcol)
             v = values.get(field)
             if field == "terminals_used" and row.get("category") == "SMB":
                 v = None                                           # an SMB counts ways = instruments (template example leaves it blank)
@@ -601,25 +627,30 @@ def build_workbook(template: bytes, results: list, meta: dict, cover_placeholder
                 v = round(float(v), 6)
             cell = ws[f"{col}{r}"]
             cell.value = v if v not in ("", None) else None
-            if col in _WRAP:
-                cell.alignment = openpyxl.styles.Alignment(wrap_text=True, vertical="center", horizontal=cell.alignment.horizontal)
             if isinstance(v, str):
                 width = ws.column_dimensions[col].width or 10
                 lines = max(lines, sum(max(1, math.ceil(len(p) / max(1.0, width * 1.05))) for p in v.split("\n")))
         ws.row_dimensions[r].height = min(max(15.0, 10.5 * lines + 4), _MAX_ROW_PT)
-    # 5. controlled lists as in-cell drop-downs (the LOOKUPS sheet is not delivered)
+    # 5. every cell of the table (headings and rows) centred, horizontally and vertically
+    for r in range(HEADER_ROW, FIRST_DATA_ROW + n):
+        for c in range(1, last_col + 1):
+            ws.cell(r, c).alignment = centre
+    # 6. controlled lists as in-cell drop-downs (the LOOKUPS sheet is not delivered)
     ws.data_validations.dataValidation = []
-    for col, key in _LIST_COLUMNS.items():
+    for tcol, key in _LIST_COLUMNS.items():
+        col = _new(tcol)
         items = LISTS[key]
         literal = ",".join(x.replace('"', '""') for x in items)
         if len(literal) > 250:
             continue
         dv = DataValidation(type="list", formula1=f'"{literal}"', allow_blank=True, showErrorMessage=False)
-        dv.add(f"{col}10:{col}{9 + n}")
+        dv.add(f"{col}{FIRST_DATA_ROW}:{col}{FIRST_DATA_ROW + n - 1}")
         ws.add_data_validation(dv)
-    # 6. print setup
-    ws.print_area = f"A1:AE{9 + n}"
-    # 7. the cover-sheet placeholder (replaced in place by the centralised cover sheet)
+    # 7. print setup and view
+    ws.print_area = f"A1:{last_letter}{FIRST_DATA_ROW + n - 1}"
+    ws.print_title_rows = f"{HEADER_ROW}:{HEADER_ROW}"
+    ws.freeze_panes = f"E{FIRST_DATA_ROW}"
+    # 8. the cover-sheet placeholder (replaced in place by the centralised cover sheet)
     if cover_placeholder:
         cover = wb.create_sheet("COVERSHEET", 0)
         cover["A1"] = "COVER SHEET"

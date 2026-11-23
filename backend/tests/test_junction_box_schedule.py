@@ -288,9 +288,9 @@ def test_missing_information_is_requested_not_invented(client):
     put_schedule()
     d = analyze(client)
     r = result_of(d, "JB-001")
-    for label in ("LOCATION", "DESTINATION PANEL", "ENCLOSURE PROTECTION", "ENCLOSURE MATERIAL", "MAIN CABLE GLAND TYPE", "BRANCH GLAND TYPE"):
+    for label in ("LOCATION", "ENCLOSURE PROTECTION", "ENCLOSURE MATERIAL", "MAIN CABLE GLAND TYPE", "BRANCH GLAND TYPE"):
         assert label in r["missing_submission"]
-    assert r["row"]["location"] == "" and r["row"]["dest_panel"] == "" and r["row"]["branch_gland_type"] == ""       # never TBA / guessed
+    assert r["row"]["location"] == "" and r["row"]["protection"] == "" and r["row"]["branch_gland_type"] == ""       # never TBA / guessed
     assert r["row"]["main_gland_size"] == '1 1/4" NPT' and r["row"]["branch_gland_size"] == "M20"            # from the schedule, template spelling
     assert r["row"]["isnis"] == "" or r["row"]["isnis"] == "NIS"
     assert "IS / NIS" not in r["missing_generation"] or r["row"]["isnis"] == ""
@@ -318,7 +318,7 @@ def ready_configs():
     out = {}
     for jb, cap in caps.items():
         out[jb] = {"terminal_capacity": cap, "category": "SMB" if "SMB" in jb else ("DJB" if jb == "JB-003" else "AJB"), "isnis": "NIS",
-                   "location": "NEAR TANK", "dest_panel": "MRC-01", "protection": "WEATHERPROOF (IP66)", "material": "SS316",
+                   "location": "NEAR TANK", "protection": "WEATHERPROOF (IP66)", "material": "SS316",
                    "branch_gland_type": "SS-316 DOUBLE COMPRESSION", "main_gland_type": "SS-316 DOUBLE COMPRESSION"}
     out["JB-004"].update(terminals_method="per_instrument", terminals_per_instrument=2)
     out["JB-002"]["protection"] = "Ex d"
@@ -362,21 +362,31 @@ def test_final_workbook_is_coversheet_and_jb_schedule_only_without_broken_formul
     for row in ws.iter_rows():                                                                # no formula depends on a deleted sheet
         for c in row:
             assert not (isinstance(c.value, str) and c.value.startswith("=")), c.coordinate
-    headers = [ws.cell(9, c).value for c in range(1, 32)]
-    assert headers[0] == "S.NO" and headers[13] == "TERMINAL CAPACITY / WAYS" and headers[26] == "TERMINALS USED" and headers[-1] == "REMARKS"
-    assert ws.max_column == 31 and ws.cell(8, 3).value == "JB_NO"                              # helper / check columns AF:AR are gone
-    assert ws.max_row == 9 + 5                                                                 # unused template rows removed
-    by_jb = {ws.cell(r, 3).value: r for r in range(10, 15)}
+    # the delivered layout: NEAR EQUIPMENT TAG, DESTINATION PANEL and DESTINATION ROOM / BUILDING are gone, and so are the template's
+    # rows 7 (group headings) and 8 (field codes): headings in row 7, junction boxes from row 8; everything right of J moved 3 left
+    headers = [ws.cell(7, c).value for c in range(1, 29)]
+    for gone in ("NEAR EQUIPMENT TAG", "DESTINATION PANEL", "DESTINATION ROOM / BUILDING", "1. IDENTIFICATION", "JB_NO"):
+        assert not any(gone == c.value for row in ws.iter_rows(min_row=6, max_row=8) for c in row), gone
+    assert headers[0] == "S.NO" and headers[10] == "TERMINAL CAPACITY / WAYS" and headers[23] == "TERMINALS USED" and headers[-1] == "REMARKS"
+    assert headers[1:7] == ["UNIT / AREA NAME", "JB NO.", "JB CATEGORY", "JB DESCRIPTION", "IS / NIS", "LOCATION"] and headers[7] == "GAS GROUP / TEMP CLASS"
+    assert ws.max_column == 28 and ws.cell(7, 3).value == "JB NO."                              # helper / check columns are gone
+    assert ws.max_row == 7 + 5                                                                 # unused template rows removed
+    by_jb = {ws.cell(r, 3).value: r for r in range(8, 13)}
     r1 = by_jb["JB-001"]
-    assert [ws.cell(r1, c).value for c in (14, 17, 22, 27, 28)] == [60, 6, 1, 18, 42]          # N capacity, Q branch, V main, AA used, AB spare
-    assert ws.cell(r1, 29).value == pytest.approx(0.7) and "%" in ws.cell(r1, 29).number_format   # AC stored as a fraction -> 70%, not 7000%
-    assert ws.cell(r1, 20).value == "MC-1" and ws.cell(r1, 18).value == "M20"
+    assert [ws.cell(r1, c).value for c in (11, 14, 19, 24, 25)] == [60, 6, 1, 18, 42]          # capacity, branch, main, used, spare
+    assert ws.cell(r1, 26).value == pytest.approx(0.7) and "%" in ws.cell(r1, 26).number_format   # spare % stored as a fraction -> 70%, not 7000%
+    assert ws.cell(r1, 17).value == "MC-1" and ws.cell(r1, 15).value == "M20"
     smb = by_jb["XXXX-SMB-001"]
-    assert ws.cell(smb, 27).value is None and ws.cell(smb, 28).value == 9 and ws.cell(smb, 29).value == 0.75
-    assert ws.cell(by_jb["JB-004"], 27).value == 2                                              # user-confirmed terminals per instrument
-    assert ws.cell(9, 31).value == "REMARKS" and all(ws.cell(r, 31).value is None for r in range(10, 15))   # heading kept, rows empty
-    assert ws.print_area and "$AE$14" in str(ws.print_area) and ws.page_setup.orientation == "landscape"
-    assert ws["C1"].value == "NEW WWTP" and ws["AD2"].value == "PC286-10P195-J0007-001" and ws["AD3"].value == "R0"
+    assert ws.cell(smb, 24).value is None and ws.cell(smb, 25).value == 9 and ws.cell(smb, 26).value == 0.75
+    assert ws.cell(by_jb["JB-004"], 24).value == 2                                              # user-confirmed terminals per instrument
+    assert ws.cell(7, 28).value == "REMARKS" and all(ws.cell(r, 28).value is None for r in range(8, 13))   # heading kept, rows empty
+    for r in range(7, 13):                                                                      # every table cell centred
+        for c in range(1, 29):
+            al = ws.cell(r, c).alignment
+            assert (al.horizontal, al.vertical) == ("center", "center"), (r, c)
+    assert ws.print_area and "$AB$12" in str(ws.print_area) and ws.page_setup.orientation == "landscape"
+    assert ws.freeze_panes == "E8" and "$7:$7" == str(ws.print_title_rows)
+    assert ws["C1"].value == "NEW WWTP" and ws["AA2"].value == "PC286-10P195-J0007-001" and ws["AA3"].value == "R0"
     assert len(ws.data_validations.dataValidation) >= 5                                        # the lists survive as in-cell drop-downs
 
 
@@ -384,10 +394,10 @@ def test_submission_readiness_is_reported_without_blocking(client):
     put_schedule()
     add_cover(client)
     jbs = ready_configs()
-    jbs["JB-001"].pop("dest_panel")
+    jbs["JB-001"].pop("location")
     g = client.post("/api/cable-schedule/jb/generate", json={"project_id": PID, "jbs": jbs})
     assert g.status_code == 200
-    assert g.json()["submission_ready"] is False and "DESTINATION PANEL" in g.json()["missing_for_submission"]["JB-001"]
+    assert g.json()["submission_ready"] is False and "LOCATION" in g.json()["missing_for_submission"]["JB-001"]
 
 
 def test_template_is_the_standard_one_and_loses_nothing_it_needs():

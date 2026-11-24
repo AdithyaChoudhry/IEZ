@@ -600,7 +600,7 @@ def generate_cable_schedule(
 
     Logic:
     - Filters IODB rows where JUNCTION BOX has a non-blank value other than "-".
-    - Sorts ascending by JUNCTION BOX (natural / alphanumeric order).
+    - Sorts junction boxes AJB first, then DJB (other categories after), each ascending by JB number; instruments stay with their JB.
     - Groups by JB value; all tags for a JB are written consecutively.
     - For each tag, writes one 3-row block matching the template structure:
         * Copies the template prototype block (rows 9-11) cell by cell.
@@ -749,15 +749,14 @@ def generate_cable_schedule(
                 return None, None, f"Junction box(es) not found in the IODB: {', '.join(missing[:10])}."
             work_df = work_df[work_df[jb_column].isin(wanted)]
 
-        # Natural sort by JB column (ascending, handles mixed alpha-numeric)
-        try:
-            work_df["_jb_key"] = work_df[jb_column].apply(
-                lambda x: [int(t) if t.isdigit() else t.lower()
-                           for t in re.split(r'(\d+)', x)]
-            )
-            work_df = work_df.sort_values("_jb_key", kind="mergesort").drop(columns=["_jb_key"])   # stable: IODB order per JB
-        except Exception:
-            work_df = work_df.sort_values(jb_column)
+        # Order of the junction boxes: all AJB, then all DJB (other categories after), each in ascending JB number;
+        # prefix-aware (20-AJB-01 / 30-DJB-01). Every instrument of a JB stays together in its IODB order (stable sort).
+        from utils.cable_schedule_layout import jb_sort_key, jb_unparsed
+        jb_names = list(dict.fromkeys(work_df[jb_column]))
+        jb_rank = {name: i for i, name in enumerate(sorted(jb_names, key=jb_sort_key))}
+        work_df = work_df.assign(_jb_rank=work_df[jb_column].map(jb_rank)).sort_values("_jb_rank", kind="mergesort").drop(columns=["_jb_rank"])
+        jb_order_warnings = ([f"Junction box tag(s) {', '.join(jb_unparsed(jb_names)[:8])} could not be read as category + number; "
+                              "they are listed after the AJB / DJB boxes in their given spelling."] if jb_unparsed(jb_names) else [])
 
         # ── Build output workbook ─────────────────────────────────────────────
         # Prefer: reload template_bytes in writable mode so the full template
@@ -816,7 +815,7 @@ def generate_cable_schedule(
         block_jbs: list[str] = []        # junction box of every written entry, in output order (TB numbering)
         tag_warnings: list[str]   = []   # empty-TAG-NO warnings
         _cs = _cs_special_columns(header_map, col_match, df, work_df)
-        cs_warnings: list[str] = list(_cs["warnings"])
+        cs_warnings: list[str] = list(_cs["warnings"]) + jb_order_warnings
         seen_main: set[str] = set()      # main cables whose length is already shown (one physical cable = one length)
 
         for jb_idx, jb_name in enumerate(jb_order):

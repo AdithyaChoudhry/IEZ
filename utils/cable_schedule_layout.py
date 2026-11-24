@@ -50,9 +50,44 @@ def natural(v: Any):
     return [int(t) if t.isdigit() else t.lower() for t in re.split(r"(\d+)", str(v))]
 
 
+# ── junction box order: category (AJB, then DJB, then the rest), project prefix, JB number ──────────────────
+_CATEGORY_RANK = {"AJB": 0, "DJB": 1}                   # every other category follows, alphabetically; unparsed tags last
+_CAT_TOKEN = re.compile(r"(?<![A-Za-z])([A-Za-z]*JB|SMB)(?![A-Za-z])")
+
+
+def parse_jb_tag(tag: Any) -> dict:
+    """
+    Split a junction box tag into its category, project / unit prefix and number WITHOUT changing the displayed tag:
+    'AJB-01', 'AJB 01', 'AJB01', '20-AJB-01', '200-DJB-101', 'JB-101-02' ->
+    {category: 'AJB', prefix: '20', number: 1, parsed: True}. A tag with no category word, or none followed by a number,
+    is not parsed (parsed False) and is sorted after the parsed ones - it is never given a guessed number.
+    """
+    text = "" if tag is None else re.sub(r"\s+", " ", str(tag)).strip()
+    m = _CAT_TOKEN.search(text)
+    if not m:
+        return {"category": "", "prefix": text, "number": None, "parsed": False}
+    num = re.match(r"[\s\-_./]*(\d+)", text[m.end():])
+    return {"category": m.group(1).upper(), "prefix": text[:m.start()].strip(" -_./"),
+            "number": int(num.group(1)) if num else None, "parsed": num is not None}
+
+
+def jb_sort_key(tag: Any):
+    """Key that orders junction boxes: all AJB, then all DJB, then any other category (by name), then unparsed tags; inside a
+    category by prefix and ascending JB number (01 < 02 < 09 < 10 < 100); the full tag breaks ties."""
+    p = parse_jb_tag(tag)
+    rank = _CATEGORY_RANK.get(p["category"], 2) if p["parsed"] else 3
+    return (rank, p["category"] if rank == 2 else "", natural(p["prefix"]) if p["parsed"] else [], p["number"] if p["parsed"] else 0,
+            natural(tag))
+
+
+def jb_unparsed(tags) -> list:
+    """Tags whose category / number could not be read (they are sorted last and reported)."""
+    return [t for t in tags if not parse_jb_tag(t)["parsed"]]
+
+
 # ── IODB: tags per junction box (for the JB selection step) ──────────────────
 def jb_groups(df, jb_column: str, tag_column: str) -> list[dict]:
-    """Junction boxes (natural order) with ALL their tags in IODB order - the same rows the schedule writes."""
+    """Junction boxes (AJB first, then DJB, each in numeric order) with ALL their tags in IODB order - the same rows the schedule writes."""
     if jb_column not in df.columns or tag_column not in df.columns:
         raise ValueError(f"Columns '{jb_column}' / '{tag_column}' not found in the IODB.")
     jb = df[jb_column].astype(str).str.strip()
@@ -61,7 +96,7 @@ def jb_groups(df, jb_column: str, tag_column: str) -> list[dict]:
     for name, tag in zip(jb[ok], df.loc[ok, tag_column]):
         t = "" if tag is None or str(tag).strip().lower() in ("", "nan") else str(tag).strip()
         out.setdefault(name, []).append(t or "TBA")
-    return [{"junction_box": k, "tag_count": len(v), "tags": v} for k, v in sorted(out.items(), key=lambda kv: natural(kv[0]))]
+    return [{"junction_box": k, "tag_count": len(v), "tags": v} for k, v in sorted(out.items(), key=lambda kv: jb_sort_key(kv[0]))]
 
 
 # ── formulas ─────────────────────────────────────────────────────────────────

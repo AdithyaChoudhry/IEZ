@@ -27,6 +27,7 @@ from copy import copy
 from typing import Any, Iterable, Optional
 
 from openpyxl.cell.cell import MergedCell
+from openpyxl.styles import Alignment
 from openpyxl.worksheet.merge import MergedCellRange
 from openpyxl.utils import get_column_letter, column_index_from_string
 from openpyxl.worksheet.dimensions import DimensionHolder, ColumnDimension
@@ -312,8 +313,13 @@ def _merge_block(ws, r1: int, c1: int, r2: int, c2: int) -> None:
 
 
 # ── Instrument Cable Schedule ────────────────────────────────────────────────
+# FIX 2: the MAIN CABLE TAG NUMBER is merged over each entry's 3 rows (centred, one line). The Cable Lug Quantity reader counts a
+# main cable shared by several entries once (utils/lug_quantity.py: a merged MAIN tag cell does not split a cable).
+MERGE_MAIN_CABLE_TAG = True
+
+
 def instrument_layout(ws, hdr_row: int = 7, first_row: int = 9, rows_per_tag: int = 3,
-                      block_jbs: Optional[list[str]] = None) -> dict:
+                      block_jbs: Optional[list[str]] = None, merge_main_tag: Optional[bool] = None) -> dict:
     """`block_jbs`: junction box of every entry in output order (from the generator); TB numbering restarts per JB."""
     report: dict[str, Any] = {"removed": [], "tags": 0, "warnings": []}
     last_col = ws.max_column
@@ -371,21 +377,31 @@ def instrument_layout(ws, hdr_row: int = 7, first_row: int = 9, rows_per_tag: in
     report["removed"] = [hdr[c] for c in sorted(remove)]
     keep = [c for c in range(1, last_col + 1) if c not in remove]
     mapping = reorder_columns(ws, keep, hdr_row, last_col)
-    # one entry = one 3-row block: merge every column except TB and the instrument-side ferrule
+    # one entry = one block of rows (a tag's terminal rows): merge every column except TB and the instrument-side ferrule. The
+    # MAIN CABLE TAG NUMBER is merged over the entry like the other entry-level cells, centred, on one line; the merge follows
+    # the entry's real boundary (the next entry's first row), never a fixed count. Entries sharing one physical main cable keep
+    # their own merges - the tag text is the same, the entries stay separate.
     nb = {mapping[c] for c in (tb_col, f_plus) if c in mapping}
-    # a MAIN cable is shared by every tag of its JB: its tag cell is not merged per entry, so the cable / gland / lug
-    # readers keep seeing one physical cable (a merged cable-tag cell means "one cable per block" to them)
-    nb |= {mapping[c] for c, t in ks.items() if "main" in t and "cable" in t and ("tag" in t or t.endswith("no")) and c in mapping}
+    main_tag_cols = {mapping[c] for c, t in ks.items() if "main" in t and "cable" in t and ("tag" in t or t.endswith("no")) and c in mapping}
+    if not (MERGE_MAIN_CABLE_TAG if merge_main_tag is None else merge_main_tag):
+        nb |= main_tag_cols                                    # unchanged behaviour: the main cable tag cell stays one per entry
     new_last = len(keep)
-    for s in starts:
+    bounds = [(s, min(s + rows_per_tag, starts[i + 1] if i + 1 < len(starts) else s + rows_per_tag) - 1) for i, s in enumerate(starts)]
+    for s, e in bounds:
         for c in range(1, new_last + 1):
-            if c in nb:
+            if c in nb or e <= s:
                 continue
-            below = [ws.cell(s + i, c).value for i in range(1, rows_per_tag)]
+            below = [ws.cell(s + i, c).value for i in range(1, e - s + 1)]
             if any(v not in (None, "") for v in below):
                 continue
-            _merge_block(ws, s, c, s + rows_per_tag - 1, c)
+            _merge_block(ws, s, c, e, c)
+            if c in main_tag_cols:
+                ws.cell(s, c).alignment = Alignment(horizontal="center", vertical="center", wrap_text=False)
     report["columns"] = [header_texts(ws, (hdr_row, hdr_row + 1), new_last).get(c, "") for c in range(1, new_last + 1)]
+    fmt = format_columns(ws, (hdr_row, hdr_row + 1), first_row, bounds[-1][1] if bounds else first_row, new_last,
+                         data_rows_heights=False, header_heights=False)
+    report["widths"] = fmt["columns"]
+    report["unclassified"] = fmt["unclassified"]
     report["row_height"] = uniform_entry_heights(ws, starts, rows_per_tag, new_last)
     return report
 
@@ -486,3 +502,148 @@ def extra_layout(ws, hdr_row: int = 9) -> dict:
     new = header_texts(ws, (hdr_row,), len(keep))
     return {"removed": [hdr[c] for c in sorted(remove)], "columns": [new.get(c, "") for c in range(1, len(keep) + 1)],
             "cable_length_col": mapping.get(lengths[0]) if lengths else None, "warnings": []}
+
+
+# ── column widths, alignment and row heights (Cable Schedule worksheets) ─────────────────────────────────────────────
+# A policy per kind of column: (header pattern, min width, preferred max, horizontal alignment, wrap). The first pattern that
+# matches the column's header text (group header + sub header) wins. Widths are content-aware: the text a column SHOWS decides
+# (a ferrule formula is measured by what it joins, not by its formula text) and merged document titles are never measured.
+_WIDTH_POLICY = [
+    ("serial", r"^sl\b", 8, 10, "center", False),
+    ("ferrule", r"ferr?ule", 26, 38, "center", False),
+    ("remarks", r"^remarks", 25, 40, "left", True),
+    ("description", r"description", 38, 55, "left", True),
+    ("signal_type", r"signal (i/?o )?type|^signal$", 12, 16, "center", False),
+    ("main_cable", r"main cable tag", 21, 27, "center", False),
+    ("cable_length", r"length", 15, 19, "center", False),
+    ("cable_type", r"cable (size|type)|main cable type|^instrument to jb cable$", 20, 25, "center", False),
+    ("cable_tag", r"cable (no|tag)|instrument to jb cable tag", 21, 27, "center", False),
+    ("gland_qty", r"gland (qty|quantity)", 11, 15, "center", False),
+    ("gland_size", r"gland size|gland$", 14, 19, "center", False),
+    ("jb_tag", r"jb tag|to \(jb\)|junction box", 19, 24, "center", False),
+    ("to_desk", r"^to \( ?control desk", 17, 22, "center", False),
+    ("unit_no", r"(mcc|vfd|lcp|mov) no", 17, 22, "center", False),
+    ("mtb", r"mtb", 13, 18, "center", False),
+    ("terminal", r"tb details|tb no|terminal|positive|negative", 12, 16, "center", False),
+    ("tag", r"^tag (no|number)|^tag$", 19, 24, "center", False),
+    ("from", r"^from", 19, 24, "center", False),
+]
+_HARD_MAX_WIDTH = 60.0
+_CELL_PAD = 2.0                  # columns units added to the longest text
+_UNITS_PER_CHAR = 1.2            # Calibri / Arial 12 text in column-width units (width counts Calibri 11 characters)
+DATA_ROW_MIN = 20.0              # points, one line of 12 pt text
+HEADER_ROW_MIN, HEADER_ROW_MAX = 28.0, 45.0
+
+
+def _header_label(ws, hdr_rows, c: int) -> str:
+    """Group header + sub header of a column, lower case (merged headers are read from their anchor cell)."""
+    spans = {}
+    for r in hdr_rows:
+        for m in ws.merged_cells.ranges:
+            if m.min_row <= r <= m.max_row and m.min_col <= c <= m.max_col:
+                spans[r] = (m.min_row, m.min_col)
+    parts = []
+    for r in hdr_rows:
+        a = spans.get(r)
+        v = ws.cell(*(a if a else (r, c))).value
+        t = re.sub(r"\s+", " ", str(v or "")).strip().lower()
+        if t and t not in parts:
+            parts.append(t)
+    return " ".join(parts)
+
+
+def column_kind(label: str):
+    for kind, rx, lo, hi, align, wrap in _WIDTH_POLICY:
+        if re.search(rx, label):
+            return kind, lo, hi, align, wrap
+    return None
+
+
+def _shown_len(ws, cell) -> int:
+    """Characters the cell displays (merged cells and empties count 0; a CONCATENATE / & formula is estimated)."""
+    if isinstance(cell, MergedCell) or cell.value is None:
+        return 0
+    t = _text_len(ws, cell)
+    if isinstance(t, int):
+        return t
+    return max((len(x) for x in str(t).split("\n")), default=0)
+
+
+def format_columns(ws, hdr_rows, first_row: int, last_row: int, last_col: int, data_rows_heights: bool = True,
+                   header_heights: bool = True) -> dict:
+    """
+    Content-aware widths, alignment and row heights of a schedule worksheet:
+      * width = what the column shows, kept between its policy minimum and preferred maximum (an identifier that needs more
+        keeps one line and gets the room, up to a hard limit; descriptions / remarks wrap at their maximum);
+      * identifiers on one line, centred; descriptions / remarks left, wrapped; headers centred and wrapped;
+      * data rows one baseline height, raised only when wrapped text needs it (vertically merged text shares its rows).
+    Titles above the header and every merged document heading are not measured. Cell values, borders and fills are untouched.
+    """
+    report = {"columns": {}, "unclassified": []}
+    wraps: dict[int, bool] = {}
+    for c in range(1, last_col + 1):
+        label = _header_label(ws, hdr_rows, c)
+        pol = column_kind(label)
+        letter = get_column_letter(c)
+        cur = ws.column_dimensions[letter].width or 8.43
+        measured = max((_shown_len(ws, ws.cell(r, c)) for r in range(first_row, last_row + 1)), default=0)
+        words = max((len(w) for r in hdr_rows for w in re.split(r"[\s/]+", str(ws.cell(r, c).value or "")) if w
+                     if not any(m.min_row <= r <= m.max_row and m.min_col != m.max_col and m.min_col <= c <= m.max_col
+                                for m in ws.merged_cells.ranges)), default=0)
+        need = max(measured * _UNITS_PER_CHAR + _CELL_PAD, words * 1.35 + _CELL_PAD)
+        if pol is None:
+            report["unclassified"].append(label)
+            width = min(max(cur, need if measured else 0, 8.0), _HARD_MAX_WIDTH)   # unlabelled column: never clip what it shows
+            align, wrap = "center", False
+        else:
+            kind, lo, hi, align, wrap = pol
+            if wrap:                                          # descriptions / remarks: capped, the text wraps
+                width = min(max(lo, need), hi)
+            else:                                             # identifiers: one line, the room they need up to a hard limit
+                width = min(max(lo, need), max(hi, min(need, _HARD_MAX_WIDTH)))
+        ws.column_dimensions[letter].width = round(width, 1)
+        ws.column_dimensions[letter].hidden = False
+        wraps[c] = wrap
+        report["columns"][letter] = (label, round(width, 1))
+        for r in range(first_row, last_row + 1):
+            cell = ws.cell(r, c)
+            keep = cell.alignment.horizontal if cell.alignment is not None else None
+            cell.alignment = Alignment(horizontal=(align if pol and pol[0] == "main_cable" else (keep or align)),
+                                       vertical="center", wrap_text=wrap)           # an alignment the sheet already has is kept
+        for r in hdr_rows:
+            cell = ws.cell(r, c)
+            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    # header row heights: the tallest wrapped header text of the row (vertical merges share their rows)
+    for i, r in enumerate(hdr_rows if header_heights else ()):
+        need = HEADER_ROW_MIN
+        for c in range(1, last_col + 1):
+            cell = ws.cell(r, c)
+            if isinstance(cell, MergedCell) or cell.value is None:
+                continue
+            span = next((m for m in ws.merged_cells.ranges if m.min_row == r and m.min_col == c), None)
+            w = sum((ws.column_dimensions[get_column_letter(k)].width or 8.43) for k in range(c, (span.max_col if span else c) + 1))
+            rows_in = (span.max_row - span.min_row + 1) if span else 1
+            need = max(need, (_lines(re.sub(r"\s+", " ", str(cell.value)), w) * LINE_PT + 6) / rows_in)
+        ws.row_dimensions[r].height = min(math.ceil(need), HEADER_ROW_MAX)
+    if data_rows_heights:
+        vmerge = {(m.min_row, m.min_col): m for m in ws.merged_cells.ranges if m.max_row > m.min_row and m.min_row >= first_row}
+        heights = {}
+        for r in range(first_row, last_row + 1):
+            need = DATA_ROW_MIN
+            for c in range(1, last_col + 1):
+                cell = ws.cell(r, c)
+                if isinstance(cell, MergedCell) or cell.value is None or (r, c) in vmerge or not wraps.get(c):
+                    continue
+                need = max(need, _lines(_text_len(ws, cell), ws.column_dimensions[get_column_letter(c)].width) * LINE_PT + 5)
+            heights[r] = math.ceil(need * 4) / 4
+        for (r, c), m in vmerge.items():                       # vertically merged wrapped text must fit the rows it spans
+            if wraps.get(c):
+                total = _lines(_text_len(ws, ws.cell(r, c)), ws.column_dimensions[get_column_letter(c)].width) * LINE_PT + 5
+                span = range(m.min_row, m.max_row + 1)
+                have = sum(heights.get(k, DATA_ROW_MIN) for k in span)
+                if total > have:
+                    for k in span:
+                        heights[k] = heights.get(k, DATA_ROW_MIN) + (total - have) / len(span)
+        for r, h in heights.items():
+            ws.row_dimensions[r].height = h
+    return report

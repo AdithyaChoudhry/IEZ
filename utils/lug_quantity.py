@@ -436,7 +436,9 @@ def read_occurrences(data: bytes, rules: Rules, on_sheet: Optional[Callable] = N
                     if tk_ in cols and txt(tk_):
                         tag, tag_col = txt(tk_), cols[tk_]
                         break
-                tag_block = merged[(tag_col, r)][0] if (tag_col is not None and (tag_col, r) in merged) else 0
+                # A merged tag cell makes its block one cable - except a MAIN cable: one main cable is shared by many instrument
+                # entries (the Cable Schedule merges its tag per entry), so equal tag + construction stay one physical cable.
+                tag_block = merged[(tag_col, r)][0] if (role_key != "main" and tag_col is not None and (tag_col, r) in merged) else 0
                 tag_note = ""
                 known = bool(tag)
                 if known and _incomplete_tag(tag):

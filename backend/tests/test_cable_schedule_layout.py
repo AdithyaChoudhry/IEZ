@@ -91,7 +91,7 @@ def test_red_columns_removed_main_cable_length_kept():
     assert heads[-1] == "Remarks" and heads[-2] == "PANEL END GLAND SIZE" and len(heads) == len(HEAD) - len(RED) - 1 - 2
     c = cols(ws)
     assert "MAIN CABLE LENGTH(Mtrs)" in c
-    assert ws.column_dimensions[openpyxl.utils.get_column_letter(c["MAIN CABLE LENGTH(Mtrs)"])].width == 22
+    assert ws.column_dimensions[openpyxl.utils.get_column_letter(c["MAIN CABLE LENGTH(Mtrs)"])].width >= 15   # content-aware width
     # the IODB length is written (the template's '=98+210' is sample data); these rows give different lengths for the
     # same main cable tag - a conflict - so every row keeps its own value and a warning is raised
     lengths = [ws.cell(r, c["MAIN CABLE LENGTH(Mtrs)"]).value for r in entries(ws)]
@@ -129,7 +129,8 @@ def test_ferrule_combined_plus_above_minus_and_entries_merged():
     assert not any(m.startswith(openpyxl.utils.get_column_letter(f) + "9:") for m in merged)
     assert not any(m.startswith(tb_letter + "9:") for m in merged)
     mc = openpyxl.utils.get_column_letter(c["MAIN CABLE TAG NUMBER"])
-    assert f"{mc}9:{mc}11" not in merged                                             # shared main cable stays one cable
+    assert f"{mc}9:{mc}11" in merged                                                 # main cable tag merged per entry (still one physical cable: see Lug reader)
+    assert ws[f"{mc}9"].alignment.horizontal == "center" and not ws[f"{mc}9"].alignment.wrap_text
 
 
 def test_selected_jb_gives_all_its_tags_and_only_them():

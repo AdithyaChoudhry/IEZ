@@ -591,6 +591,33 @@ def _cable_values(group: CableGroup) -> dict[str, Any]:
             "end_gland_size": show(gs), "end_gland_qty": show(gq)}
 
 
+def _loop_of(rec) -> str:
+    """The IODB LOOP NUMBER of a record as written ('' when the IODB has none)."""
+    return "" if is_missing(rec.loop_number) else str(rec.loop_number).strip()
+
+
+def loop_findings(key: str, recs: list) -> list[str]:
+    """Warnings about the FROM (= loop number) column of MCC DI / MCC DO / VFD: tags without a loop number, and tags that
+    carry more than one loop number across their IODB rows. Nothing is derived or guessed."""
+    if key == "mov":
+        return []
+    missing = [rec for rec in recs if not _loop_of(rec)]
+    out = []
+    if missing:
+        shown = ", ".join(sorted({show(r.tag_no) for r in missing})[:8])
+        more = len({show(r.tag_no) for r in missing}) - 8
+        out.append(f"FROM left blank for {len(missing)} row(s) with no LOOP NUMBER in the IODB (tags: {shown}"
+                   f"{f' and {more} more' if more > 0 else ''}).")
+    by_tag: dict[str, set] = {}
+    for rec in recs:
+        if _loop_of(rec) and not is_missing(rec.tag_no):
+            by_tag.setdefault(str(rec.tag_no).strip().upper(), set()).add(_loop_of(rec))
+    for tag, loops in sorted(by_tag.items()):
+        if len(loops) > 1:
+            out.append(f"Tag {tag} has more than one LOOP NUMBER in the IODB ({', '.join(sorted(loops))}); each row keeps its own.")
+    return out
+
+
 def build_sheet(ref_wb, key: str, recs: list[Rec], info: dict) -> tuple[Any, dict]:
     """Populate the reference sheet for `key` inside `ref_wb` (a fresh copy of the reference) -> (ws, stats)."""
     spec = SHEETS[key]
@@ -626,6 +653,7 @@ def build_sheet(ref_wb, key: str, recs: list[Rec], info: dict) -> tuple[Any, dic
     _fill_title(ws, spec, info)
 
     stats = sheet_stats(key, recs)
+    stats.setdefault("warnings", []).extend(loop_findings(key, recs))
     blocks = plan_blocks(key, recs)
     r = first
     serial = 0
@@ -697,12 +725,21 @@ def build_sheet(ref_wb, key: str, recs: list[Rec], info: dict) -> tuple[Any, dic
                 if key == "mov":
                     ws.cell(r0, c).value = bv["from"]
                 else:
-                    unit, mtb = fcol.get("end_unit"), fcol.get("end_mtb")
-                    if unit and mtb and sep_dash:
-                        ws.cell(r0, c).value = (f"={get_column_letter(unit)}{r0}&{get_column_letter(sep_dash)}{r0}"
-                                                f"&{get_column_letter(mtb)}{r0}")
-                    else:
-                        ws.cell(r0, c).value = "TBA"
+                    # FROM = the IODB LOOP NUMBER of each tag, exactly as written (no derivation from the PLC / panel / MTB).
+                    # Contiguous rows with the same loop number share one merged cell; a different loop starts a new one.
+                    loops = [_loop_of(rec) for g in block.groups for rec in g.recs]
+                    run0 = 0
+                    for k in range(1, len(loops) + 1):
+                        if k == len(loops) or loops[k] != loops[run0]:
+                            a, b = r0 + run0, r0 + k - 1
+                            ws.cell(a, c).value = loops[run0] or None
+                            for rr in range(a + 1, b + 1):
+                                ws.cell(rr, c).value = None
+                            if b > a:
+                                ws.merge_cells(start_row=a, start_column=c, end_row=b, end_column=c)
+                            _outline(ws, f"{get_column_letter(c)}{a}:{get_column_letter(c)}{b}")
+                            run0 = k
+                    continue
             elif fld == "sigtype":
                 ws.cell(r0, c).value = block.groups[0].recs[0].io
             else:
@@ -722,7 +759,22 @@ def build_sheet(ref_wb, key: str, recs: list[Rec], info: dict) -> tuple[Any, dic
     ws.print_area = f"A1:{get_column_letter(_print_last_col(ws, spec))}{last}"
     stats["rows"] = r - first
     stats["drop_col"] = col("new_tag") if key in ("mcc_di", "mcc_do") else None
+    if key == "mov":
+        stats["drop_col"] = _mov_duplicate_tag_col(snap, fcol, first)
     return ws, stats
+
+
+def _mov_duplicate_tag_col(snap: dict, fcol: dict, first: int) -> Optional[int]:
+    """The column inside the MOV 'Instrument Side Gland' span (between Gland Size and Gland Qty) that only repeats the TAG NO.
+    of the row (its reference formula is =<tag column><row>). None when the layout has no such column."""
+    gs, gq, tag = fcol.get("end_gland_size"), fcol.get("end_gland_qty"), fcol.get("tag")
+    if not (gs and gq and tag):
+        return None
+    for c in range(gs + 1, gq):
+        proto = snap["first"].get(c, (None,))[0]
+        if isinstance(proto, str) and re.fullmatch(rf"=\$?{get_column_letter(tag)}\$?{first}", proto.replace(" ", "")):
+            return c
+    return None
 
 
 def _print_last_col(ws, spec) -> int:
@@ -934,6 +986,13 @@ def add_extra_sheets(out_wb, df, selected: list[str], schedule_sheet: Optional[s
             lay = extra_layout(out_wb[titles[key]], SHEETS[key]["hdr"][0])
             st["layout"] = {k: v for k, v in lay.items() if k != "warnings"}
             st.setdefault("warnings", []).extend(lay.get("warnings", []))
+        from .cable_schedule_layout import format_columns
+        _ws = out_wb[titles[key]]
+        _area = re.match(r"\$?A\$?\d+:\$?([A-Z]+)\$?(\d+)", str(_ws.print_area or "").replace("'", "").split("!")[-1])
+        _lc = column_index_from_string(_area.group(1)) if _area else _ws.max_column
+        _lr = int(_area.group(2)) if _area else _ws.max_row
+        _fmt = format_columns(_ws, SHEETS[key]["hdr"], SHEETS[key]["first"], _lr, _lc)
+        st["widths"], st["unclassified"] = _fmt["columns"], _fmt["unclassified"]
         at += 1
         names.append(titles[key])
         st["sheet"] = titles[key]

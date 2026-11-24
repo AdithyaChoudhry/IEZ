@@ -192,7 +192,8 @@ def test_generated_sheets_follow_the_reference_layout():
     ref = openpyxl.load_workbook(X.REFERENCE_PATH)
     ws, rws = sheet(out, "MOV"), ref[X.SHEETS["mov"]["ref"]]
     for r in range(8, X.SHEETS["mov"]["hdr"][1] + 1):
-        assert [ws.cell(r, c).value for c in range(1, 40)] == [rws.cell(r, c).value for c in range(1, 40)], ("MOV", r)
+        # the reference's repeated Tag No. column inside 'Instrument Side Gland' (H) is removed: everything after it moves left
+        assert [ws.cell(r, c).value for c in range(1, 37)] == [rws.cell(r, c).value for c in range(1, 38) if c != 8], ("MOV", r)
     for name in ("MCC DI", "MCC DO", "VFD (iEZ)"):
         ws = sheet(out, name)
         heads = [ws.cell(9, c).value for c in range(1, 40) if ws.cell(9, c).value and not ws.column_dimensions[get_column_letter(c)].hidden]
@@ -220,8 +221,8 @@ def test_every_signal_stays_a_row_and_values_come_from_the_iodb():
     assert tags == ["ZA-MOV-1A", "ZA-MOV-1B", "ZS-MOV-1A", "ZS-MOV-1B", "ZA-MOV-2A", "ZS-MOV-2A"] or set(tags[:4]) == {
         "ZA-MOV-1A", "ZA-MOV-1B", "ZS-MOV-1A", "ZS-MOV-1B"}
     assert ws["B12"].value == "MOV-1" and ws["E12"].value == "IC-MOV-001" and ws["F12"].value == "19Cx1.5"
-    assert ws["S12"].value == "150"
-    assert {ws.cell(r, 25).value for r in range(12, 18)} == {"DI", "DO"}
+    assert ws["R12"].value == "150"
+    assert {ws.cell(r, 24).value for r in range(12, 18)} == {"DI", "DO"}
     # cable quantity of one physical cable is not repeated per row
     assert "E13" not in {str(m).split(":")[0] for m in ws.merged_cells.ranges} and "E12:E15" in {str(m) for m in ws.merged_cells.ranges}
 
@@ -232,7 +233,7 @@ def test_missing_data_is_tba_and_dash_is_na_and_nothing_is_invented():
     mov2 = next(r for r in range(12, 40) if ws.cell(r, 2).value == "MOV-2")
     assert ws.cell(mov2, 5).value == "TBA"            # no cable tag in the IODB -> TBA, no generated number
     assert ws.cell(mov2, 6).value == "NA"             # '-' in the IODB -> NA
-    assert ws.cell(mov2, 19).value == "TBA"           # length
+    assert ws.cell(mov2, 18).value == "TBA"           # length
     vfd = sheet(out, "VFD (iEZ)")
     cable_nos = {vfd.cell(r, 5).value for r in range(11, 17)}
     assert "TBA" in cable_nos and not any(str(c).startswith("=") and "CONCATENATE" in str(c) for c in cable_nos)

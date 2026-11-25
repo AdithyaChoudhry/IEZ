@@ -88,20 +88,35 @@ def _find(ws, labels: set, row: Optional[int] = None):
     return None
 
 
+def _anchor(ws, cell):
+    """The top-left cell of the merged range a cell belongs to (the cell itself when it is not merged)."""
+    if isinstance(cell, MergedCell):
+        for m in ws.merged_cells.ranges:
+            if cell.coordinate in m:
+                return ws.cell(m.min_row, m.min_col)
+    return cell
+
+
 def _right_value(ws, c):
-    for cc in range(c.column + 1, min(ws.max_column, c.column + 12) + 1):
+    """The value cell of a 'LABEL : value' row - the first non-empty cell after the colon, or (still empty) the first unmerged cell
+    after it, so a header formula can follow later edits of the cover."""
+    colon, first_empty = False, None
+    for cc in range(c.column + 1, min(ws.max_column, c.column + 14) + 1):
         cell = ws.cell(c.row, cc)
-        if isinstance(cell, MergedCell) or cell.value in (None, ""):
+        if isinstance(cell, MergedCell):
             continue
         if _txt(cell.value) in (":", "-"):
+            colon = True
             continue
-        return cell
-    return None
+        if cell.value not in (None, ""):
+            return cell
+        if colon and first_empty is None:
+            first_empty = cell
+    return first_empty
 
 
 def _below_value(ws, c):
-    cell = ws.cell(c.row + 1, c.column)
-    return None if isinstance(cell, MergedCell) or cell.value in (None, "") else cell
+    return _anchor(ws, ws.cell(c.row + 1, c.column))
 
 
 def read_cover(wb, sheet: str) -> Cover:
@@ -113,38 +128,47 @@ def read_cover(wb, sheet: str) -> Cover:
         return f"{q}!${get_column_letter(cell.column)}${cell.row}"
 
     def put(name: str, cell, label: str, is_date: bool = False):
-        if cell is None or _txt(cell.value) == "":
+        if cell is None:
             cover.fields[name] = Field()
-            cover.warnings.append(f"COVERSHEET: {label} not found or empty - the header shows TBA.")
+            cover.warnings.append(f"COVERSHEET: {label} not found - the header shows TBA.")
             return
-        cover.fields[name] = Field(value=_txt(cell.value) if not hasattr(cell.value, "strftime") else cell.value,
-                                   expr=f'IF({ref(cell)}="","TBA",{ref(cell)})', found=True, is_date=is_date)
+        empty = _txt(cell.value) == ""
+        cover.fields[name] = Field(value="TBA" if empty else (cell.value if hasattr(cell.value, "strftime") else _txt(cell.value)),
+                                   expr=f'IF({ref(cell)}="","TBA",{ref(cell)})', found=not empty, is_date=is_date)
+        if empty:
+            cover.warnings.append(f"COVERSHEET: {label} is empty - the header shows TBA.")
 
-    # document title: the cell under the DOCUMENT TITLE label, or the text that follows the label inside the same cell
-    t = _find(ws, {"documenttitle"})
+    # document title: the text that follows the DOCUMENT TITLE label inside its own cell (the cover generator's layout) or, when
+    # the cell holds the label only, the first cell under it that is not another label (the older layout)
     title_cell, title_expr, title_val = None, None, ""
+    other_labels = {"stampingarea", "documentclass", "discipline"}
     for c in _cells(ws):
         if _key(c.value).startswith("documenttitle"):
-            rest = re.sub(r"(?i)document\s*title", "", str(c.value), count=1)
-            rest = _txt(rest)
-            if rest:
-                title_val = rest
-                title_expr = f'TRIM(SUBSTITUTE(SUBSTITUTE({ref(c)},"DOCUMENT TITLE",""),CHAR(10),""))'
-            else:
+            rest = _txt(re.sub(r"(?i)document\s*title", "", str(c.value), count=1))
+            if not rest:
                 for r in range(c.row + 1, c.row + 4):
                     cell = ws.cell(r, c.column)
-                    if not isinstance(cell, MergedCell) and _txt(cell.value) and _key(cell.value) != "stampingarea":
-                        title_cell = cell
+                    if isinstance(cell, MergedCell) or not _txt(cell.value):
+                        continue
+                    if _key(cell.value) in other_labels:
                         break
+                    title_cell = cell
+                    break
+            if title_cell is None:
+                title_val = rest
+                inner = f'TRIM(SUBSTITUTE(SUBSTITUTE({ref(c)},"DOCUMENT TITLE",""),CHAR(10),""))'
+                title_expr = f'IF({inner}="","TBA",{inner})'
             break
     if title_expr:
-        cover.fields["title"] = Field(value=title_val, expr=title_expr, found=True)
+        cover.fields["title"] = Field(value=title_val or "TBA", expr=title_expr, found=bool(title_val))
+        if not title_val:
+            cover.warnings.append("COVERSHEET: DOCUMENT TITLE not found or empty - the header shows TBA.")
     else:
         put("title", title_cell, "DOCUMENT TITLE")
 
     # job-number strip: PROJECT description is the large cell at the left of the 'Job No.' row; Doc code / serial / rev sit under their labels
     job = _find(ws, {"jobno"})
-    put("project", ws.cell(job.row, 1) if job and not isinstance(ws.cell(job.row, 1), MergedCell) else None, "PROJECT (project description)")
+    put("project", _anchor(ws, ws.cell(job.row, 1)) if job else None, "PROJECT (project description)")
     code_l = _find(ws, {"doccode"}, job.row if job else None) or _find(ws, {"doccode"})
     ser_l = _find(ws, {"serialno"}, job.row if job else None) or _find(ws, {"serialno"})
     rev_l = _find(ws, {"rev", "revno", "revision"}, job.row if job else None)
@@ -152,16 +176,20 @@ def read_cover(wb, sheet: str) -> Cover:
     rev = _below_value(ws, rev_l) if rev_l else None
     if code is None:
         cover.fields["doc_no"] = Field()
-        cover.warnings.append("COVERSHEET: Doc. Code not found or empty - DOC NO shows TBA.")
+        cover.warnings.append("COVERSHEET: Doc. Code not found - DOC NO shows TBA.")
     else:
         cs = ref(code)
+        ctxt = _txt(code.value)
         if ser is not None:
             ss = ref(ser)
-            cover.fields["doc_no"] = Field(value=f"{_txt(code.value)}-{_txt(ser.value)}",
-                                           expr=f'IF({cs}="","TBA",{cs}&IF({ss}="","","-"&{ss}))', found=True)
+            stxt = _txt(ser.value)
+            cover.fields["doc_no"] = Field(value=f"{ctxt}-{stxt}" if ctxt and stxt else (ctxt or "TBA"),
+                                           expr=f'IF({cs}="","TBA",{cs}&IF({ss}="","","-"&{ss}))', found=bool(ctxt))
         else:
-            cover.fields["doc_no"] = Field(value=_txt(code.value), expr=f'IF({cs}="","TBA",{cs})', found=True)
+            cover.fields["doc_no"] = Field(value=ctxt or "TBA", expr=f'IF({cs}="","TBA",{cs})', found=bool(ctxt))
             cover.warnings.append("COVERSHEET: Serial No. not found - DOC NO shows the Doc. Code only.")
+        if not ctxt:
+            cover.warnings.append("COVERSHEET: Doc. Code is empty - DOC NO shows TBA.")
     put("rev", rev, "Rev.")
 
     for name, labels, label in (("client", {"client"}, "CLIENT"), ("pmc", {"pmc"}, "PMC"), ("contractor", {"contractor"}, "CONTRACTOR")):
@@ -172,11 +200,15 @@ def read_cover(wb, sheet: str) -> Cover:
     hdr_row, cols = None, {}
     for c in _cells(ws):
         if _key(c.value) == "rev":
-            row_keys = {_key(x.value): x for x in _cells_in_row(ws, c.row)}
-            if {"date", "prepared", "checked", "approved"} <= set(row_keys):
+            found = {}
+            for x in _cells_in_row(ws, c.row):          # 'PREPARED' / 'PREPARED BY', 'CHECKED' / 'CHECKED BY' ... both spellings exist
+                k = _key(x.value)
+                for stem in ("date", "prepared", "checked", "approved"):
+                    if k.startswith(stem) and stem not in found:
+                        found[stem] = x
+            if len(found) == 4:
                 hdr_row = c.row
-                cols = {"rev": c.column, "date": row_keys["date"].column, "prepared": row_keys["prepared"].column,
-                        "checked": row_keys["checked"].column, "approved": row_keys["approved"].column}
+                cols = {"rev": c.column, **{stem: found[stem].column for stem in found}}
                 break
     if hdr_row is None:
         for n in ("date", "prepared_by", "checked_by", "approved_by"):
@@ -390,3 +422,33 @@ def apply_standard_headers(wb, sheets: dict, cover_sheet: Optional[str] = None, 
             out["logo_sheets"].append(name)
         out["applied"].append(name)
     return out
+
+
+# ── keep the header in step with the cover that finally ends up in the workbook ─────────────────────────────────────
+def is_standard_header(ws) -> bool:
+    v = ws.cell(4, 1).value
+    return isinstance(v, str) and ADDRESS.splitlines()[0] in v
+
+
+def reapply_standard_headers(wb) -> list[str]:
+    """
+    Rebuild the standard header of every sheet that has one, against the workbook's CURRENT cover sheet. Used after a
+    project cover replaced the template's cover (the revision table / label cells may sit on other rows). Never raises.
+    """
+    done: list[str] = []
+    try:
+        cover_name = find_cover(wb)
+        if not cover_name:
+            return done
+        cover = read_cover(wb, cover_name)
+        for ws in wb.worksheets:
+            if ws.title == cover_name or not is_standard_header(ws):
+                continue
+            title = next((str(c.value) for c in ws[1] if isinstance(c.value, str) and c.value and not c.value.startswith("=")
+                          and c.value not in ("DOC NO",)), "")
+            last = max((m.max_col for m in ws.merged_cells.ranges if m.max_row <= HEADER_ROWS), default=0)
+            if title and last and apply_header(ws, cover, last, title, live=True):
+                done.append(ws.title)
+    except Exception:
+        pass
+    return done

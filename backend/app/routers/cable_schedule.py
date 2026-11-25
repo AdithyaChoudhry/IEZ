@@ -10,6 +10,7 @@ import io
 import json
 import threading
 import uuid
+from pathlib import Path
 from datetime import datetime
 
 from ..deps import get_current_user
@@ -224,9 +225,22 @@ async def extra_sheet_preview(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
+DEFAULT_TEMPLATE_PATH = Path(__file__).resolve().parent.parent / "templates" / "cable_schedule" / "cable_schedule_default_template.xlsx"
+DEFAULT_TEMPLATE_NAME = "iEZ default Cable Schedule template.xlsx"
+
+
+async def _template_bytes(upload: Optional[UploadFile]) -> tuple[bytes, str]:
+    """The uploaded template, or the built-in universal iEZ template (blank cover + standard header, no project data)."""
+    if upload is not None and (upload.filename or ""):
+        data = await upload.read()
+        if data:
+            return trim_empty_tail(data), upload.filename
+    return DEFAULT_TEMPLATE_PATH.read_bytes(), DEFAULT_TEMPLATE_NAME
+
+
 @router.post("/composition", response_model=CompositionResponse)
 async def cable_schedule_composition(
-    template_file: UploadFile = File(...),
+    template_file: Optional[UploadFile] = File(None),
     output_mode: str = Form(wa.WITH_SUMMARY),
     extra_sheets: str = Form(""),
     include_schedule: bool = Form(True),
@@ -236,7 +250,7 @@ async def cable_schedule_composition(
     try:
         mode = wa.normalize_mode(output_mode)
         extras = _parse_extras(extra_sheets)
-        data = trim_empty_tail(await template_file.read())
+        data, _tname = await _template_bytes(template_file)
         return CompositionResponse(output_mode=mode, sheets=[CompositionSheet(**s)
                                    for s in _composition(data, mode, extras, include_schedule or not extras)])
     except ValueError as e:
@@ -250,7 +264,7 @@ async def cable_schedule_composition(
 @router.post("/generate", response_model=CableScheduleGenerateResponse)
 async def generate_cable_schedule(
     iodb_file: UploadFile = File(...),
-    template_file: UploadFile = File(...),
+    template_file: Optional[UploadFile] = File(None),    # optional: the built-in iEZ default template is used without it
     jb_column: str = Form(""),                 # not needed when only the extra sheets are generated
     tag_column: str = Form(""),
     project_id: Optional[str] = Form(None),  # optional: register output in the project document registry
@@ -282,7 +296,7 @@ async def generate_cable_schedule(
         if not jbs:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Select at least one junction box.")
     iodb_bytes = trim_empty_tail(await iodb_file.read())
-    template_bytes = trim_empty_tail(await template_file.read())
+    template_bytes, template_name = await _template_bytes(template_file)
 
     extra_report: dict = {}
     # CPU-bound: run in the worker pool so one long generation does not freeze the server for every other request
@@ -309,7 +323,7 @@ async def generate_cable_schedule(
         register_safe("failure", project_id=project_id, module="cable_schedule", user=current_user.username,
                       error=err, source_bytes=iodb_bytes, source_filename=iodb_file.filename or "IODB.xlsx",
                       params=reg_params, template_bytes=template_bytes,
-                      template_filename=template_file.filename)
+                      template_filename=template_name)
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=err)
 
     # The downloaded workbook must be exactly what the preview promised.
@@ -324,6 +338,8 @@ async def generate_cable_schedule(
                                                          filename, custom_template=cover_tpl)
     if cover.get("cover_sheet") and cover["cover_sheet"] not in planned:
         planned = [cover["cover_sheet"]] + planned
+    if cover.get("applied") and extra_report.get("warnings"):          # the project cover replaced the template's cover: the header follows it
+        extra_report["warnings"] = [w for w in extra_report["warnings"] if not str(w).startswith("COVERSHEET:")]
     cache_key = f"{current_user.id}_cable_schedule"
     cable_schedule_cache[cache_key] = {"bytes": out_bytes, "filename": filename}
     snap = {"id": uuid.uuid4().hex, "bytes": out_bytes, "filename": filename, "project_id": _project_key(project_id),
@@ -341,7 +357,7 @@ async def generate_cable_schedule(
         "success", project_id=project_id, module="cable_schedule", user=current_user.username,
         source_bytes=iodb_bytes, source_filename=iodb_file.filename or "IODB.xlsx",
         output_bytes=out_bytes, output_filename=filename, params=reg_params,
-        template_bytes=template_bytes, template_filename=template_file.filename,
+        template_bytes=template_bytes, template_filename=template_name,
     )
 
     return CableScheduleGenerateResponse(filename=filename, message="Cable Schedule generated successfully",

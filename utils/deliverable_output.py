@@ -109,6 +109,11 @@ def insert_cover(workbook: bytes, cover: bytes, draft: bool = False) -> tuple[by
         ws.oddHeader.center.text = DRAFT_TEXT
         ws.oddHeader.center.size = 14
         ws.oddHeader.center.color = "C00000"
+    try:                                            # the sheets' standard header follows the cover that is now in the workbook
+        from .cable_schedule_header import reapply_standard_headers
+        reapply_standard_headers(wb)
+    except Exception:
+        pass
     wb.active = index
     for s in wb.worksheets:
         s.sheet_view.tabSelected = s.title == title

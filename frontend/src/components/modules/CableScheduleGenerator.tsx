@@ -132,7 +132,7 @@ export default function CableScheduleGenerator() {
   const extraOnly = !includeSchedule && extraSheets.length > 0;
 
   const handleGenerate = async () => {
-    if (!iodbFile || !templateFile) return;
+    if (!iodbFile) return;
     if (includeSchedule && (!jbColumn || !tagColumn)) return;
     if (!includeSchedule && extraSheets.length === 0) return;
     setGenerating(true);
@@ -140,7 +140,7 @@ export default function CableScheduleGenerator() {
 
     const formData = new FormData();
     formData.append('iodb_file', iodbFile);
-    formData.append('template_file', templateFile);
+    if (templateFile) formData.append('template_file', templateFile);
     formData.append('jb_column', jbColumn);
     formData.append('tag_column', tagColumn);
     formData.append('output_mode', cableOutputMode);
@@ -307,7 +307,7 @@ export default function CableScheduleGenerator() {
           icon={FileText}
           file={templateFile}
           onChange={setTemplateFile}
-          hint="Required: provide the Cable Schedule Excel template to generate into."
+          hint="Optional: leave empty to use the built-in iEZ default template (blank cover, standard header). Upload a template to use its own layout and cover."
         />
       </div>
 
@@ -319,27 +319,24 @@ export default function CableScheduleGenerator() {
         onSelectedChange={changeExtraSheets}
       />
 
-      {templateFile && (
-        <OutputWorkbookOptions
-          endpoint="/cable-schedule/composition"
-          templateFile={templateFile}
-          mode={cableOutputMode}
-          onModeChange={changeOutputMode}
-          summaryLabel="Cable Summary"
-          listLabel="Cable Schedule"
-          extraFields={{ extra_sheets: extraSheets.join(','), include_schedule: String(includeSchedule) }}
-        />
-      )}
+      <OutputWorkbookOptions
+        endpoint="/cable-schedule/composition"
+        templateFile={templateFile}
+        mode={cableOutputMode}
+        onModeChange={changeOutputMode}
+        summaryLabel="Cable Summary"
+        listLabel="Cable Schedule"
+        extraFields={{ extra_sheets: extraSheets.join(','), include_schedule: String(includeSchedule) }}
+      />
 
       <DeliverableCoverCard docType="cable_schedule" customTemplate={coverTemplate} onCustomTemplate={(f) => { setCoverTemplate(f); setResult(null); }} />
 
       {extraOnly && (
         <Card title="Generate">
-          <Button onClick={handleGenerate} disabled={!templateFile || !iodbFile} loading={generating} size="lg" fullWidth className="text-lg py-4">
+          <Button onClick={handleGenerate} disabled={!iodbFile} loading={generating} size="lg" fullWidth className="text-lg py-4">
             <Cable className="w-6 h-6" />
             {generating ? 'Generating...' : `Generate ${extraSheets.join(' + ')}`}
           </Button>
-          {!templateFile && <p className="text-sm text-gray-500 mt-2 text-center">Upload a Cable Schedule template above to enable generation.</p>}
         </Card>
       )}
 
@@ -429,7 +426,7 @@ export default function CableScheduleGenerator() {
           {/* Generate */}
           <Button
             onClick={handleGenerate}
-            disabled={!templateFile || selectedJbs.length === 0}
+            disabled={selectedJbs.length === 0}
             loading={generating}
             size="lg"
             fullWidth
@@ -438,9 +435,6 @@ export default function CableScheduleGenerator() {
             <Cable className="w-6 h-6" />
             {generating ? 'Generating...' : 'Generate Cable Schedule'}
           </Button>
-          {!templateFile && (
-            <p className="text-sm text-gray-500 mt-2 text-center">Upload a Cable Schedule template above to enable generation.</p>
-          )}
         </Card>
       )}
 

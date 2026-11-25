@@ -195,3 +195,70 @@ def test_formulas_evaluate_to_the_cover_values():
     vals = {str(c.value) for r in res.iter_rows(min_row=1, max_row=6) for c in r if c.value is not None}
     assert {"I0010-201", "0", "10.10.2025", "XYZ", "UV", "QR", "GAIL (INDIA) LTD", "PDIL", "INSTRUMENT CABLE SCHEDULE - POND"} <= vals
     assert not any("Err" in v or "#" in v for v in vals)
+
+
+# ── the cover the app really produces (coversheet generator, 'PREPARED BY' labels, revision rows 15-23) ───────────────
+def real_cover(revs=None):
+    from utils.coversheet_generator import generate_cover_sheet
+    pi = {"doc_title_short": "X", "project_description": "MY PROJECT", "job_no": "J1", "unit_no": "U", "project_no": "P9", "doc_code": "I0010",
+          "serial_no": "201", "page_no": "1 of 2", "client": "CLI", "pmc": "PMC", "contractor": "VA TECH WABAG LIMITED",
+          "doc_title_full": "INSTRUMENT CABLE SCHEDULE - MY PROJECT", "doc_class": "INFORMATION", "discipline": "INSTRUMENTATION"}
+    revs = revs or [{"rev_no": "0", "date": "01.01.2025", "description": "A", "prepared_by": "P0", "checked_by": "C0", "approved_by": "A0"},
+                    {"rev_no": "1", "date": "02.02.2026", "description": "B", "prepared_by": "P1", "checked_by": "C1", "approved_by": "A1"}]
+    data, _fn, err = generate_cover_sheet(pi, revs)
+    assert err is None, err
+    return data
+
+
+def test_generated_cover_is_read_including_prepared_by_labels():
+    cv = H.read_cover(openpyxl.load_workbook(io.BytesIO(real_cover())), "Coversheet")
+    f = cv.fields
+    assert (f["doc_no"].value, f["rev"].value, f["date"].value, f["prepared_by"].value, f["checked_by"].value, f["approved_by"].value) == \
+           ("I0010-201", "1", "02.02.2026", "P1", "C1", "A1")
+    assert not cv.warnings
+
+
+def test_header_follows_a_project_cover_that_replaces_the_template_cover():
+    from utils import deliverable_output as DO
+    wb = build(rev="0")                                         # a template cover with another layout (revision table at rows 19-22)
+    schedule_ws(wb)
+    H.apply_standard_headers(wb, {"Sched": ("INSTRUMENT CABLE SCHEDULE", 12, None)})
+    buf = io.BytesIO()
+    wb.save(buf)
+    out, name = DO.insert_cover(buf.getvalue(), real_cover())
+    book = openpyxl.load_workbook(io.BytesIO(out))
+    assert name == "COVERSHEET"
+    ws = book["Sched"]
+    date = next(str(c.value) for c in ws[3] if isinstance(c.value, str) and c.value.startswith("=") and "INDEX" in c.value)
+    assert "$B$15:$B$23" in date                               # ranges now follow the replacing cover's revision table
+
+
+@pytest.mark.skipif(not shutil.which("soffice"), reason="LibreOffice not installed")
+def test_replaced_cover_values_show_in_the_header():
+    from utils import deliverable_output as DO
+    wb = build(rev="0")
+    schedule_ws(wb)
+    H.apply_standard_headers(wb, {"Sched": ("INSTRUMENT CABLE SCHEDULE", 12, None)})
+    buf = io.BytesIO()
+    wb.save(buf)
+    out, _ = DO.insert_cover(buf.getvalue(), real_cover())
+    with tempfile.TemporaryDirectory() as d:
+        src = Path(d) / "h.xlsx"
+        src.write_bytes(out)
+        subprocess.run(["soffice", "--headless", "--convert-to", "xlsx:Calc MS Excel 2007 XML", "--outdir", str(Path(d) / "o"), str(src)],
+                       capture_output=True, timeout=170)
+        res = openpyxl.load_workbook(Path(d) / "o" / "h.xlsx", data_only=True)["Sched"]
+    vals = {str(c.value) for r in res.iter_rows(min_row=1, max_row=6) for c in r if c.value is not None}
+    assert {"I0010-201", "1", "02.02.2026", "P1", "C1", "A1", "CLI", "PMC", "MY PROJECT"} <= vals
+
+
+def test_blank_cover_title_is_tba_not_the_next_label():
+    wb = openpyxl.Workbook()
+    wb.remove(wb.active)
+    ws = wb.create_sheet("COVERSHEET")
+    ws["A10"] = "DOCUMENT TITLE\n\n\n\n\n\n"
+    ws["A12"] = "STAMPING AREA"
+    ws["A13"] = "DOCUMENT CLASS"
+    cv = H.read_cover(wb, "COVERSHEET")
+    assert cv.fields["title"].value == "TBA" and "DOCUMENT CLASS" not in str(cv.fields["title"].expr) and "$A$13" not in cv.fields["title"].expr
+    assert any("DOCUMENT TITLE" in w for w in cv.warnings)

@@ -117,7 +117,8 @@ def test_filter_that_would_deselect_everything_is_not_applied():
 
 # ── generation honours the user's final selection ───────────────────────────
 def output_rows(out_bytes):
-    ws = openpyxl.load_workbook(io.BytesIO(out_bytes)).active
+    wb = openpyxl.load_workbook(io.BytesIO(out_bytes))
+    ws = wb["IO List"] if "IO List" in wb.sheetnames else wb.active        # the standard I/O List workbook has the list on its 'IO List' sheet
     rows = [[c.value for c in r] for r in ws.iter_rows()]
     return rows[0], rows[1:]
 

@@ -16,6 +16,7 @@ import FileUploadCard from '../ui/FileUploadCard';
 import SharedIodbCard from '../ui/SharedIodb';
 import ListDefaultsNotice, { filterValueOf, type ListDefaults } from '../ui/ListDefaultsNotice';
 import OutputWorkbookOptions, { type OutputMode } from '../ui/OutputWorkbookOptions';
+import IoBasisReview from './iolist/IoBasisReview';
 
 interface AnalyzeResponse {
   columns: string[];
@@ -31,6 +32,9 @@ interface GenerateResponse {
   cover?: AppliedCover | null;
   output_mode?: OutputMode;
   sheets?: string[];   // sheets of the generated workbook, read from the output file
+  basis?: {            // standard I/O List document: printed pages per section, warnings, IODB observations
+    pages?: Record<string, number>; warnings?: string[]; issues?: { severity: string; category: string; message: string }[]; pages_verified?: boolean;
+  } | null;
 }
 
 export default function IOListGenerator() {
@@ -43,6 +47,8 @@ export default function IOListGenerator() {
   const [selectedColumns, setSelectedColumns] = useState<string[]>([]);
   const [filters, setFilters] = useState<Record<string, string[]>>({});
   const [filterColumn, setFilterColumn] = useState<string>('');
+  const [basisOverrides, setBasisOverrides] = useState<Record<string, string>>({});   // IO_BASIS review: chosen representative loops
+  const [basisNames, setBasisNames] = useState<Record<string, string>>({});           // IO_BASIS review: edited equipment wording
 
   const [page, setPage] = useState(0);
   const PAGE_SIZE = 25;
@@ -95,6 +101,8 @@ export default function IOListGenerator() {
     formData.append('selected_columns', JSON.stringify(selectedColumns));
     formData.append('filters', JSON.stringify(filters));
     formData.append('output_mode', ioListOutputMode);
+    formData.append('basis_overrides', JSON.stringify(basisOverrides));
+    formData.append('basis_names', JSON.stringify(basisNames));
 
     try {
       const response = await api.post<GenerateResponse>('/io-list/generate', formData, {
@@ -183,6 +191,8 @@ export default function IOListGenerator() {
             setIodbFile(f);
             setAnalysis(null);
             setResult(null);
+            setBasisOverrides({});
+            setBasisNames({});
           }}
         >
           <Button onClick={handleAnalyze} disabled={!iodbFile} loading={analyzing} fullWidth className="mt-3 bg-blue-600 hover:bg-blue-700">
@@ -195,7 +205,7 @@ export default function IOListGenerator() {
           icon={FileText}
           file={templateFile}
           onChange={setTemplateFile}
-          hint="If omitted, a default formatted I/O list will be generated."
+          hint="Leave empty to use the iEZ standard I/O List: the linked cover sheet, table of contents, abbreviations, IO_BASIS (generated from the IODB), I/O List and I/O Summary. A template uploaded here is used as before (without IO_BASIS)."
         />
       </div>
 
@@ -206,7 +216,6 @@ export default function IOListGenerator() {
         onModeChange={changeOutputMode}
         summaryLabel="I/O Summary"
         listLabel="I/O List"
-        noTemplateNote="default formatted sheet"
       />
 
       {/* Column Selection & Filters */}
@@ -335,6 +344,16 @@ export default function IOListGenerator() {
             )}
           </Card>
 
+          {!templateFile && (
+            <IoBasisReview
+              iodbFile={iodbFile}
+              filters={filters}
+              overrides={basisOverrides}
+              names={basisNames}
+              onChange={(o, n) => { setBasisOverrides(o); setBasisNames(n); setResult(null); }}
+            />
+          )}
+
           <DeliverableCoverCard docType="io_list" customTemplate={coverTemplate} onCustomTemplate={(f) => { setCoverTemplate(f); setResult(null); }} />
 
           {/* Generate */}
@@ -365,6 +384,13 @@ export default function IOListGenerator() {
                   Workbook sheets: {result.sheets.join(' · ')}
                 </p>
               )}
+              {result.basis?.pages && (
+                <p className="text-sm text-green-800 mb-2">
+                  Printed pages (Shts.): {Object.entries(result.basis.pages).map(([k, v]) => `${k} ${v}`).join(' · ')}
+                  {result.basis.pages_verified ? ' — verified on the rendered workbook' : ''}
+                </p>
+              )}
+              {(result.basis?.warnings || []).map((w, i) => <p key={i} className="text-sm text-amber-800 mb-1">• {w}</p>)}
               <p className="text-sm text-green-800 mb-2 font-mono">{result.filename}</p>
               <DeliverableDownloads module="io_list" filename={result.filename} cover={result.cover} onExcel={handleDownload} />
             </div>

@@ -58,23 +58,31 @@ def _safe(name: str) -> str:
 
 # ── used by the generators ───────────────────────────────────────────────────
 def finalize(user_id, module: str, project_id: Optional[str], data: bytes, filename: str, *, sub_key: str = "",
-             sub_label: str = "", custom_template: Optional[bytes] = None, db: Optional[Session] = None) -> tuple[bytes, str, dict]:
+             sub_label: str = "", custom_template: Optional[bytes] = None, db: Optional[Session] = None,
+             snapshot: Optional[dict] = None) -> tuple[bytes, str, dict]:
     """
     -> (final bytes, file name, cover info). The cover sheet of the project's MDL document is put first in the workbook
     (or in place of the template's own cover sheet); a draft is marked. Without a resolvable cover the workbook is
     returned unchanged with the reason. The result is remembered for the Excel / PDF downloads.
+    `snapshot` (optional): a cover resolution + cover workbook taken earlier in the same request ({"resolution", "cover", "warnings",
+    "message"}); it is used instead of resolving again, so the document metadata and the inserted cover are one consistent snapshot.
     """
     own = db is None
     db = db or SessionLocal()
     info: dict = {"applied": False}
     try:
-        r = DC.resolve(db, project_id or "", module, sub_key, sub_label)
+        r = snapshot["resolution"] if snapshot is not None else DC.resolve(db, project_id or "", module, sub_key, sub_label)
         info.update(status=r["status"], message=r["message"], doc_label=r["doc_label"], project_id=r["project_id"],
                     revision=r["revision"], approved=r["approved"],
                     document_number=(r["record"] or {}).get("document_number"),
                     document_title=(r["record"] or {}).get("document_name"))
         if r["record"] is not None and r["revision"] is not None:
-            cover, warnings = DC.cover_workbook(db, r, custom_template)
+            if snapshot is not None:
+                if snapshot.get("cover") is None:
+                    raise DC.CoverError(snapshot.get("message") or "No cover sheet is available for this document.")
+                cover, warnings = snapshot["cover"], snapshot.get("warnings") or []
+            else:
+                cover, warnings = DC.cover_workbook(db, r, custom_template)
             draft = not r["approved"]
             if filename.lower().endswith(".zip"):
                 data = DO.insert_cover_in_zip(data, cover, draft)

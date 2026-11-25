@@ -24,6 +24,15 @@ class ListGenerateResponse(BaseModel):
     sheets: Optional[List[str]] = None
     # Centralised cover sheet applied to the deliverable (status, MDL document, revision, draft) - see routers/deliverables.py
     cover: Optional[Dict[str, Any]] = None
+    # Standard I/O List document: IO_BASIS classes / review items, printed pages per section, warnings (see utils/io_list_builder.py)
+    basis: Optional[Dict[str, Any]] = None
+
+
+class BasisPreviewResponse(BaseModel):
+    classes: List[Dict[str, Any]] = []
+    issues: List[Dict[str, Any]] = []
+    stats: Dict[str, Any] = {}
+    error: str = ""
 
 
 class CompositionSheet(BaseModel):

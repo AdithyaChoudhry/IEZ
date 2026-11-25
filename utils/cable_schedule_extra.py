@@ -591,6 +591,46 @@ def _cable_values(group: CableGroup) -> dict[str, Any]:
             "end_gland_size": show(gs), "end_gland_qty": show(gq)}
 
 
+_NOT_A_LOOP = {"", "TBA", "TBD", "TBC", "XXXX", "N/A", "NA", "-"}
+
+
+def merge_consecutive_loops(ws, from_col: int, first_row: int, last_row: int, row_loops: dict) -> int:
+    """
+    MCC DI / MCC DO only: vertically merge the FROM cells of consecutive signal rows that carry the same IODB loop number,
+    so each loop is shown once. Groups come from the verified loop number of each generated row (row_loops), not from the cell
+    text; a group ends where the loop changes, is blank or a placeholder (TBA, TBD, XXXX ...). Rows are never reordered or
+    skipped, and a loop that returns later in the sheet is a new group. Returns the number of merged groups.
+    """
+    from openpyxl.worksheet.cell_range import CellRange
+    ok = lambda lp: bool(lp) and str(lp).strip().upper() not in _NOT_A_LOOP
+    merged, r = 0, first_row
+    while r <= last_row:
+        lp = row_loops.get(r)
+        if not ok(lp):
+            r += 1
+            continue
+        end = r
+        while end < last_row and row_loops.get(end + 1) == lp:
+            end += 1
+        if end > r:
+            for m in [m for m in ws.merged_cells.ranges if m.min_col == m.max_col == from_col and m.max_row >= r and m.min_row <= end]:
+                ws.unmerge_cells(str(m))                      # a block-level merge inside the group is replaced by the loop merge
+            anchor = ws.cell(r, from_col)
+            anchor.value = str(lp).strip() if not isinstance(lp, str) else lp
+            for rr in range(r + 1, end + 1):
+                ws.cell(rr, from_col).value = None
+            ws.merge_cells(start_row=r, start_column=from_col, end_row=end, end_column=from_col)
+            for rr in range(r, end + 1):                       # one cell: only its outline is drawn, no lines between the rows
+                c = ws.cell(rr, from_col)
+                b = c.border
+                c.border = Border(left=_THIN, right=_THIN, top=_THIN if rr == r else Side(style=None),
+                                  bottom=_THIN if rr == end else Side(style=None))
+            anchor.alignment = Alignment(horizontal="center", vertical="center", wrap_text=False)
+            merged += 1
+        r = end + 1
+    return merged
+
+
 def _loop_of(rec) -> str:
     """The IODB LOOP NUMBER of a record as written ('' when the IODB has none)."""
     return "" if is_missing(rec.loop_number) else str(rec.loop_number).strip()
@@ -658,6 +698,7 @@ def build_sheet(ref_wb, key: str, recs: list[Rec], info: dict) -> tuple[Any, dic
     r = first
     serial = 0
     resolved_fields = set(fcol)
+    row_loops: dict[int, str] = {}                  # worksheet row -> IODB loop number of that signal row (FROM column)
 
     def style_row(row: int, pos: str):
         src = snap[pos]
@@ -728,6 +769,7 @@ def build_sheet(ref_wb, key: str, recs: list[Rec], info: dict) -> tuple[Any, dic
                     # FROM = the IODB LOOP NUMBER of each tag, exactly as written (no derivation from the PLC / panel / MTB).
                     # Contiguous rows with the same loop number share one merged cell; a different loop starts a new one.
                     loops = [_loop_of(rec) for g in block.groups for rec in g.recs]
+                    row_loops.update({r0 + k: lp for k, lp in enumerate(loops)})
                     run0 = 0
                     for k in range(1, len(loops) + 1):
                         if k == len(loops) or loops[k] != loops[run0]:
@@ -735,7 +777,7 @@ def build_sheet(ref_wb, key: str, recs: list[Rec], info: dict) -> tuple[Any, dic
                             ws.cell(a, c).value = loops[run0] or None
                             for rr in range(a + 1, b + 1):
                                 ws.cell(rr, c).value = None
-                            if b > a:
+                            if b > a and (key not in ("mcc_di", "mcc_do") or loops[run0].strip().upper() not in _NOT_A_LOOP):
                                 ws.merge_cells(start_row=a, start_column=c, end_row=b, end_column=c)
                             _outline(ws, f"{get_column_letter(c)}{a}:{get_column_letter(c)}{b}")
                             run0 = k
@@ -752,6 +794,8 @@ def build_sheet(ref_wb, key: str, recs: list[Rec], info: dict) -> tuple[Any, dic
         r += n
 
     last = max(r - 1, first)
+    if key in ("mcc_di", "mcc_do") and fcol.get("from"):
+        stats["from_merges"] = merge_consecutive_loops(ws, fcol["from"], first, r - 1, row_loops)
     # leftover reference formatting below the data
     for rr in range(r, max(ws.max_row, proto_end) + 1):
         for c in range(1, max_col + 1):

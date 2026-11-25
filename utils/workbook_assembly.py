@@ -14,6 +14,7 @@ matches the preview.
 from __future__ import annotations
 
 import io
+from typing import Optional
 import re
 
 import openpyxl
@@ -253,7 +254,9 @@ def restore_template_header_footer(out_bytes: bytes, template_bytes: bytes, shee
         return out_bytes
 
 
-def restore_template_fidelity(out_bytes: bytes, template_bytes: bytes, sheet_names: list[str]) -> bytes:
-    """Everything openpyxl cannot round-trip for the untouched template sheets: drawings, then header/footer."""
-    out_bytes = restore_template_drawings(out_bytes, template_bytes, sheet_names)
+def restore_template_fidelity(out_bytes: bytes, template_bytes: bytes, sheet_names: list[str],
+                              skip_drawings: Optional[set] = None) -> bytes:
+    """Everything openpyxl cannot round-trip for the untouched template sheets: drawings, then header/footer.
+    `skip_drawings`: sheets whose picture was deliberately re-positioned (standard header logo) - keep openpyxl's."""
+    out_bytes = restore_template_drawings(out_bytes, template_bytes, [n for n in sheet_names if n not in (skip_drawings or set())])
     return restore_template_header_footer(out_bytes, template_bytes, sheet_names)

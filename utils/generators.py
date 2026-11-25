@@ -1016,6 +1016,34 @@ def generate_cable_schedule(
             redundant_rows = redundant_main_cable_rows(df, list(extra_sheets))
             if extra_report is not None:
                 extra_report.update(_report)
+        # ── one standard document header (rows 1-6) on every schedule sheet, filled from the COVERSHEET ──
+        _logo_sheets: set = set()
+        try:
+            from utils.cable_schedule_header import apply_standard_headers
+            from utils.cable_schedule_extra import SHEETS as _XS
+            from openpyxl.utils import column_index_from_string as _ci
+            import re as _re
+
+            def _last_col(_ws, _fallback):
+                _m = _re.search(r"\$([A-Z]+)\$\d+$", str(_ws.print_area or ""))
+                return _ci(_m.group(1)) if _m else _fallback
+            _hsheets = {}
+            if include_schedule and target_sheet in out_wb.sheetnames:
+                _ws = out_wb[target_sheet]
+                _hl = max((c.column for c in _ws[CABLE_SCHEDULE_HEADER_ROW] if c.value not in (None, "")), default=_ws.max_column)
+                _hsheets[target_sheet] = ("INSTRUMENT CABLE SCHEDULE", _hl, None)
+            for _st in (extra_report or {}).get("stats", []) if extra_sheets else []:
+                if _st.get("sheet") in out_wb.sheetnames:
+                    _w = out_wb[_st["sheet"]]
+                    _hsheets[_st["sheet"]] = (f"{_st['label']} CABLE SCHEDULE", _last_col(_w, _w.max_column), _XS[_st["key"]]["hdr"])
+            if _hsheets:
+                _hres = apply_standard_headers(out_wb, _hsheets, fill_from=(target_sheet, f"A{CABLE_SCHEDULE_HEADER_ROW}") if include_schedule else None)
+                _logo_sheets = set(_hres["logo_sheets"]) & ({target_sheet} if include_schedule else set())
+                if extra_report is not None and _hres["warnings"]:
+                    extra_report["warnings"] = list(extra_report.get("warnings") or []) + _hres["warnings"]
+        except Exception as _exc:
+            import sys
+            print(f"[Cable Schedule header] standard header not applied: {_exc}", file=sys.stderr)
         if include_schedule and extra_report is not None and cs_warnings:
             extra_report["warnings"] = list(extra_report.get("warnings") or []) + cs_warnings
         if extra_sheets and not include_schedule:
@@ -1062,7 +1090,7 @@ def generate_cable_schedule(
             from utils.workbook_assembly import restore_template_fidelity
             _added = set((extra_report or {}).get("sheets", []))
             out_bytes = restore_template_fidelity(out_bytes, template_bytes,
-                                                  [n for n in out_wb.sheetnames if n not in _added])
+                                                  [n for n in out_wb.sheetnames if n not in _added], skip_drawings=_logo_sheets)
         if tag_warnings:
             import sys
             for w in tag_warnings:

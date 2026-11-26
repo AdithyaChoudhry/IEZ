@@ -20,7 +20,7 @@ import openpyxl
 from openpyxl.worksheet.cell_range import CellRange
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
-from utils.io_list_header import build_header, fill_header  # noqa: E402
+from utils.io_list_header import build_header, fill_header, restructure_abbreviation  # noqa: E402
 
 SRC, OUT = sys.argv[1], sys.argv[2]
 wb = openpyxl.load_workbook(SRC)
@@ -99,22 +99,12 @@ for r in (23, 24):                                           # old revision rows
 toc.print_area = "A1:O25"
 
 # ── ABBREVIATION ─────────────────────────────────────────────────────────────────────────────────────────────────────
-ab._images = []
-for m in [m for m in ab.merged_cells.ranges if m.min_row <= 6]:
-    ab.unmerge_cells(str(m))
-for r in range(1, 7):
-    for c in range(1, 8):
-        cell = ab.cell(r, c)
-        cell.value = None
-shift_rows(ab, 7, 6, 53)                                     # table: title bar 7 -> 13, headings 8 -> 14, abbreviations 9-26 -> 15-32
-rows = build_header(ab, 5, logo)
-assert rows == 12
-ab.print_area = "A1:E32"
+restructure_abbreviation(ab, io, logo)                       # the IO_BASIS header; title row 7, headings row 8, abbreviations 9-26
 
 for ws in (toc, ab, io):
     for r in range(1, 14):
         pass
-for ws, end in ((toc, 25), (ab, 32), (io, 14)):                # empty formatted rows below the print area (the source sheets carry rows to 84)
+for ws, end in ((toc, 25), (ab, 26), (io, 14)):                # empty formatted rows below the print area (the source sheets carry rows to 84)
     if ws.max_row > end:
         ws.delete_rows(end + 1, ws.max_row - end)
     for r in [r for r in ws.row_dimensions if r > end]:

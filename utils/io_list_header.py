@@ -5,7 +5,9 @@ The header is the one of the original IO_BASIS sheet: PROJECT / CLIENT / LOCATIO
 the middle, Prepared / Checked / Approved / Date / Pages on the right. No company address and no other field is added.
 
   * build_header(ws, ...)  lays the header out on a sheet from that sheet's PHYSICAL column widths (merged ranges are computed, never copied):
-        a wide sheet gets the three-zone arrangement of IO_BASIS, a narrow one (the ABBREVIATION table is five columns) the same fields stacked.
+        a wide sheet gets the three-zone arrangement of IO_BASIS, a narrow one (fewer than WIDE_MIN width units) the same fields stacked.
+  * restructure_abbreviation(ab, io, logo)  gives the ABBREVIATION sheet the very IO_BASIS header: the sheet takes the IO_BASIS width and
+        header zone widths, the visible three-column abbreviation table is widened to it in proportion.
   * fill_header(ws, meta)  writes the values; the fields are found by their labels, so it works on any sheet built by build_header and on the
         original IO_BASIS header alike.
 """
@@ -170,6 +172,100 @@ def place_logo(ws, data: bytes, c1: int, r1: int, c2: int, r2: int) -> None:
     img.anchor = OneCellAnchor(_from=AnchorMarker(col=col - 1, colOff=int(x * 9525), row=row - 1, rowOff=int(y * 9525)),
                                ext=XDRPositiveSize2D(int(w * 9525), int(h * 9525)))
     ws.add_image(img)
+
+
+# ───────────────────────────── ABBREVIATION: the IO_BASIS header on a narrow three-column table ─────────────────────────────
+def _segment_style(target, anchor, last, *, first_col: bool, last_col: bool):
+    """Style of one cell of a (re-divided) merged block: look of the source block, its left / right edge only on the outer columns."""
+    font, fill, alignment, number_format, border = anchor
+    target.font, target.fill, target.alignment, target.number_format = copy(font), copy(fill), copy(alignment), number_format
+    target.border = Border(left=copy(border.left) if first_col else Side(), right=copy(last) if last_col else Side(),
+                           top=copy(border.top), bottom=copy(border.bottom))
+
+
+def _snapshot(cell):
+    return (copy(cell.font), copy(cell.fill), copy(cell.alignment), cell.number_format, copy(cell.border))
+
+
+def mirror_header(src, dst, src_ends: list, src_last: int, dst_ends: list, dst_last: int, logo: Optional[bytes] = None, rows: int = 6) -> None:
+    """
+    Reproduce the three-zone header of `src` (IO_BASIS) in rows 1..rows of `dst`: same labels, fonts, fills, alignment, borders, row
+    heights, vertical merges and logo; only the physical columns of each zone differ (`*_ends` = last column of the first four zones).
+    The target rows must be empty and unmerged. Value cells are left blank (fill_header writes them).
+    """
+    src_zones = list(zip([1] + [e + 1 for e in src_ends], src_ends + [src_last]))
+    dst_zones = list(zip([1] + [e + 1 for e in dst_ends], dst_ends + [dst_last]))
+    for zi, ((s1, s2), (d1, d2)) in enumerate(zip(src_zones, dst_zones)):
+        r = 1
+        while r <= rows:
+            span = next((m for m in src.merged_cells.ranges if m.min_row == r and m.min_col == s1), None)
+            r2 = span.max_row if span else r
+            _merge(dst, r, d1, r2, d2)
+            for rr in range(r, r2 + 1):
+                edge = src.cell(rr, s2).border.right
+                if not edge.style:
+                    edge = src.cell(rr, s1).border.right
+                for c in range(d1, d2 + 1):
+                    _segment_style(dst.cell(rr, c), _snapshot(src.cell(rr, s1)), edge, first_col=c == d1, last_col=c == d2)
+            if zi in (0, 3):                                   # the two label zones carry text; the value and logo zones stay blank
+                dst.cell(r, d1).value = src.cell(r, s1).value
+            r = r2 + 1
+    for r in range(1, rows + 1):
+        dst.row_dimensions[r].height = src.row_dimensions[r].height if r in src.row_dimensions else None
+    if logo:
+        place_logo(dst, logo, dst_zones[2][0], 1, dst_zones[2][1], rows)
+
+
+def restructure_abbreviation(ab, io, logo: bytes, title_row: int = 7, old_cols: int = 5) -> None:
+    """
+    `ab` holds the abbreviation table with its title in `title_row` (rows above are discarded) laid out as S.NO. = A, ABBREVIATION = B:C,
+    DESCRIPTION = D:E. Result: the IO_BASIS header in rows 1-6, the title in row 7, headings in row 8, the entries below - on seven
+    physical columns A..G (S.NO. = A, ABBREVIATION = B:C, DESCRIPTION = D:G). The sheet is as wide as IO_BASIS, so the header has the
+    same zone widths and shape; the three table columns keep their proportions to each other.
+    """
+    last = max(r for r in range(title_row, ab.max_row + 1) if any(ab.cell(r, c).value not in (None, "") for c in range(1, old_cols + 1)))
+    old_w = widths_of(ab, old_cols)
+    io_last = 11
+    io_w = widths_of(io, io_last)
+    io_ends = zones(io_w)
+    total = sum(io_w)
+    bounds = [sum(io_w[:e]) for e in io_ends]                                       # the IO_BASIS header zone boundaries
+    scale = total / sum(old_w)
+    sno_end, abbr_end = old_w[0] * scale, sum(old_w[:3]) * scale
+    cuts = [sno_end, bounds[0], abbr_end, bounds[1], bounds[2], bounds[3], total]
+    if cuts != sorted(cuts):
+        raise ValueError("The ABBREVIATION table widths no longer fit the header subdivision.")
+    new_w = [b - a for a, b in zip([0.0] + cuts[:-1], cuts)]
+
+    table = []                                                                      # (height, values, styles) of title .. last entry
+    for r in range(title_row, last + 1):
+        table.append((ab.row_dimensions[r].height, [ab.cell(r, c).value for c in range(1, old_cols + 1)],
+                      [_snapshot(ab.cell(r, c)) for c in range(1, old_cols + 1)]))
+    for m in list(ab.merged_cells.ranges):
+        ab.unmerge_cells(str(m))
+    for key in list(ab._cells):
+        del ab._cells[key]
+    for r in list(ab.row_dimensions):
+        del ab.row_dimensions[r]
+    ab.column_dimensions.clear()
+    for c, w in enumerate(new_w, 1):
+        ab.column_dimensions[get_column_letter(c)].width = round(w, 6)
+    ab._images = []
+    ab.conditional_formatting = type(ab.conditional_formatting)()
+
+    for i, (height, values, styles) in enumerate(table):
+        r = 7 + i
+        # (first old column, last old column, first new column, last new column)
+        blocks = [(1, 5, 1, 7)] if i == 0 else [(1, 1, 1, 1), (2, 3, 2, 3), (4, 5, 4, 7)]
+        for o1, o2, n1, n2 in blocks:
+            _merge(ab, r, n1, r, n2)
+            edge = styles[o2 - 1][4].right if styles[o2 - 1][4].right.style else styles[o1 - 1][4].right
+            for c in range(n1, n2 + 1):
+                _segment_style(ab.cell(r, c), styles[o1 - 1], edge, first_col=c == n1, last_col=c == n2)
+            ab.cell(r, n1).value = values[o1 - 1]
+        ab.row_dimensions[r].height = height
+    mirror_header(io, ab, io_ends, io_last, [2, 4, 5, 6], 7, logo)
+    ab.print_area = f"A1:G{6 + len(table)}"
 
 
 def field_cells(ws, max_row: int = 14) -> dict:

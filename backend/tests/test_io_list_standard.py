@@ -86,9 +86,54 @@ def test_universal_header_is_the_iobasis_header_on_all_three_sheets():
 
 def test_abbreviation_content_is_unchanged():
     ab = D.load_standard_template()["ABBREVIATION"]
-    rows = [(ab.cell(r, 1).value, ab.cell(r, 2).value, ab.cell(r, 4).value) for r in range(15, 33)]
+    assert ab["A7"].value == "ABBREVIATIONS" and [ab.cell(8, c).value for c in (1, 2, 4)] == ["S.NO.", "ABBREVIATION", "DESCRIPTION"]
+    rows = [(ab.cell(r, 1).value, ab.cell(r, 2).value, ab.cell(r, 4).value) for r in range(9, 27)]
     assert rows[0] == (1, "NA", "NOT APPLICABLE") and rows[-1] == (18, "SOV", "SOLENOID VALVE") and len(rows) == 18
     assert rows[3] == (4, "VFD", "VARIABLE FREQUECY DRIVE")                             # the template's own wording is kept
+
+
+def _zone_widths(ws, zones):
+    return [sum(ws.column_dimensions[openpyxl.utils.get_column_letter(c)].width for c in range(a, b + 1)) for a, b in zones]
+
+
+def _check_abbreviation_header(wb):
+    ab, io_ = wb["ABBREVIATION"], wb["IO_BASIS"]
+    zio, zab = [(1, 3), (4, 4), (5, 7), (8, 9), (10, 11)], [(1, 2), (3, 4), (5, 5), (6, 6), (7, 7)]
+    assert _zone_widths(ab, zab) == pytest.approx(_zone_widths(io_, zio), abs=0.01)              # same shape and proportions
+    assert [ab.row_dimensions[r].height for r in range(1, 7)] == [io_.row_dimensions[r].height for r in range(1, 7)]
+    for (a, _), (b, _) in zip(zio, zab):
+        for r in range(1, 7):
+            x, y = io_.cell(r, a), ab.cell(r, b)
+            assert (x.font.name, x.font.sz, x.font.b, x.fill.fill_type, x.alignment.horizontal, x.alignment.vertical) == \
+                   (y.font.name, y.font.sz, y.font.b, y.fill.fill_type, y.alignment.horizontal, y.alignment.vertical), (r, b)
+            assert (x.border.top.style, x.border.bottom.style, x.border.left.style) == (y.border.top.style, y.border.bottom.style, y.border.left.style), (r, b)
+    labels = {c.coordinate: str(c.value).strip() for row in ab.iter_rows(min_row=1, max_row=6) for c in row
+              if not isinstance(c, MergedCell) and c.column in (1, 6) and c.value}
+    assert labels == {"A1": "PROJECT", "A3": "CLIENT", "A4": "LOCATION", "A5": "Doc. No.", "A6": "Rev. No.",
+                      "F1": "Prepared", "F3": "Checked", "F4": "Approved", "F5": "Date", "F6": "Pages"}
+    merged = {str(m) for m in ab.merged_cells.ranges}
+    assert {"A1:B2", "C1:D2", "E1:E6", "F1:F2", "G1:G2", "A7:G7", "B8:C8", "D8:G8", "B26:C26", "D26:G26"} <= merged
+    cells = [(r, c) for m in ab.merged_cells.ranges for r in range(m.min_row, m.max_row + 1) for c in range(m.min_col, m.max_col + 1)]
+    assert len(cells) == len(set(cells))                                                          # no overlapping merged ranges
+    assert str(ab.print_area).endswith("$A$1:$G$26") and ab.max_row == 26 and ab.max_column == 7  # nothing of the old header remains
+    assert len(ab._images) == 1                                                                    # one WABAG logo
+
+
+def test_abbreviation_header_is_the_six_row_iobasis_header_in_the_template():
+    _check_abbreviation_header(D.load_standard_template())
+
+
+def test_generated_workbook_has_the_corrected_abbreviation_header_with_the_same_metadata():
+    out, _name, err, rep = build_io_list_document(df_of(fixture_rows()), COLS, None, "WITH_SUMMARY", None, pager=lambda wb: {})
+    assert err is None
+    wb = openpyxl.load_workbook(io.BytesIO(out))
+    _check_abbreviation_header(wb)
+    meta = {"project": "P", "client": "C", "location": "L", "doc_no": "DOC-1", "rev": "R2", "prepared": "AA", "checked": "BB",
+            "approved": "CC", "date": "01.12.2026", "pages": 1}
+    D.fill_front(wb, meta, {"toc": 1, "abbr": 1, "basis": 1})
+    ab = wb["ABBREVIATION"]
+    assert [ab[c].value for c in ("C1", "C3", "C4", "C5", "C6", "G1", "G3", "G4", "G5", "G6")] == \
+           ["P", "C", "L", "DOC-1", "R2", "AA", "BB", "CC", "01.12.2026", 1]
 
 
 def test_template_iobasis_has_no_sample_engineering_rows():

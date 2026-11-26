@@ -14,6 +14,7 @@ sys.path.insert(0, str(ROOT))
 
 from utils import cable_schedule_extra as X  # noqa: E402
 from utils.template_processor import process_cable_schedule  # noqa: E402
+from cable_header_helpers import generate as post_generate  # noqa: E402
 
 COLS = ["S.NO", "TAG NO", "LOOP NUMBER", "EQUIPMENT DESCRIPTION", "SIGNAL DESCRIPTION", "INSTRUMENT TYPE NAME",
         "SIGNAL I/O TYPE", "SUB SYSTEM", "JUNCTION BOX TAG NO.", "MAIN CABLE TAG NUMBER", "MAIN CABLE TYPE",
@@ -395,7 +396,7 @@ def test_api_availability_preview_composition_generate_download(client):
                        ("VFD (iEZ)", "extra"), ("MOV", "extra"), ("VFD", "template"), ("Notes", "template"),
                        ("CABLE SUMMARY", "summary")]
 
-    gen = client.post("/api/cable-schedule/generate", files={**files, "template_file": ("T.xlsx", t)},
+    gen = post_generate(client, files={**files, "template_file": ("T.xlsx", t)},
                       data={"jb_column": "JUNCTION BOX TAG NO.", "tag_column": "TAG NO", "extra_sheets": "MCC DI,VFD,MOV"})
     assert gen.status_code == 200, gen.text
     body = gen.json()
@@ -406,7 +407,7 @@ def test_api_availability_preview_composition_generate_download(client):
 
 def test_api_old_request_without_extras_is_unchanged(client):
     t = template()
-    gen = client.post("/api/cable-schedule/generate", files={"iodb_file": ("I.xlsx", iodb()), "template_file": ("T.xlsx", t)},
+    gen = post_generate(client, files={"iodb_file": ("I.xlsx", iodb()), "template_file": ("T.xlsx", t)},
                       data={"jb_column": "JUNCTION BOX TAG NO.", "tag_column": "TAG NO"})
     assert gen.status_code == 200 and gen.json()["extra_sheets"] is None
     assert gen.json()["sheets"] == ["COVERSHEET", "Cable Schedule -INST", "VFD", "Notes", "CABLE SUMMARY"]
@@ -415,9 +416,9 @@ def test_api_old_request_without_extras_is_unchanged(client):
 def test_api_errors_are_clear(client):
     files = {"iodb_file": ("IODB.xlsx", iodb()), "template_file": ("T.xlsx", template())}
     d = {"jb_column": "JUNCTION BOX TAG NO.", "tag_column": "TAG NO"}
-    r = client.post("/api/cable-schedule/generate", files=files, data={**d, "extra_sheets": "PUMPS"})
+    r = post_generate(client, files=files, data={**d, "extra_sheets": "PUMPS"})
     assert r.status_code == 400 and "Unknown cable schedule sheet" in r.json()["detail"]
-    r = client.post("/api/cable-schedule/generate", files=files, data={**d, "extra_sheets": "LCP"})
+    r = post_generate(client, files=files, data={**d, "extra_sheets": "LCP"})
     assert r.status_code == 400 and "LCP schedule cannot be generated" in r.json()["detail"]
-    r = client.post("/api/cable-schedule/generate", files=files, data={**d, "include_schedule": "false"})
+    r = post_generate(client, files=files, data={**d, "include_schedule": "false"})
     assert r.status_code == 400 and "Select the Instrument Cable Schedule" in r.json()["detail"]

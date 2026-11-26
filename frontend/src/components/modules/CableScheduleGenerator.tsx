@@ -2,7 +2,7 @@
  * Cable Schedule Generator
  * Upload IODB + Cable Schedule template, pick JB/Tag columns, preview JB summary, generate.
  */
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Cable, Upload, FileText, CheckCircle2 } from 'lucide-react';
 import api from '@/services/api';
 import PageHeader from '../ui/PageHeader';
@@ -19,7 +19,9 @@ import GlandQuantityGenerator from './cableschedule/GlandQuantityGenerator';
 import LugQuantityGenerator from './cableschedule/LugQuantityGenerator';
 import JunctionBoxScheduleGenerator from './cableschedule/JunctionBoxScheduleGenerator';
 import CableScheduleComplete from './cableschedule/CableScheduleComplete';
-import { DeliverableCoverCard, DeliverableDownloads, type AppliedCover } from '../ui/DeliverableCover';
+import { DeliverableCoverCard, DeliverableDownloads, useProject, type AppliedCover } from '../ui/DeliverableCover';
+import HeaderConfirm, { type HeaderMeta } from './cableschedule/HeaderConfirm';
+import { getCurrentProject } from '@/services/projectContext';
 
 interface ColumnsResponse {
   columns: string[];
@@ -43,6 +45,7 @@ interface GenerateResponse {
   extra_sheets?: string[] | null;
   extra_warnings?: string[] | null;
   cover?: AppliedCover | null;
+  header?: { values: Record<string, string>; sources: Record<string, string>; sheets: Record<string, { mode: string }> } | null;
 }
 
 export default function CableScheduleGenerator() {
@@ -67,6 +70,15 @@ export default function CableScheduleGenerator() {
   const [loadingPreview, setLoadingPreview] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Header details (approved Cable Schedule header): taken from the linked Cover Sheet; the form below appears only for what it cannot supply.
+  const project = useProject();
+  const [headerMeta, setHeaderMeta] = useState<HeaderMeta | null>(null);
+  const [headerValues, setHeaderValues] = useState<Record<string, string>>({});
+  const [headerError, setHeaderError] = useState<string | null>(null);
+  const headerRef = useRef<HTMLDivElement | null>(null);
+  // Confirmed details belong to one project + cover: another project or cover template invalidates them.
+  useEffect(() => { setHeaderMeta(null); setHeaderValues({}); setHeaderError(null); }, [project, coverTemplate]);
+  useEffect(() => { if (headerMeta) headerRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }); }, [headerMeta]);
 
   const handleLoadColumns = async () => {
     if (!iodbFile) return;
@@ -131,12 +143,42 @@ export default function CableScheduleGenerator() {
   const changeIncludeSchedule = (v: boolean) => { setIncludeSchedule(v); setResult(null); };
   const extraOnly = !includeSchedule && extraSheets.length > 0;
 
-  const handleGenerate = async () => {
+  const showHeaderForm = (meta: HeaderMeta, message: string | null = null) => {
+    setHeaderMeta(meta);
+    setHeaderError(message);
+    // a contradictory cover value is offered for confirmation; typed values survive a refresh of the form
+    setHeaderValues((cur) => {
+      const next: Record<string, string> = {};
+      for (const f of meta.fields) if (f.status !== 'ok') next[f.key] = cur[f.key] ?? (f.status === 'conflict' ? f.candidate : '');
+      return next;
+    });
+  };
+
+  const generateError = (err: any): string => {
+    const st = err.response?.status;
+    const detail = err.response?.data?.detail;
+    return typeof detail === 'string' && detail ? detail
+      : (detail && typeof detail === 'object' && detail.message) ? String(detail.message)
+      : st === 502 || st === 503 ? `Generation failed: the server stopped while generating (error ${st}). Please try again; if it repeats, send the template so it can be checked.`
+      : st === 504 || err.code === 'ECONNABORTED' ? 'Generation failed: the server took too long to respond (timeout). Please try again with fewer junction boxes selected.'
+      : st === 413 ? 'Generation failed: the uploaded file is too large for the server.'
+      : st ? `Generation failed (server error ${st}).` : `Generation failed: no response from the server (${err.message || 'network error'}).`;
+  };
+
+  /** Ask the server what the linked Cover Sheet supplies for the header. */
+  const fetchHeaderMeta = async (): Promise<HeaderMeta> => {
+    const fd = new FormData();
+    const pid = getCurrentProject();
+    if (pid) fd.append('project_id', pid);
+    if (coverTemplate) fd.append('cover_template_file', coverTemplate);
+    return (await api.post<HeaderMeta>('/cable-schedule/header-metadata', fd)).data;
+  };
+
+  const postGenerate = async (overrides?: Record<string, string>, fingerprint?: string) => {
     if (!iodbFile) return;
-    if (includeSchedule && (!jbColumn || !tagColumn)) return;
-    if (!includeSchedule && extraSheets.length === 0) return;
     setGenerating(true);
     setError(null);
+    setHeaderError(null);
 
     const formData = new FormData();
     formData.append('iodb_file', iodbFile);
@@ -148,6 +190,10 @@ export default function CableScheduleGenerator() {
     formData.append('include_schedule', String(includeSchedule));
     if (includeSchedule && jbSummary && selectedJbs.length < jbSummary.length) formData.append('selected_jbs', JSON.stringify(selectedJbs));
     if (coverTemplate) formData.append('cover_template_file', coverTemplate);
+    if (overrides && Object.keys(overrides).length) {
+      formData.append('header_overrides', JSON.stringify(overrides));
+      formData.append('header_fingerprint', fingerprint || '');
+    }
 
     try {
       const response = await api.post<GenerateResponse>('/cable-schedule/generate', formData, {
@@ -155,17 +201,51 @@ export default function CableScheduleGenerator() {
         timeout: 330000,                                    // just past the server proxy limit: never spin forever
       });
       setResult(response.data);
+      setHeaderMeta(null);
     } catch (err: any) {
       const st = err.response?.status;
       const detail = err.response?.data?.detail;
-      setError(typeof detail === 'string' && detail ? detail
-        : st === 502 || st === 503 ? `Generation failed: the server stopped while generating (error ${st}). Please try again; if it repeats, send the template so it can be checked.`
-        : st === 504 || err.code === 'ECONNABORTED' ? 'Generation failed: the server took too long to respond (timeout). Please try again with fewer junction boxes selected.'
-        : st === 413 ? 'Generation failed: the uploaded file is too large for the server.'
-        : st ? `Generation failed (server error ${st}).` : `Generation failed: no response from the server (${err.message || 'network error'}).`);
+      if (st === 422 && detail && typeof detail === 'object' && detail.code === 'HEADER_METADATA_INCOMPLETE') {
+        showHeaderForm(detail.header as HeaderMeta, String(detail.message || ''));      // the server re-checked: show exactly what is still needed
+      } else if (st === 409 && overrides) {
+        try { showHeaderForm(await fetchHeaderMeta(), String(detail || 'The project or its cover sheet changed. Check the header details again.')); }
+        catch { setError(generateError(err)); }
+      } else {
+        setError(generateError(err));
+      }
     } finally {
       setGenerating(false);
     }
+  };
+
+  const handleGenerate = async () => {
+    if (!iodbFile) return;
+    if (includeSchedule && (!jbColumn || !tagColumn)) return;
+    if (!includeSchedule && extraSheets.length === 0) return;
+    setGenerating(true);
+    setError(null);
+    setResult(null);
+    try {
+      const meta = await fetchHeaderMeta();
+      if (!meta.complete) {                                  // something the cover cannot supply: ask for exactly that
+        showHeaderForm(meta);
+        setGenerating(false);
+        return;
+      }
+      setHeaderMeta(null);
+    } catch (err: any) {
+      setError(generateError(err));
+      setGenerating(false);
+      return;
+    }
+    await postGenerate();
+  };
+
+  const confirmHeader = async () => {
+    if (!headerMeta) return;
+    const overrides: Record<string, string> = {};
+    for (const f of headerMeta.fields) if (f.status !== 'ok') overrides[f.key] = (headerValues[f.key] || '').trim();
+    await postGenerate(overrides, headerMeta.fingerprint);
   };
 
   const handleDownload = async () => {
@@ -436,6 +516,20 @@ export default function CableScheduleGenerator() {
             {generating ? 'Generating...' : 'Generate Cable Schedule'}
           </Button>
         </Card>
+      )}
+
+      {headerMeta && (
+        <div ref={headerRef}>
+          <HeaderConfirm
+            meta={headerMeta}
+            values={headerValues}
+            onChange={(k, v) => setHeaderValues((cur) => ({ ...cur, [k]: v }))}
+            onConfirm={confirmHeader}
+            onCancel={() => { setHeaderMeta(null); setHeaderValues({}); setHeaderError(null); }}
+            busy={generating}
+            error={headerError}
+          />
+        </div>
       )}
 
       {/* Result */}

@@ -1,4 +1,8 @@
 """
+NOTE: the Cable Schedule Generator now writes the approved V3 header (utils/cable_header_v3.py, values from utils/cable_header_meta.py). This module is
+the earlier COVERSHEET-formula header; it is still applied by callers that pass no resolved header metadata (Cable Schedule Complete, registry
+regeneration), and its cover-reading helpers are reused by cable_header_meta.
+
 cable_schedule_header.py - one standard document header (rows 1-6) for every Cable Schedule worksheet
 (Instrument, MCC DI, MCC DO, VFD, MOV, LCP), filled from the workbook's COVERSHEET.
 

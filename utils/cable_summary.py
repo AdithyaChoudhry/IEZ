@@ -21,6 +21,8 @@ from __future__ import annotations
 import math
 import re
 from copy import copy
+
+import openpyxl
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from typing import Any, Optional
@@ -453,7 +455,7 @@ def _apply(cell, style: dict) -> None:
     cell.protection = copy(style["protection"])
 
 
-def append_cable_summary_sheet(wb, result: CableSummaryResult):
+def append_cable_summary_sheet(wb, result: CableSummaryResult, header_rows: int = 0):
     """
     Put the summary on the workbook's LAST sheet, named "CABLE SUMMARY".
 
@@ -464,7 +466,7 @@ def append_cable_summary_sheet(wb, result: CableSummaryResult):
     ws = _find_sheet(wb)
     first_data = 8
     if ws is None:
-        return _append_new_sheet(wb, result)
+        return _append_new_sheet(wb, result, header_rows)
 
     ws.sheet_state = "visible"
     # Capture the template's own row styles BEFORE clearing.
@@ -545,8 +547,10 @@ def _move_to_end(wb, ws) -> None:
         wb.move_sheet(ws, offset=offset)
 
 
-def _append_new_sheet(wb, result: CableSummaryResult):
-    """No summary sheet in the template: create one at the end using the schedule's look."""
+def _append_new_sheet(wb, result: CableSummaryResult, header_rows: int = 0):
+    """No summary sheet in the template: create one at the end using the schedule's look.
+    `header_rows` > 0: the table is placed below that many document-header rows (the approved V3 header is written there afterwards) instead of
+    below the one-row banner of the earlier layout."""
     from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
     ws = wb.create_sheet(CABLE_SUMMARY_SHEET)          # create_sheet appends -> last
@@ -555,14 +559,16 @@ def _append_new_sheet(wb, result: CableSummaryResult):
     font = Font(name="Arial", size=12)
     bold = Font(name="Arial", size=12, bold=True)
     center = Alignment(horizontal="center", vertical="center", wrap_text=True)
-    ws.merge_cells("A1:D1")
-    ws["A1"] = SUMMARY_TITLE
-    ws["A1"].font, ws["A1"].alignment = Font(name="Arial", size=14, bold=True), center
-    for col, head in enumerate(("SL.NO", "CABLE DESCRIPTION", "UNITS", "QUANTITY"), 1):
-        c = ws.cell(3, col, head)
+    head = header_rows + 1 if header_rows else 3
+    if not header_rows:
+        ws.merge_cells("A1:D1")
+        ws["A1"] = SUMMARY_TITLE
+        ws["A1"].font, ws["A1"].alignment = Font(name="Arial", size=14, bold=True), center
+    for col, title in enumerate(("SL.NO", "CABLE DESCRIPTION", "UNITS", "QUANTITY"), 1):
+        c = ws.cell(head, col, title)
         c.font, c.alignment, c.border = bold, center, border
         c.fill = PatternFill("solid", fgColor="CCFFFF")
-    row = 4
+    row = head + 1
     for n, item in enumerate(result.rows, 1):
         for col, value in enumerate((n, item["cable_description"], item["units"], item["quantity"]), 1):
             c = ws.cell(row, col, value)
@@ -576,4 +582,8 @@ def _append_new_sheet(wb, result: CableSummaryResult):
     ws.page_setup.paperSize = 9
     if result.rows:
         _write_note(ws, row + 1, result, {"font": font, "alignment": center})
+    if header_rows:                                    # the document header makes this a printed page: one page wide
+        ws.print_area = f"A1:D{max(row - 1, head + 1)}"
+        ws.sheet_properties.pageSetUpPr = openpyxl.worksheet.properties.PageSetupProperties(fitToPage=True)
+        ws.page_setup.fitToWidth, ws.page_setup.fitToHeight = 1, 0
     return ws

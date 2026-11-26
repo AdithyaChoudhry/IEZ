@@ -23,6 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_cable_schedule_corrections import ROWS, iodb  # noqa: E402
 from test_cable_schedule_layout import template as inst_template  # noqa: E402
 from test_mdl import make_mdl  # noqa: E402
+from cable_header_helpers import generate as post_generate  # noqa: E402
 
 PID, OTHER = "PRJ-1", "PRJ-2"
 MDL_ROWS = [
@@ -67,7 +68,7 @@ def save(c, doc_type, **body):
 
 
 def generate_cable(c, project=PID):
-    r = c.post("/api/cable-schedule/generate", files={"iodb_file": ("IODB.xlsx", iodb(ROWS[:5])), "template_file": ("t.xlsx", inst_template())},
+    r = post_generate(c, files={"iodb_file": ("IODB.xlsx", iodb(ROWS[:5])), "template_file": ("t.xlsx", inst_template())},
                data={"jb_column": "JUNCTION BOX TAG NO.", "tag_column": "TAG NO", "output_mode": "WITH_SUMMARY",
                      "include_schedule": "true", **({"project_id": project} if project else {})})
     assert r.status_code == 200, r.text
@@ -155,7 +156,7 @@ def test_template_cover_sheet_is_replaced_not_duplicated(client):
     wb = openpyxl.load_workbook(io.BytesIO(inst_template()))
     wb.create_sheet("COVERSHEET", 0)["A1"] = "TEMPLATE COVER"
     buf = io.BytesIO(); wb.save(buf)
-    r = client.post("/api/cable-schedule/generate", files={"iodb_file": ("IODB.xlsx", iodb(ROWS[:5])), "template_file": ("t.xlsx", buf.getvalue())},
+    r = post_generate(client, files={"iodb_file": ("IODB.xlsx", iodb(ROWS[:5])), "template_file": ("t.xlsx", buf.getvalue())},
                     data={"jb_column": "JUNCTION BOX TAG NO.", "tag_column": "TAG NO", "output_mode": "WITH_SUMMARY",
                           "include_schedule": "true", "project_id": PID})
     assert r.status_code == 200, r.text
@@ -172,7 +173,7 @@ def test_without_a_cover_the_engineering_output_is_unchanged_and_the_reason_is_g
 
 def test_a_cover_problem_never_blocks_generation(client):
     save(client, "cable_schedule", project_info=INFO, revisions=REVS)
-    r = client.post("/api/cable-schedule/generate", files={"iodb_file": ("IODB.xlsx", iodb(ROWS[:5])), "template_file": ("t.xlsx", inst_template()),
+    r = post_generate(client, files={"iodb_file": ("IODB.xlsx", iodb(ROWS[:5])), "template_file": ("t.xlsx", inst_template()),
                                                           "cover_template_file": ("bad.xlsx", b"not a workbook")},
                     data={"jb_column": "JUNCTION BOX TAG NO.", "tag_column": "TAG NO", "output_mode": "WITH_SUMMARY",
                           "include_schedule": "true", "project_id": PID})

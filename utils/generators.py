@@ -567,6 +567,9 @@ def _cs_special_columns(header_map: dict, col_match: dict, df, rows) -> dict:
     return out
 
 
+HEADER_ROWS_V3 = 6              # rows of the approved V3 document header (the engineering tables start below them)
+
+
 def generate_cable_schedule(
     df: pd.DataFrame,
     template_wb: openpyxl.Workbook,
@@ -580,9 +583,14 @@ def generate_cable_schedule(
     extra_report: dict | None = None,
     include_schedule: bool = True,
     selected_jbs: list | None = None,
+    header_meta: dict | None = None,
 ) -> tuple[bytes | None, str | None, str | None]:
     """
     Generate a Cable Schedule from IODB data using the uploaded template.
+
+    `header_meta` (optional): the RESOLVED document metadata {project, client, doc_no, pmc, date, location, revision}. With it every generated
+    worksheet (INST, MCC DI, MCC DO, VFD, MOV, LCP, CABLE SUMMARY) gets the approved V3 header (utils.cable_header_v3) in rows 1-6; the
+    engineering tables below are not touched. Without it the earlier COVERSHEET-driven header is applied (callers that have no resolved metadata).
 
     `selected_jbs` (optional): only these junction boxes; every tag of each selected JB is written, consecutively
     and in IODB order. The finished sheets get the reference layout of utils.cable_schedule_layout.
@@ -1016,34 +1024,62 @@ def generate_cable_schedule(
             redundant_rows = redundant_main_cable_rows(df, list(extra_sheets))
             if extra_report is not None:
                 extra_report.update(_report)
-        # ── one standard document header (rows 1-6) on every schedule sheet, filled from the COVERSHEET ──
+        # ── document header (rows 1-6) on every schedule sheet ──
         _logo_sheets: set = set()
-        try:
-            from utils.cable_schedule_header import apply_standard_headers
-            from utils.cable_schedule_extra import SHEETS as _XS
-            from openpyxl.utils import column_index_from_string as _ci
-            import re as _re
+        _v3_results: dict = {}
+        _v3_targets: dict = {}
+        from openpyxl.utils import column_index_from_string as _ci
+        import re as _re
 
-            def _last_col(_ws, _fallback):
-                _m = _re.search(r"\$([A-Z]+)\$\d+$", str(_ws.print_area or ""))
-                return _ci(_m.group(1)) if _m else _fallback
-            _hsheets = {}
+        def _last_col(_ws, _fallback):
+            _m = _re.search(r"\$([A-Z]+)\$\d+$", str(_ws.print_area or ""))
+            return _ci(_m.group(1)) if _m else _fallback
+        if header_meta is not None:
+            # the approved V3 header, filled from the resolved metadata (nothing is read from the template's own cover)
             if include_schedule and target_sheet in out_wb.sheetnames:
                 _ws = out_wb[target_sheet]
-                _hl = max((c.column for c in _ws[CABLE_SCHEDULE_HEADER_ROW] if c.value not in (None, "")), default=_ws.max_column)
-                _hsheets[target_sheet] = ("INSTRUMENT CABLE SCHEDULE", _hl, None)
+                _v3_targets[target_sheet] = ("INST", max((c.column for c in _ws[CABLE_SCHEDULE_HEADER_ROW] if c.value not in (None, "")),
+                                                         default=_ws.max_column))
             for _st in (extra_report or {}).get("stats", []) if extra_sheets else []:
                 if _st.get("sheet") in out_wb.sheetnames:
                     _w = out_wb[_st["sheet"]]
-                    _hsheets[_st["sheet"]] = (f"{_st['label']} CABLE SCHEDULE", _last_col(_w, _w.max_column), _XS[_st["key"]]["hdr"])
-            if _hsheets:
-                _hres = apply_standard_headers(out_wb, _hsheets, fill_from=(target_sheet, f"A{CABLE_SCHEDULE_HEADER_ROW}") if include_schedule else None)
-                _logo_sheets = set(_hres["logo_sheets"]) & ({target_sheet} if include_schedule else set())
-                if extra_report is not None and _hres["warnings"]:
-                    extra_report["warnings"] = list(extra_report.get("warnings") or []) + _hres["warnings"]
-        except Exception as _exc:
-            import sys
-            print(f"[Cable Schedule header] standard header not applied: {_exc}", file=sys.stderr)
+                    _v3_targets[_st["sheet"]] = (_st["label"], _last_col(_w, _w.max_column))
+            if _v3_targets:
+                from utils.cable_header_v3 import apply_headers
+                _v3_results.update(apply_headers(out_wb, _v3_targets, header_meta))
+                _logo_sheets = set(_v3_results) & ({target_sheet} if include_schedule else set())
+                # one look for the table headings of every sheet (earlier standard-header work): the schedule's heading fill on the extra sheets
+                if include_schedule and extra_sheets and target_sheet in out_wb.sheetnames:
+                    from copy import copy as _copy
+                    from utils.cable_schedule_extra import SHEETS as _XS
+                    _f = out_wb[target_sheet][f"A{CABLE_SCHEDULE_HEADER_ROW}"].fill
+                    if _f is not None and _f.fill_type:
+                        for _st in (extra_report or {}).get("stats", []):
+                            if _st.get("sheet") in _v3_results and _st["key"] in _XS:
+                                for _r in _XS[_st["key"]]["hdr"]:
+                                    for _c in range(1, _v3_targets[_st["sheet"]][1] + 1):
+                                        out_wb[_st["sheet"]].cell(_r, _c).fill = _copy(_f)
+        else:
+            try:
+                from utils.cable_schedule_header import apply_standard_headers
+                from utils.cable_schedule_extra import SHEETS as _XS
+                _hsheets = {}
+                if include_schedule and target_sheet in out_wb.sheetnames:
+                    _ws = out_wb[target_sheet]
+                    _hl = max((c.column for c in _ws[CABLE_SCHEDULE_HEADER_ROW] if c.value not in (None, "")), default=_ws.max_column)
+                    _hsheets[target_sheet] = ("INSTRUMENT CABLE SCHEDULE", _hl, None)
+                for _st in (extra_report or {}).get("stats", []) if extra_sheets else []:
+                    if _st.get("sheet") in out_wb.sheetnames:
+                        _w = out_wb[_st["sheet"]]
+                        _hsheets[_st["sheet"]] = (f"{_st['label']} CABLE SCHEDULE", _last_col(_w, _w.max_column), _XS[_st["key"]]["hdr"])
+                if _hsheets:
+                    _hres = apply_standard_headers(out_wb, _hsheets, fill_from=(target_sheet, f"A{CABLE_SCHEDULE_HEADER_ROW}") if include_schedule else None)
+                    _logo_sheets = set(_hres["logo_sheets"]) & ({target_sheet} if include_schedule else set())
+                    if extra_report is not None and _hres["warnings"]:
+                        extra_report["warnings"] = list(extra_report.get("warnings") or []) + _hres["warnings"]
+            except Exception as _exc:
+                import sys
+                print(f"[Cable Schedule header] standard header not applied: {_exc}", file=sys.stderr)
         if include_schedule and extra_report is not None and cs_warnings:
             extra_report["warnings"] = list(extra_report.get("warnings") or []) + cs_warnings
         if extra_sheets and not include_schedule:
@@ -1070,7 +1106,7 @@ def generate_cable_schedule(
                                        "columns": _info["columns"]}
                     if not _summary.rows and iodb_bytes:
                         _summary.formula_hint = formula_hint_for(iodb_bytes, _info)
-                append_cable_summary_sheet(out_wb, _summary)
+                append_cable_summary_sheet(out_wb, _summary, header_rows=HEADER_ROWS_V3 if header_meta is not None else 0)
                 if extra_report is not None:
                     _shown = [w.replace("[Cable Summary] ", "Cable Summary: ") for w in _summary.warnings
                               if "Conflicting lengths" in w or "counted once" in w]
@@ -1084,6 +1120,21 @@ def generate_cable_schedule(
                 print(f"[Cable Summary] not added: {_exc}", file=sys.stderr)
         else:
             drop_sheet(out_wb, CABLE_SUMMARY_SHEET)        # no stale / template summary in the output
+
+        if header_meta is not None:
+            from utils.cable_header_v3 import apply_headers, verify_header
+            if CABLE_SUMMARY_SHEET in out_wb.sheetnames:
+                _v3_results.update(apply_headers(out_wb, {CABLE_SUMMARY_SHEET: ("SUMMARY", 4)}, header_meta))
+                _logo_sheets = _logo_sheets | {CABLE_SUMMARY_SHEET}
+            _bad = [p for n in _v3_results for p in verify_header(out_wb[n], header_meta, _v3_results[n])]
+            if _bad:
+                return None, None, "The Cable Schedule header could not be verified: " + " ".join(_bad)
+            if extra_report is not None:
+                extra_report["header"] = {n: {"mode": r.mode, "template_sheet": r.template_sheet, "last_col": r.last_col}
+                                          for n, r in _v3_results.items()}
+                _hw = [w for r in _v3_results.values() for w in r.warnings]
+                if _hw:
+                    extra_report["warnings"] = list(extra_report.get("warnings") or []) + _hw
 
         out_bytes = workbook_to_bytes(out_wb)
         if template_bytes:      # put back drawings (logos, grouped pictures) that openpyxl cannot round-trip
@@ -1099,7 +1150,8 @@ def generate_cable_schedule(
 
     except Exception as e:
         from utils.cable_schedule_extra import ExtraSheetError
-        if isinstance(e, ExtraSheetError):
+        from utils.cable_header_v3 import HeaderError, TemplateError
+        if isinstance(e, (ExtraSheetError, HeaderError, TemplateError)):
             return None, None, str(e)
         return None, None, f"Cable Schedule generation failed: {e}"
 

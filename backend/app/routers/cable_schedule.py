@@ -16,6 +16,7 @@ from datetime import datetime
 from ..deps import get_current_user
 from ..auth.models import User
 from ..services.document_registry import register_safe
+from ..services import cable_cover
 from ..models.cable_schedule import (
     ColumnsResponse,
     CompositionResponse,
@@ -30,6 +31,8 @@ sys.path.insert(0, '/app')
 from utils.template_processor import get_iodb_columns, process_cable_schedule
 from utils import workbook_assembly as wa
 from utils.cable_summary import CABLE_SUMMARY_SHEET
+from utils import cable_header_meta as HM
+from utils import cable_header_v3 as HV
 
 
 router = APIRouter(prefix="/cable-schedule", tags=["Cable Schedule"])
@@ -225,6 +228,65 @@ async def extra_sheet_preview(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
+def _parse_overrides(text: str) -> dict:
+    """The user's confirmed values for the header fields the cover could not supply: a JSON object {field: value}."""
+    if not (text or "").strip():
+        return {}
+    try:
+        data = json.loads(text)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid header details (not valid JSON).")
+    if not isinstance(data, dict) or any(k not in HM.KEYS for k in data):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid header details: unknown field.")
+    return {k: ("" if v is None else str(v)) for k, v in data.items()}
+
+
+def _fingerprint(cover: "HM.CoverHeader", project_id: Optional[str]) -> str:
+    """What the confirmed values belong to: this project's cover as it is right now. A different project or an edited cover changes it."""
+    import hashlib
+    return hashlib.sha256(f"{_project_key(project_id)}|{cover.fingerprint()}".encode()).hexdigest()[:24]
+
+
+def _check_header_template() -> None:
+    try:
+        HV.load_template()
+    except HV.TemplateError as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+def _incomplete(res: "HM.Resolution", fingerprint: str) -> HTTPException:
+    names = ", ".join(HM.LABELS[f.key] for f in res.unresolved)
+    return HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                         detail={"code": "HEADER_METADATA_INCOMPLETE", "message": f"The Cable Schedule header needs: {names}. "
+                                 "Enter the missing details (they are used for this Cable Schedule only) and generate again.",
+                                 "header": {**res.public(), "fingerprint": fingerprint}})
+
+
+@router.post("/header-metadata")
+async def cable_header_metadata(
+    project_id: Optional[str] = Form(None),
+    cover_template_file: Optional[UploadFile] = File(None),
+    header_overrides: str = Form(""),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    The document header details of the Cable Schedule worksheets (PROJECT, CLIENT, DOCUMENT NO., PMC, DATE, LOCATION, REVISION), read from the linked
+    Cover Sheet of this project. Each field is `ok` (verified from the cover) or missing / invalid / conflict - the page asks the user for exactly
+    those. `complete` = true: generation needs no further input. Nothing is stored; `fingerprint` ties confirmed values to this cover.
+    """
+    _check_header_template()
+    overrides = _parse_overrides(header_overrides)
+    tpl = await cover_template_file.read() if cover_template_file is not None else None
+    snap = await run_in_threadpool(cable_cover.snapshot, project_id, tpl or None)
+    cover = HM.read_cover_header(snap["cover"])
+    res = HM.resolve(cover, overrides)
+    r = snap["resolution"]
+    return {**res.public(), "fingerprint": _fingerprint(cover, project_id),
+            "cover": {"available": snap["cover"] is not None, "status": r.get("status"), "message": snap["message"],
+                      "document_number": (r.get("record") or {}).get("document_number"), "revision": r.get("revision"),
+                      "revisions": cover.revisions}}
+
+
 DEFAULT_TEMPLATE_PATH = Path(__file__).resolve().parent.parent / "templates" / "cable_schedule" / "cable_schedule_default_template.xlsx"
 DEFAULT_TEMPLATE_NAME = "iEZ default Cable Schedule template.xlsx"
 
@@ -273,6 +335,8 @@ async def generate_cable_schedule(
     include_schedule: bool = Form(True),       # False: only the extra sheets (needs extra_sheets)
     selected_jbs: str = Form(""),              # optional JSON list / comma list of junction boxes (default: all)
     cover_template_file: Optional[UploadFile] = File(None),  # optional custom cover sheet template (default: iEZ cover sheet)
+    header_overrides: str = Form(""),          # JSON {field: value}: only the header fields the cover could not supply, confirmed by the user
+    header_fingerprint: str = Form(""),        # from /header-metadata: ties header_overrides to this project's cover as the user saw it
     current_user: User = Depends(get_current_user),
 ):
     try:
@@ -298,6 +362,25 @@ async def generate_cable_schedule(
     iodb_bytes = trim_empty_tail(await iodb_file.read())
     template_bytes, template_name = await _template_bytes(template_file)
 
+    # ── the document header: linked cover sheet (one snapshot for the whole request) -> resolved metadata; the user's confirmed values only for
+    #    what the cover cannot supply. Unresolved metadata never produces a deliverable. ──
+    _check_header_template()
+    overrides = _parse_overrides(header_overrides)
+    cover_tpl = await cover_template_file.read() if cover_template_file is not None else None
+    cover_snap = await run_in_threadpool(cable_cover.snapshot, project_id, cover_tpl or None)
+    cover_hdr = HM.read_cover_header(cover_snap["cover"])
+    fingerprint = _fingerprint(cover_hdr, project_id)
+    if any(v.strip() for v in overrides.values()):
+        if not header_fingerprint:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="header_fingerprint is required with header_overrides.")
+        if header_fingerprint != fingerprint:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                                detail="The project or its cover sheet changed since the header details were confirmed. "
+                                       "Check the header details again.")
+    resolution = HM.resolve(cover_hdr, overrides)
+    if not resolution.complete:
+        raise _incomplete(resolution, fingerprint)
+
     extra_report: dict = {}
     # CPU-bound: run in the worker pool so one long generation does not freeze the server for every other request
     out_bytes, filename, err = await run_in_threadpool(
@@ -311,6 +394,7 @@ async def generate_cable_schedule(
         extra_report=extra_report,
         include_schedule=include_schedule,
         selected_jbs=jbs,
+        header_meta=resolution.values,
     )
 
     reg_params = {"jb_column": jb_column, "tag_column": tag_column, "output_mode": output_mode}
@@ -333,9 +417,8 @@ async def generate_cable_schedule(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=mismatch)
 
     from .deliverables import finalize
-    cover_tpl = await cover_template_file.read() if cover_template_file is not None else None
     out_bytes, filename, cover = await run_in_threadpool(finalize, current_user.id, "cable_schedule", project_id, out_bytes,
-                                                         filename, custom_template=cover_tpl)
+                                                         filename, custom_template=cover_tpl, snapshot=cover_snap)
     if cover.get("cover_sheet") and cover["cover_sheet"] not in planned:
         planned = [cover["cover_sheet"]] + planned
     if cover.get("applied") and extra_report.get("warnings"):          # the project cover replaced the template's cover: the header follows it
@@ -364,7 +447,9 @@ async def generate_cable_schedule(
                                          registry=registry, output_mode=output_mode, sheets=planned,
                                          extra_sheets=extra_report.get("sheets") or None,
                                          extra_stats=extra_report.get("stats") or None,
-                                         extra_warnings=extra_report.get("warnings") or None, cover=cover)
+                                         extra_warnings=extra_report.get("warnings") or None, cover=cover,
+                                         header={"values": resolution.values, "sources": {f.key: f.source for f in resolution.fields},
+                                                 "sheets": extra_report.get("header") or {}, "fingerprint": fingerprint})
 
 
 @router.get("/generated")

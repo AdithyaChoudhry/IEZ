@@ -207,9 +207,11 @@ def process_cable_schedule(
     extra_report: dict | None = None,
     include_schedule: bool = True,
     selected_jbs: list | None = None,
+    header_meta: dict | None = None,
 ) -> tuple[bytes | None, str | None, str | None]:
     """
     Full pipeline: read IODB + template → generate cable schedule.
+    `header_meta`: resolved document metadata for the approved V3 worksheet headers (see generators.generate_cable_schedule).
     `selected_jbs`: optional junction boxes to include (all their tags); None = every JB.
     `extra_sheets`: optional MCC DI / MCC DO / VFD / MOV / LCP sheet keys (see utils.cable_schedule_extra).
     `output_mode`: "WITHOUT_SUMMARY" (template sheets + Cable Schedule) or "WITH_SUMMARY" (+ Cable Summary).
@@ -253,7 +255,7 @@ def process_cable_schedule(
         df, wb, jb_column, tag_column, progress_callback,
         template_bytes=tmpl_bytes, iodb_bytes=iodb_raw, output_mode=output_mode,
         extra_sheets=extra_sheets, extra_report=extra_report, include_schedule=include_schedule,
-        selected_jbs=selected_jbs,
+        selected_jbs=selected_jbs, header_meta=header_meta,
     )
 
 

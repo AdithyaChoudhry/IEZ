@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from app.routers.cable_schedule import DEFAULT_TEMPLATE_PATH  # noqa: E402
 from utils.template_processor import process_cable_schedule  # noqa: E402
+from cable_header_helpers import generate as post_generate  # noqa: E402
 
 PROJECT_WORDS = re.compile(r"GAIL|PC286|STORM|10P195|JB-101|MC-101|IC-101|PDIL|PROJECT AND DEVELOPMENT|Test data|RADAR|I0003|I0010", re.I)
 
@@ -112,7 +113,7 @@ def test_api_generates_without_an_uploaded_template(client):
     assert r.status_code == 200, r.text
     planned = [s["name"] for s in r.json()["sheets"]]
     assert planned[:2] == ["COVERSHEET", "Cable Schedule -INST"] and "CABLE SUMMARY" in planned
-    g = client.post("/api/cable-schedule/generate", files={"iodb_file": ("I.xlsx", iodb())},
+    g = post_generate(client, files={"iodb_file": ("I.xlsx", iodb())},
                     data={"jb_column": "JUNCTION BOX TAG NO.", "tag_column": "TAG NO", "output_mode": "WITH_SUMMARY"})
     assert g.status_code == 200, g.text
     assert g.json()["sheets"] == planned
@@ -120,7 +121,7 @@ def test_api_generates_without_an_uploaded_template(client):
 
 def test_an_uploaded_template_still_wins(client):
     from test_cable_schedule_layout import template
-    g = client.post("/api/cable-schedule/generate", files={"iodb_file": ("I.xlsx", iodb()), "template_file": ("T.xlsx", template())},
+    g = post_generate(client, files={"iodb_file": ("I.xlsx", iodb()), "template_file": ("T.xlsx", template())},
                     data={"jb_column": "JUNCTION BOX TAG NO.", "tag_column": "TAG NO", "output_mode": "WITHOUT_SUMMARY"})
     assert g.status_code == 200, g.text
     assert g.json()["sheets"] == ["Cable Schedule -INST"]

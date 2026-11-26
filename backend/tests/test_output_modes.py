@@ -15,6 +15,7 @@ sys.path.insert(0, str(ROOT))
 
 from utils import workbook_assembly as wa  # noqa: E402
 from utils.template_processor import process_cable_schedule, process_io_list  # noqa: E402
+from cable_header_helpers import generate as post_generate  # noqa: E402
 
 WITHOUT, WITH = wa.WITHOUT_SUMMARY, wa.WITH_SUMMARY
 CABLE_TEMPLATE = ROOT / "Cable_schedule.xlsx"
@@ -348,7 +349,7 @@ def test_cable_api_preview_equals_download(client):
         prev = client.post("/api/cable-schedule/composition", files={"template_file": ("T.xlsx", t)}, data={"output_mode": mode})
         assert prev.status_code == 200, prev.text
         planned = [s["name"] for s in prev.json()["sheets"]]
-        r = client.post("/api/cable-schedule/generate", files={"iodb_file": ("I.xlsx", data), "template_file": ("T.xlsx", t)},
+        r = post_generate(client, files={"iodb_file": ("I.xlsx", data), "template_file": ("T.xlsx", t)},
                         data={"jb_column": jb, "tag_column": "TAG NO", "output_mode": mode})
         assert r.status_code == 200, r.text
         content = client.get("/api/cable-schedule/download").content

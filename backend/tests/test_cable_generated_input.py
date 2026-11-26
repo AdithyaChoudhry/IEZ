@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from test_cable_complete import iodb, template  # noqa: E402
 from test_drum_schedule import lot, master  # noqa: E402
+from cable_header_helpers import generate as post_generate  # noqa: E402
 
 USER = {"u": SimpleNamespace(id=71, username="alice")}
 
@@ -48,7 +49,7 @@ def generate(c, project=None, jbs=None, jb_column="JUNCTION BOX TAG NO."):
         data["project_id"] = project
     if jbs:
         data["selected_jbs"] = json.dumps(jbs)
-    return c.post("/api/cable-schedule/generate", files={"iodb_file": ("IODB_Test.xlsx", IODB), "template_file": ("tpl.xlsx", TPL)}, data=data)
+    return post_generate(c, files={"iodb_file": ("IODB_Test.xlsx", IODB), "template_file": ("tpl.xlsx", TPL)}, data=data)
 
 
 def meta(c, project=None):

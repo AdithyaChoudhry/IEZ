@@ -547,10 +547,11 @@ _HELPER_FIRST, _HELPER_LAST = column_index_from_string("AF"), column_index_from_
 _MAX_ROW_PT = 400.0            # Excel stops at 409.5 pt
 
 
-def build_workbook(template: bytes, results: list, meta: dict, cover_placeholder: bool = True) -> bytes:
+def build_workbook(template: bytes, results: list, meta: dict) -> bytes:
     """
-    Fill the standard JB_SCHEDULE. Only that sheet is kept (plus, when a cover sheet is available, an empty COVERSHEET
-    placeholder that the cover-sheet service replaces). Removed from the template: the helper / check columns AF:AR, the columns
+    Fill the standard JB_SCHEDULE. Only that sheet is kept: the template's own input / reference sheets (COVER with its header
+    and design-parameter cells, INSTRUCTIONS, COLUMN_GUIDE, SUMMARY, EXAMPLE_SCHEDULE, REFERENCE_REVIEW, LOOKUPS) and every defined
+    name are dropped, and no cover sheet is added. Removed from the template: the helper / check columns AF:AR, the columns
     NEAR EQUIPMENT TAG / DESTINATION PANEL / DESTINATION ROOM, rows 7-8 (group headings, field codes) and every formula that
     depended on the deleted sheets - the checks are calculated here and nothing in the output refers to another sheet.
     All table cells are centred. meta: project_info (dict), document_number, revision, date.
@@ -592,7 +593,7 @@ def build_workbook(template: bytes, results: list, meta: dict, cover_placeholder
     last_template = FIRST_DATA_ROW + 499
     if FIRST_DATA_ROW + n <= last_template:
         ws.delete_rows(FIRST_DATA_ROW + n, last_template - (FIRST_DATA_ROW + n) + 1)
-    # 3. title block - plain values (the template's formulas pointed to the COVER sheet's named cells)
+    # 3. title block - plain values (the template's formulas pointed to the template's COVER sheet named cells; blank stays blank)
     info = meta.get("project_info") or {}
     units = meta.get("unit_names") or _unique(r["row"].get("unit_name") for r in rows)
     ws["C1"], ws["C2"], ws["C3"], ws["C4"] = (info.get("project_description") or "", info.get("client") or "",
@@ -650,10 +651,6 @@ def build_workbook(template: bytes, results: list, meta: dict, cover_placeholder
     ws.print_area = f"A1:{last_letter}{FIRST_DATA_ROW + n - 1}"
     ws.print_title_rows = f"{HEADER_ROW}:{HEADER_ROW}"
     ws.freeze_panes = f"E{FIRST_DATA_ROW}"
-    # 8. the cover-sheet placeholder (replaced in place by the centralised cover sheet)
-    if cover_placeholder:
-        cover = wb.create_sheet("COVERSHEET", 0)
-        cover["A1"] = "COVER SHEET"
     wb.active = 0
     buf = io.BytesIO()
     wb.save(buf)

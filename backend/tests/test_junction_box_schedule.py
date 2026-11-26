@@ -1,7 +1,7 @@
 """Junction Box Schedule Generator (Cable Schedule sub-generator): the generated Cable Schedule is the only input, junction
 boxes / instruments / cables are counted uniquely, terminals come from the termination rows or from the engineer, spare
-terminals and spare % are calculated, the standard template is filled, and the delivered workbook is exactly COVERSHEET +
-JB_SCHEDULE with no broken formula."""
+terminals and spare % are calculated, the standard template is filled, and the delivered workbook is the JB_SCHEDULE sheet
+alone (the Junction Box Schedule has no cover sheet) with no broken formula."""
 import io
 import sys
 from pathlib import Path
@@ -237,7 +237,6 @@ def test_different_capacities_per_junction_box_and_whole_number_rule(client):
 
 def test_capacity_exceeded_is_reported_and_blocks_generation(client):
     put_schedule()
-    add_cover(client)
     ev = validate(client, {"JB-001": cfg(terminal_capacity=12)})
     r = next(x for x in ev["results"] if x["jb_no"] == "JB-001")
     assert J.EXCEEDED in r["errors"] and r["row"]["spare_terminals"] is None and r["status"] == "Error"
@@ -312,7 +311,7 @@ def test_zoned_area_needs_ex_protection(client):
     assert any("not Ex" in e for e in r["errors"]) and r["status"] == "Error"
 
 
-# ── Tests 12-14: cover sheet, workbook structure, formulas ────────────────────
+# ── Tests 12-14: no cover sheet, workbook structure, formulas ─────────────────
 def ready_configs():
     caps = {"JB-001": 60, "JB-002": 20, "JB-003": 30, "JB-004": 20, "XXXX-SMB-001": 12}
     out = {}
@@ -325,37 +324,93 @@ def ready_configs():
     return out
 
 
-def test_cover_sheet_is_optional_the_schedule_downloads_without_it(client):
+def no_cover_calls(monkeypatch):
+    """The Junction Box Schedule must never touch the cover sheet service: any call fails the test."""
+    from app.routers import deliverables
+    from app.services import deliverable_covers as DC
+
+    def boom(*a, **k):
+        raise AssertionError("the Junction Box Schedule resolved a cover sheet")
+    for name in ("resolve", "details", "cover_workbook"):
+        monkeypatch.setattr(DC, name, boom)
+    monkeypatch.setattr(deliverables, "finalize", boom)
+
+
+def test_generates_without_any_cover_sheet_and_never_calls_the_cover_service(client, monkeypatch):
+    no_cover_calls(monkeypatch)
     put_schedule()
-    g = client.post("/api/cable-schedule/jb/generate", json={"project_id": PID, "jbs": ready_configs()})
-    assert g.status_code == 200, g.text
-    body = g.json()
-    assert body["cover"]["applied"] is False and "without a cover sheet" in body["cover"]["message"]
-    d = client.get("/api/cable-schedule/jb/download")
-    assert d.status_code == 200
-    wb = openpyxl.load_workbook(io.BytesIO(d.content))
-    assert wb.sheetnames == ["JB_SCHEDULE"] and J.formula_problems(d.content) == []             # no empty placeholder sheet is left behind
-    assert wb["JB_SCHEDULE"]["AD2"].value in (None, "")                                         # no document number is invented
-    # another document's cover is never attached: an MDL without a matching document gives the same cover-less schedule
-    add_cover(client, name="Instrument Cable Schedule for New WWTP")
-    g = client.post("/api/cable-schedule/jb/generate", json={"project_id": PID, "jbs": ready_configs()})
-    assert g.status_code == 200 and g.json()["cover"]["applied"] is False
-    assert openpyxl.load_workbook(io.BytesIO(client.get("/api/cable-schedule/jb/download").content)).sheetnames == ["JB_SCHEDULE"]
+    for path in ("analyze", "validate"):                                                         # no cover in any response
+        r = client.post(f"/api/cable-schedule/jb/{path}", json={"project_id": PID, "jbs": ready_configs()})
+        assert r.status_code == 200 and "cover" not in r.json()
     st = client.get("/api/cable-schedule/jb/status", params={"project_id": PID}).json()
-    assert st["cover"]["available"] is False and "cover sheet is not available" in st["cover"]["message"]
-
-
-def test_final_workbook_is_coversheet_and_jb_schedule_only_without_broken_formulas(client):
-    put_schedule()
-    add_cover(client)
+    assert "cover" not in st and st["generated"]["available"]
     g = client.post("/api/cable-schedule/jb/generate", json={"project_id": PID, "jbs": ready_configs()})
     assert g.status_code == 200, g.text
     body = g.json()
-    assert body["filename"].startswith("PC286-10P195-J0007-001_R0_Junction_Box_Schedule") and body["cover"]["applied"] and body["cover"]["draft"] is True
+    assert "cover" not in body and body["filename"] == "Junction_Box_Schedule.xlsx"
     d = client.get("/api/cable-schedule/jb/download")
     assert d.status_code == 200
     wb = openpyxl.load_workbook(io.BytesIO(d.content))
-    assert wb.sheetnames == ["COVERSHEET", "JB_SCHEDULE"]                                    # nothing else, nothing hidden
+    assert wb.sheetnames == ["JB_SCHEDULE"] and J.formula_problems(d.content) == []             # no cover, no placeholder, nothing hidden
+    ws = wb["JB_SCHEDULE"]
+    assert ws.sheet_state == "visible" and not list(wb.defined_names)
+    assert ws["AA2"].value in (None, "") and ws["AA3"].value in (None, "")                        # no document number / revision is invented
+    assert ws["C1"].value in (None, "") and ws["C2"].value in (None, "")                          # nor a project / client
+
+
+def test_an_existing_cover_for_the_project_is_ignored(client, monkeypatch):
+    put_schedule()
+    add_cover(client)                                                                            # a JB cover exists in the project ...
+    no_cover_calls(monkeypatch)                                                                  # ... and nothing reads it
+    g = client.post("/api/cable-schedule/jb/generate", json={"project_id": PID, "jbs": ready_configs()})
+    assert g.status_code == 200, g.text
+    assert g.json()["filename"] == "Junction_Box_Schedule.xlsx"                                  # not derived from the MDL
+    wb = openpyxl.load_workbook(io.BytesIO(client.get("/api/cable-schedule/jb/download").content))
+    assert wb.sheetnames == ["JB_SCHEDULE"] and wb["JB_SCHEDULE"]["C1"].value in (None, "")        # no cover metadata leaks into the header
+
+
+def test_header_details_come_only_from_the_engineer_and_the_project_record(client, db):
+    from app.models.document_registry import Project
+    put_schedule()
+    hdr = {"project_description": "  NEW   WWTP ", "client": "SAMPLE CLIENT", "pmc": "", "contractor": "SAMPLE CONTRACTOR",
+           "document_number": "DOC-1", "revision": "A", "date": "01.01.2000", "bogus": "x"}
+    g = client.post("/api/cable-schedule/jb/generate", json={"project_id": PID, "jbs": ready_configs(), "header": hdr})
+    assert g.status_code == 200, g.text
+    assert g.json()["filename"] == "DOC-1_A_Junction_Box_Schedule.xlsx"
+    ws = openpyxl.load_workbook(io.BytesIO(client.get("/api/cable-schedule/jb/download").content))["JB_SCHEDULE"]
+    assert (ws["C1"].value, ws["C2"].value, ws["C4"].value) == ("NEW WWTP", "SAMPLE CLIENT", "SAMPLE CONTRACTOR")
+    assert ws["C3"].value in (None, "") and ws["AA2"].value == "DOC-1" and ws["AA3"].value == "A"
+    assert ws["AA4"].value != "01.01.2000"                                                        # the date is the generation date
+    g = client.post("/api/cable-schedule/jb/generate", json={"project_id": PID, "jbs": ready_configs(), "header": {"client": "x" * 500}})
+    assert g.status_code == 400
+    db.add(Project(project_id=PID, name="REGISTERED NAME", created_by="t"))
+    db.commit()
+    st = client.post("/api/cable-schedule/jb/analyze", json={"project_id": PID}).json()
+    assert st["project_name"] == "REGISTERED NAME"
+
+
+def test_the_shared_download_slot_serves_the_same_workbook_for_the_pdf_button(client):
+    from app.routers import deliverables
+    put_schedule()
+    g = client.post("/api/cable-schedule/jb/generate", json={"project_id": PID, "jbs": ready_configs()})
+    assert g.status_code == 200
+    info = client.get("/api/deliverables/jb_schedule/info").json()
+    assert info["filename"] == "Junction_Box_Schedule.xlsx" and info["cover"] == {"applied": False}
+    slot = deliverables._outputs[(5, "jb_schedule")]
+    assert slot["bytes"] == client.get("/api/cable-schedule/jb/download").content
+
+
+def test_final_workbook_is_jb_schedule_only_without_broken_formulas(client):
+    put_schedule()
+    g = client.post("/api/cable-schedule/jb/generate", json={"project_id": PID, "jbs": ready_configs(),
+                    "header": {"project_description": "NEW WWTP", "document_number": "PC286-10P195-J0007-001", "revision": "R0"}})
+    assert g.status_code == 200, g.text
+    body = g.json()
+    assert body["filename"].startswith("PC286-10P195-J0007-001_R0_Junction_Box_Schedule")
+    d = client.get("/api/cable-schedule/jb/download")
+    assert d.status_code == 200
+    wb = openpyxl.load_workbook(io.BytesIO(d.content))
+    assert wb.sheetnames == ["JB_SCHEDULE"]                                                  # nothing else, nothing hidden
     assert all(ws.sheet_state == "visible" for ws in wb.worksheets)
     assert J.formula_problems(d.content) == [] and not list(wb.defined_names)
     ws = wb["JB_SCHEDULE"]
@@ -392,7 +447,6 @@ def test_final_workbook_is_coversheet_and_jb_schedule_only_without_broken_formul
 
 def test_submission_readiness_is_reported_without_blocking(client):
     put_schedule()
-    add_cover(client)
     jbs = ready_configs()
     jbs["JB-001"].pop("location")
     g = client.post("/api/cable-schedule/jb/generate", json={"project_id": PID, "jbs": jbs})
@@ -408,7 +462,7 @@ def test_template_is_the_standard_one_and_loses_nothing_it_needs():
                                                                       "SPARE TERMINALS / WAYS", "SPARE %"]
     out = J.build_workbook(tpl, [{"jb_no": "JB-1", "row": {"terminal_capacity": 10, "terminals_used": 4, "spare_terminals": 6, "spare_pct": 0.6,
                                                            "category": "AJB", "terminals_method": "auto"}}], {})
-    assert openpyxl.load_workbook(io.BytesIO(out)).sheetnames == ["COVERSHEET", "JB_SCHEDULE"]
+    assert openpyxl.load_workbook(io.BytesIO(out)).sheetnames == ["JB_SCHEDULE"]
     assert J.formula_problems(out) == []
 
 

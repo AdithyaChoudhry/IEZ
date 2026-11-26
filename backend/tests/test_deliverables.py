@@ -1,5 +1,5 @@
 """Centralised cover sheets + Excel / PDF deliverables: the MDL document is matched by keyword (engineer's pick when
-not sure), the cover details are entered once, an unapproved cover is a DRAFT, the cover replaces the template's own
+not sure), the cover details are entered once, a saved cover is available at once (no approval step, never a DRAFT), the cover replaces the template's own
 cover sheet (never a second one), projects never leak, and the PDF is the same workbook."""
 import io
 import json
@@ -109,46 +109,35 @@ def test_other_project_never_sees_this_projects_documents(client):
     assert r["status"] == "NOT_AVAILABLE" and r["record"] is None and "Master Document List" in r["message"]
 
 
-# ── generation: draft, approval, placement ───────────────────────────────────
+# ── generation: availability, placement ──────────────────────────────────────
 def _cover_sheet(xlsx):
     wb = openpyxl.load_workbook(io.BytesIO(xlsx))
     return wb, wb.worksheets[0]
 
 
-def test_unapproved_cover_is_a_draft_without_checked_or_approved_names(client):
+def test_a_saved_cover_is_available_at_once_and_carries_the_entered_names_without_a_draft_mark(client, db):
     save(client, "cable_schedule", project_info=INFO, revisions=REVS)
-    assert cover(client, "cable_schedule")["status"] == "APPROVAL_REQUIRED"
+    r = cover(client, "cable_schedule")
+    assert r["status"] == "AVAILABLE" and "approved" not in r and r["legacy_approval"] is None     # no approval step, none invented
     res, xlsx = generate_cable(client)
-    assert res["cover"]["applied"] and res["cover"]["draft"] is True
+    assert res["cover"]["applied"] and res["cover"]["draft"] is False and "approved" not in res["cover"]
     assert res["filename"] == "PC286-10P195-J0001-105_R0_Cable_Schedule.xlsx"
     wb, ws = _cover_sheet(xlsx)
     assert ws.title == "COVER SHEET" and wb.sheetnames[1] == "Cable Schedule -INST"   # cover first, schedule kept
     assert ws["K4"].value == "J0001" and ws["M4"].value == "105" and "Instrument Cable Schedule" in ws["G2"].value
-    assert "DRAFT" in ws.oddHeader.center.text
+    assert not ws.oddHeader.center.text                                                  # no DRAFT mark
     texts = {str(c.value) for row in ws.iter_rows() for c in row if c.value is not None}
-    assert "AB" in texts and "CD" not in texts and "EF" not in texts                   # no unauthorised sign-off
+    assert {"AB", "CD", "EF"} <= texts                                                   # exactly what the engineer typed
+    assert db.query(ApprovalRequest).count() == 0                                        # nothing was sent to the approval queue
+    save(client, "cable_schedule", revisions=REVS + [{**REVS[0], "rev_no": "R1"}])       # a later edit needs no approval either
+    assert cover(client, "cable_schedule")["status"] == "AVAILABLE" and cover(client, "cable_schedule")["revision"] == "R1"
 
 
-def test_approved_cover_carries_the_signatories_and_no_draft_mark(client, db):
+def test_the_approval_request_endpoint_is_gone(client):
     save(client, "cable_schedule", project_info=INFO, revisions=REVS)
     r = client.post("/api/deliverables/cover/request-approval", json={
         "project_id": PID, "doc_type": "cable_schedule", "submitted_by_name": "Alice", "submitted_by_id": "E1"})
-    assert r.status_code == 201
-    req = db.query(ApprovalRequest).get(r.json()["approval_request_id"])
-    assert req.request_type == "coversheet" and json.loads(req.payload_json)["document_number"] == "PC286-10P195-J0001-105"
-    assert cover(client, "cable_schedule")["status"] == "APPROVAL_REQUIRED"         # pending
-    req.status = "approved"
-    db.commit()
-    assert cover(client, "cable_schedule")["status"] == "AVAILABLE"
-    res, xlsx = generate_cable(client)
-    assert res["cover"]["draft"] is False
-    _, ws = _cover_sheet(xlsx)
-    texts = {str(c.value) for row in ws.iter_rows() for c in row if c.value is not None}
-    assert {"AB", "CD", "EF"} <= texts and not ws.oddHeader.center.text
-    # a change after approval needs approval again
-    save(client, "cable_schedule", revisions=REVS + [{**REVS[0], "rev_no": "R1"}])
-    r = cover(client, "cable_schedule")
-    assert r["status"] == "APPROVAL_REQUIRED" and "changed after approval" in r["message"]
+    assert r.status_code in (404, 405)
 
 
 def test_template_cover_sheet_is_replaced_not_duplicated(client):
@@ -186,7 +175,7 @@ def test_info_and_pdf_are_the_same_deliverable(client):
     save(client, "cable_schedule", project_info=INFO, revisions=REVS)
     res, xlsx = generate_cable(client)
     info = client.get("/api/deliverables/cable_schedule/info").json()
-    assert info["filename"] == res["filename"] and info["cover"]["draft"] is True
+    assert info["filename"] == res["filename"] and info["cover"]["draft"] is False
     if DO.soffice() is None:
         r = client.post("/api/deliverables/cable_schedule/pdf")
         assert r.status_code == 503 and "Excel generation completed successfully" in r.json()["detail"]
@@ -206,7 +195,7 @@ def test_info_and_pdf_are_the_same_deliverable(client):
     from pypdf import PdfReader
     pages = PdfReader(io.BytesIO(r.content)).pages
     text = " ".join(p.extract_text() or "" for p in pages)
-    assert "DRAFT" in text and "PT-001" in text and "Instrument Cable Schedule" in text
+    assert "DRAFT" not in text and "PT-001" in text and "Instrument Cable Schedule" in text
 
 
 def test_pdf_before_generation_is_refused(client):

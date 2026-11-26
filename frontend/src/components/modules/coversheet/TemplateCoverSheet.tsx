@@ -102,13 +102,10 @@ export function ModelPreview({ model }: { model: Model }) {
 }
 
 interface Props {
-  /** Admin / approved authorisation of the existing workflow is reused: generation needs it too. */
-  authorized: boolean;
-  requestAuth: () => void;
   mdlActive: boolean;
 }
 
-export default function TemplateCoverSheet({ authorized, requestAuth, mdlActive }: Props) {
+export default function TemplateCoverSheet({ mdlActive }: Props) {
   const [projectId, setProjectId] = useState(getCurrentProject());
   const [file, setFile] = useState<File | null>(null);
   const [analysis, setAnalysis] = useState<Analysis | null>(null);
@@ -128,7 +125,6 @@ export default function TemplateCoverSheet({ authorized, requestAuth, mdlActive 
   const [previewing, setPreviewing] = useState(false);
   const [previewDoc, setPreviewDoc] = useState('');
   const [generating, setGenerating] = useState(false);
-  const [pendingGenerate, setPendingGenerate] = useState(false);
   const [done, setDone] = useState<{ filename: string; kind: string; files: string[]; warnings: string[]; engine: string | null; message: string } | null>(null);
 
   useEffect(() => subscribeProject(setProjectId), []);
@@ -248,8 +244,7 @@ export default function TemplateCoverSheet({ authorized, requestAuth, mdlActive 
     finally { setGenerating(false); }
   }, [file, analysis, pickedList, vals, formats, clearHistory, projectId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const onGenerate = () => { if (problems.length) return; if (!authorized) { setPendingGenerate(true); requestAuth(); } else runGenerate(); };
-  useEffect(() => { if (pendingGenerate && authorized) { setPendingGenerate(false); runGenerate(); } }, [pendingGenerate, authorized, runGenerate]);
+  const onGenerate = () => { if (problems.length) return; runGenerate(); };
 
   const download = async (kind?: string) => {
     try {
@@ -404,7 +399,7 @@ export default function TemplateCoverSheet({ authorized, requestAuth, mdlActive 
             </select>)}
           <Button variant="secondary" onClick={runPreview} loading={previewing} disabled={!!problems.length}><Eye className="w-4 h-4" /> Preview</Button>
           <Button onClick={onGenerate} loading={generating} disabled={!!problems.length}>
-            {authorized ? 'Generate' : 'Verify & Generate'}
+            Generate
           </Button>
           {done && done.kind !== 'zip' && done.files.length > 1 && <>
             <Button variant="secondary" onClick={() => download('xlsx')}><Download className="w-4 h-4" /> Excel</Button>
@@ -412,7 +407,6 @@ export default function TemplateCoverSheet({ authorized, requestAuth, mdlActive 
           {done && !(done.kind !== 'zip' && done.files.length > 1) && <Button variant="secondary" onClick={() => download()}><Download className="w-4 h-4" /> Download {done.filename}</Button>}
         </div>
         {!!problems.length && <ul className="text-xs list-disc pl-5" style={{ color: 'var(--t2)' }}>{problems.slice(0, 6).map(p => <li key={p}>{p}</li>)}</ul>}
-        {!authorized && <p className="text-xs" style={{ color: 'var(--t2)' }}>Generating needs the same admin verification as the standard workflow.</p>}
         {done && <Alert variant="success">{done.message} {done.filename}{done.engine ? ` · PDF via ${done.engine === 'libreoffice' ? 'LibreOffice' : 'built-in renderer'}` : ''}</Alert>}
         {done?.warnings?.map(w => <p key={w} className="text-xs flex gap-1.5" style={{ color: 'var(--gold)' }}><AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" />{w}</p>)}
         {preview && (

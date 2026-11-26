@@ -131,9 +131,7 @@ function BoxPicker({ pages, fields, fieldKey, initial, onSave, onClose }: {
   );
 }
 
-interface Props { authorized: boolean; requestAuth: () => void }
-
-export default function CoversheetBuilder({ authorized, requestAuth }: Props) {
+export default function CoversheetBuilder() {
   const [error, setError] = useState<string | null>(null);
   // stage 1-2
   const [mdl, setMdl] = useState<Extraction | null>(null);
@@ -159,7 +157,6 @@ export default function CoversheetBuilder({ authorized, requestAuth }: Props) {
   const [preview, setPreview] = useState<{ kind: string; model?: any; pages?: PageImg[]; warnings: string[] } | null>(null);
   const [previewing, setPreviewing] = useState(false);
   const [generating, setGenerating] = useState(false);
-  const [pendingGen, setPendingGen] = useState(false);
   const [done, setDone] = useState<{ filename: string; files: string[]; kind: string; warnings: string[]; message: string; pdf_engine: string | null } | null>(null);
   const stale = () => { setPreview(null); setDone(null); };
 
@@ -276,8 +273,7 @@ export default function CoversheetBuilder({ authorized, requestAuth }: Props) {
     } catch (e: any) { setError(errText(e, 'Generation failed.')); }
     finally { setGenerating(false); }
   }, [tplFile, mdl, selectedId, analysis, vals, clearHistory, formats, sigs]); // eslint-disable-line react-hooks/exhaustive-deps
-  const onGenerate = () => { if (problems.length) return; if (!authorized) { setPendingGen(true); requestAuth(); } else runGenerate(); };
-  useEffect(() => { if (pendingGen && authorized) { setPendingGen(false); runGenerate(); } }, [pendingGen, authorized, runGenerate]);
+  const onGenerate = () => { if (problems.length) return; runGenerate(); };
   const download = async (kind?: string) => {
     try {
       const r = await api.get('/coversheet/builder/download', { params: kind ? { kind } : {}, responseType: 'blob' });
@@ -563,12 +559,11 @@ export default function CoversheetBuilder({ authorized, requestAuth }: Props) {
           </div>)}
         {analysis?.kind === 'pdf' && <p className="text-xs" style={{ color: 'var(--t2)' }}>A PDF template produces a PDF coversheet.</p>}
         <div className="flex flex-wrap items-center gap-2">
-          <Button onClick={onGenerate} loading={generating} disabled={!!problems.length}>{authorized ? 'Generate coversheet' : 'Verify & generate'}</Button>
+          <Button onClick={onGenerate} loading={generating} disabled={!!problems.length}>Generate coversheet</Button>
           {done && done.files.length > 1 && done.files.map(n => (
             <Button key={n} variant="secondary" onClick={() => download(n.split('.').pop())}><Download className="w-4 h-4" /> {n}</Button>))}
           {done && done.files.length === 1 && <Button variant="secondary" onClick={() => download()}><Download className="w-4 h-4" /> {done.filename}</Button>}
         </div>
-        {!authorized && !problems.length && <p className="text-xs" style={{ color: 'var(--t2)' }}>Generating needs the same admin verification as the other coversheet workflows.</p>}
         {done && <Alert variant="success">{done.message}{done.pdf_engine ? ` PDF via ${done.pdf_engine === 'libreoffice' ? 'LibreOffice' : 'built-in renderer'}.` : ''}</Alert>}
         {done?.warnings.map(w => <p key={w} className="text-xs flex gap-1.5" style={{ color: 'var(--gold)' }}><AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" />{w}</p>)}
       </Stage>

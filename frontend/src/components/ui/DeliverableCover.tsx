@@ -5,7 +5,7 @@
  * custom cover template. Backend: /api/deliverables/*.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { AlertTriangle, CheckCircle2, Clock, Download, FileText, Layers, RefreshCw } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Download, FileText, Layers, RefreshCw } from 'lucide-react';
 import api from '@/services/api';
 import { getCurrentProject, subscribeProject } from '@/services/projectContext';
 import Card from './Card';
@@ -15,9 +15,10 @@ export type DeliverableType = 'instrument_list' | 'io_list' | 'cable_schedule' |
 
 interface MdlItem { mdl_record_id: string; document_number: string; document_name: string; full_match?: boolean }
 export interface CoverResolution {
-  doc_type: string; doc_label: string; project_id: string | null; status: 'AVAILABLE' | 'APPROVAL_REQUIRED' | 'NOT_AVAILABLE';
+  doc_type: string; doc_label: string; project_id: string | null; status: 'AVAILABLE' | 'NOT_AVAILABLE';
   record: MdlItem | null; match: 'keyword' | 'selected' | null; candidates: MdlItem[]; revision: string | null;
-  approved: boolean; approval: { id: number; status: string; reviewed_by?: string; current: boolean } | null; message: string;
+  /** an approval request made before cover sheets lost their approval step - history only, it never changes availability */
+  legacy_approval?: { id: number; status: string; reviewed_by?: string | null } | null; message: string;
 }
 /** What the generator response carries after generation (backend finalize()). */
 export interface AppliedCover {
@@ -33,7 +34,6 @@ export function useProject(): string {
 
 const STATUS: Record<CoverResolution['status'], { label: string; color: string; Icon: any }> = {
   AVAILABLE: { label: 'Available', color: 'text-green-600', Icon: CheckCircle2 },
-  APPROVAL_REQUIRED: { label: 'Approval Required', color: 'text-amber-600', Icon: Clock },
   NOT_AVAILABLE: { label: 'Not Available', color: 'text-red-500', Icon: AlertTriangle },
 };
 
@@ -85,7 +85,7 @@ export function DeliverableCoverCard({ docType, subKey = '', subLabel = '', cust
         {row('Cover Sheet Status', st ? <span className={`font-semibold flex items-center gap-1 ${st.color}`}><st.Icon className="w-4 h-4" />{st.label}</span> : (loading ? 'Checking…' : '-'))}
         {row('Document Revision', r?.revision || '-')}
         {(err || (r && r.status !== 'AVAILABLE' && r.message)) && (
-          <p className={`text-sm pt-1 ${r?.status === 'APPROVAL_REQUIRED' && !err ? 'text-amber-600' : 'text-red-500'}`}>{err || r!.message}</p>)}
+          <p className="text-sm pt-1 text-red-500">{err || r!.message}</p>)}
         {r && !r.record && r.candidates.length > 0 && project && (
           <div className="flex flex-wrap gap-2 items-center pt-1">
             <select value={pick} onChange={(e) => setPick(e.target.value)} className="border rounded-lg px-2 py-1.5 text-sm max-w-full"
@@ -96,8 +96,7 @@ export function DeliverableCoverCard({ docType, subKey = '', subLabel = '', cust
             <Button onClick={choose} disabled={!pick} className="bg-blue-600 hover:bg-blue-700">Use this document</Button>
           </div>)}
         <p className="text-xs pt-1"><a href={editLink} className="underline" style={{ color: 'var(--t1)' }}>
-          {r?.status === 'NOT_AVAILABLE' ? 'Complete the cover sheet in the Cover Sheet Generator' : 'Open in the Cover Sheet Generator'}</a>
-          {r?.status === 'APPROVAL_REQUIRED' && <span style={{ color: 'var(--t2)' }}> · the document is generated as a DRAFT until a Lead Engineer approves the cover sheet</span>}</p>
+          {r?.status === 'NOT_AVAILABLE' ? 'Complete the cover sheet in the Cover Sheet Generator' : 'Open in the Cover Sheet Generator'}</a></p>
         {onCustomTemplate && (
           <div className="pt-2 text-sm" style={{ color: 'var(--t0)' }}>
             <label className="flex items-center gap-2">
@@ -147,9 +146,8 @@ export function DeliverableDownloads({ module, filename, cover, onExcel }: {
   return (
     <div className="space-y-2" data-testid={`downloads-${module}`}>
       {cover && (cover.applied
-        ? <p className={`text-sm ${cover.draft ? 'text-amber-700' : 'text-green-700'}`}>
-            Cover sheet: {cover.document_number} · Rev {cover.revision}{cover.custom_template ? ' · custom template' : ''}
-            {cover.draft ? ' · DRAFT (cover sheet not yet approved - not for client submission)' : ' · approved'}</p>
+        ? <p className="text-sm text-green-700">
+            Cover sheet: {cover.document_number} · Rev {cover.revision}{cover.custom_template ? ' · custom template' : ''}</p>
         : <p className="text-sm text-amber-700">No cover sheet added: {cover.message}</p>)}
       <div className="flex flex-wrap gap-2">
         <Button onClick={onExcel} className="bg-green-600 hover:bg-green-700"><Download className="w-5 h-5" />Download Excel (.xlsx)</Button>

@@ -131,6 +131,10 @@ def submit_approval(
     db: Session = Depends(get_db),
     _: User = Depends(get_current_user),
 ):
+    if body.request_type == "coversheet":
+        # Cover sheets have no software approval step; requests raised before this change stay in the queue as history.
+        raise HTTPException(status_code=410,
+                            detail="Cover sheets no longer need approval: generate, save and download them directly.")
     req = ApprovalRequest(
         request_type=body.request_type,
         tag_numbers=json.dumps(body.tag_numbers) if body.tag_numbers else None,

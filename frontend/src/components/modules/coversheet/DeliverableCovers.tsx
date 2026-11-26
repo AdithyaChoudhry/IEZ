@@ -2,10 +2,10 @@
  * Cover Sheet Generator - "Engineering Deliverable Covers": the cover sheet details of the Instrument List, I/O List,
  * Cable Schedule, Loop Wiring and Datasheet documents, entered ONCE per document and reused by those generators.
  * The MDL decides the document number and title (matched by keyword, or picked here); revisions and signatories are
- * entered here; a Lead Engineer approves the cover sheet through the Approval Queue (until then it prints as DRAFT).
+ * entered here and used as entered. There is no approval step: saved details are available to the generators at once.
  */
 import { useEffect, useMemo, useState } from 'react';
-import { CheckCircle2, Plus, Save, Search, Send, Trash2 } from 'lucide-react';
+import { CheckCircle2, Plus, Save, Search, Trash2 } from 'lucide-react';
 import api from '@/services/api';
 import Card from '../../ui/Card';
 import Button from '../../ui/Button';
@@ -72,17 +72,6 @@ export default function DeliverableCovers() {
       setFound([]); setReload((n) => n + 1);
     } catch (e: any) { setMsg({ kind: 'error', text: e.response?.data?.detail || 'Could not use that document.' }); }
   };
-  const requestApproval = async () => {
-    setBusy(true); setMsg(null);
-    try {
-      const r = await api.post('/deliverables/cover/request-approval', {
-        project_id: project, doc_type: docType, sub_key: key, sub_label: subLabel,
-        submitted_by_name: localStorage.getItem('user_employee_name') || 'Engineer', submitted_by_id: localStorage.getItem('user_employee_id') || '-' });
-      setMsg({ kind: 'success', text: `Approval requested (request #${r.data.approval_request_id}). A Lead Engineer approves it in the Approval Queue.` });
-      setReload((n) => n + 1);
-    } catch (e: any) { setMsg({ kind: 'error', text: e.response?.data?.detail || 'Could not request approval.' }); }
-    finally { setBusy(false); }
-  };
   const setRev = (i: number, k: string, v: string) => setRevs(revs.map((r, j) => (j === i ? { ...r, [k]: v } : r)));
 
   if (!project) return <Alert variant="warning" title="No project selected">Select a project (top of the Instrument List, I/O List or Cable Schedule page) to enter its deliverable cover sheets.</Alert>;
@@ -121,7 +110,7 @@ export default function DeliverableCovers() {
             </ul>)}
         </Card>
 
-        <Card title="Cover sheet details" description="Document number and title come from the MDL. Checked / Approved names print only after the cover sheet is approved.">
+        <Card title="Cover sheet details" description="Document number and title come from the MDL. Prepared / Checked / Approved by are printed exactly as you enter them; a saved cover sheet is available to the generators immediately.">
           <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
             {INFO_FIELDS.map(([k, label]) => (
               <label key={k} className="text-sm" style={{ color: 'var(--t0)' }}><span className="block mb-1">{label}</span>
@@ -142,9 +131,8 @@ export default function DeliverableCovers() {
           {msg && <div className="mt-3"><Alert variant={msg.kind} title={msg.kind === 'success' ? 'Done' : 'Error'} onClose={() => setMsg(null)}>{msg.text}</Alert></div>}
           <div className="flex flex-wrap gap-2 mt-4">
             <Button onClick={() => save()} loading={busy} disabled={revs.some((r) => !r.rev_no.trim())}><Save className="w-4 h-4" />Save cover sheet details</Button>
-            <Button onClick={requestApproval} loading={busy} className="bg-amber-600 hover:bg-amber-700"><Send className="w-4 h-4" />Request Lead Engineer approval</Button>
           </div>
-          <p className="text-xs mt-2 flex items-center gap-1" style={{ color: 'var(--t2)' }}><CheckCircle2 className="w-3.5 h-3.5" />Save first, then request approval. A change after approval needs approval again.</p>
+          <p className="text-xs mt-2 flex items-center gap-1" style={{ color: 'var(--t2)' }}><CheckCircle2 className="w-3.5 h-3.5" />Saved details are used by every generator of this document straight away.</p>
         </Card>
       </>}
     </div>

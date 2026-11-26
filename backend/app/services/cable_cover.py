@@ -22,7 +22,7 @@ def snapshot(project_id: Optional[str], custom_template: Optional[bytes] = None)
             msg = str(e) if isinstance(e, DC.CoverError) else "The cover sheet could not be looked up."
             r = {"doc_type": "cable_schedule", "doc_label": DC.DOC_TYPES["cable_schedule"]["label"], "project_id": project_id or None,
                  "sub_key": "", "status": "NOT_AVAILABLE", "record": None, "match": None, "candidates": [], "revision": None,
-                 "approved": False, "approval": None, "message": msg}
+                 "legacy_approval": None, "message": msg}
         out = {"resolution": r, "cover": None, "warnings": [], "message": r.get("message") or ""}
         if r["record"] is not None and r["revision"] is not None:
             try:

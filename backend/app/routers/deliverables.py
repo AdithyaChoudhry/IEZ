@@ -6,15 +6,15 @@ Loop Wiring and Datasheet generators.
   GET  /deliverables/cover/details         the entered cover details (Cover Sheet Generator form)
   GET  /deliverables/cover/mdl             search the project MDL for the document (engineer's pick)
   PUT  /deliverables/cover                 save the pick / the cover details (Cover Sheet Generator)
-  POST /deliverables/cover/request-approval   raise a Lead Engineer approval (Approval Queue, type "coversheet")
   GET  /deliverables/covers                every cover record of a project
   GET  /deliverables/{module}/info         the user's last generated deliverable of a module (cover state, file name)
   POST /deliverables/{module}/pdf          start converting the SAME workbook to PDF (background - large schedules take minutes)
   GET  /deliverables/{module}/pdf/status   poll it
-  GET  /deliverables/{module}/pdf          the PDF (LibreOffice), DRAFT-marked when not approved
+  GET  /deliverables/{module}/pdf          the PDF (LibreOffice)
 
 Generators call finalize() once, right after generating: the cover sheet goes into the workbook, the result is what
 both the Excel and the PDF download serve. A cover problem never stops the engineering output - it is reported.
+A cover sheet is not approval-controlled: the output is never marked DRAFT because of the cover.
 """
 from __future__ import annotations
 
@@ -62,7 +62,7 @@ def finalize(user_id, module: str, project_id: Optional[str], data: bytes, filen
              snapshot: Optional[dict] = None) -> tuple[bytes, str, dict]:
     """
     -> (final bytes, file name, cover info). The cover sheet of the project's MDL document is put first in the workbook
-    (or in place of the template's own cover sheet); a draft is marked. Without a resolvable cover the workbook is
+    (or in place of the template's own cover sheet). Without a resolvable cover the workbook is
     returned unchanged with the reason. The result is remembered for the Excel / PDF downloads.
     `snapshot` (optional): a cover resolution + cover workbook taken earlier in the same request ({"resolution", "cover", "warnings",
     "message"}); it is used instead of resolving again, so the document metadata and the inserted cover are one consistent snapshot.
@@ -73,7 +73,7 @@ def finalize(user_id, module: str, project_id: Optional[str], data: bytes, filen
     try:
         r = snapshot["resolution"] if snapshot is not None else DC.resolve(db, project_id or "", module, sub_key, sub_label)
         info.update(status=r["status"], message=r["message"], doc_label=r["doc_label"], project_id=r["project_id"],
-                    revision=r["revision"], approved=r["approved"],
+                    revision=r["revision"],
                     document_number=(r["record"] or {}).get("document_number"),
                     document_title=(r["record"] or {}).get("document_name"))
         if r["record"] is not None and r["revision"] is not None:
@@ -83,7 +83,7 @@ def finalize(user_id, module: str, project_id: Optional[str], data: bytes, filen
                 cover, warnings = snapshot["cover"], snapshot.get("warnings") or []
             else:
                 cover, warnings = DC.cover_workbook(db, r, custom_template)
-            draft = not r["approved"]
+            draft = False                                    # a cover sheet has no approval state: nothing is marked DRAFT
             if filename.lower().endswith(".zip"):
                 data = DO.insert_cover_in_zip(data, cover, draft)
             else:
@@ -147,25 +147,6 @@ def put_cover(body: CoverBody, db: Session = Depends(get_db), user: User = Depen
     except DC.CoverError as e:
         _bad(str(e))
     return {"ok": True}
-
-
-class ApprovalBody(BaseModel):
-    project_id: str
-    doc_type: str
-    sub_key: str = ""
-    sub_label: str = ""
-    submitted_by_name: str
-    submitted_by_id: str
-    notes: Optional[str] = None
-
-
-@router.post("/cover/request-approval", status_code=201)
-def cover_request_approval(body: ApprovalBody, db: Session = Depends(get_db), _: User = Depends(get_current_user)):
-    try:
-        return DC.request_approval(db, body.project_id, body.doc_type, body.sub_key, body.sub_label,
-                                   body.submitted_by_name, body.submitted_by_id, body.notes)
-    except DC.CoverError as e:
-        _bad(str(e))
 
 
 @router.get("/covers")

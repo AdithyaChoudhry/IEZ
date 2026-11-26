@@ -4,11 +4,12 @@ I/O List, Cable Schedule, Loop Wiring and Datasheet deliverables.
 
     project MDL  --keyword match / engineer's pick-->  MDL record (document number + title: the MDL is the authority)
     Cover Sheet Generator  --entered once per document-->  DeliverableCover (client, PMC, revisions, signatories ...)
-    Approval Queue (request_type "coversheet")  -->  approved / pending: an unapproved cover is a DRAFT
     generator output  -->  cover sheet built with the existing cover sheet engine and put first in the workbook
 
+A cover sheet has no software approval step: once its details are saved it is available to every generator of the project.
+Prepared / Checked / Approved by are the engineer's own entries on the document (never filled in, never blanked by iEZ).
 Nothing is invented: without a resolved MDL record or entered cover details there is no cover (the generator says what
-is missing); a draft never shows Checked / Approved names.
+is missing). Approval requests raised for cover sheets before this change are kept as history ("legacy_approval").
 """
 from __future__ import annotations
 
@@ -35,7 +36,6 @@ DOC_TYPES: dict[str, dict] = {
     "jb_schedule": {"label": "Junction Box Schedule", "keywords": ["JUNCTION BOX SCHEDULE", "JB SCHEDULE"]},
 }
 PROJECT_FIELDS = ("project_description", "client", "pmc", "contractor", "unit_no", "doc_class", "discipline", "page_no")
-DRAFT_TEXT = "DRAFT - NOT APPROVED FOR SUBMISSION"
 _STOP = {"TYPE", "R0", "THE", "AND", "OF", "FOR", "WITH"}
 
 
@@ -103,14 +103,15 @@ def resolve(db: Session, project_id: str, doc_type: str, sub_key: str = "", sub_
     """
     The cover sheet a generator will use, and its state:
       status  NOT_AVAILABLE      - no project / no MDL / no single matching MDL record / cover details not entered
-              APPROVAL_REQUIRED  - complete, not (or no longer) approved: the output is marked DRAFT
-              AVAILABLE          - complete and approved
+              AVAILABLE          - the MDL document is resolved and the cover details are saved (no approval is involved)
+    A cover sheet whose approval request (made before the approval step was removed) is pending or rejected is available all the
+    same; that earlier request is only reported in "legacy_approval" and is never turned into an approval.
     """
     spec = check_type(doc_type)
     out: dict = {"doc_type": doc_type, "doc_label": spec["label"] + (f" - {sub_label}" if sub_label else ""),
                  "project_id": project_id or None, "sub_key": sub_key or "", "status": "NOT_AVAILABLE",
-                 "record": None, "match": None, "candidates": [], "revision": None, "approved": False,
-                 "approval": None, "message": ""}
+                 "record": None, "match": None, "candidates": [], "revision": None,
+                 "legacy_approval": None, "message": ""}
     if not project_id:
         out["message"] = "Select a project first: the cover sheet is resolved from the project's Master Document List."
         return out
@@ -146,20 +147,10 @@ def resolve(db: Session, project_id: str, doc_type: str, sub_key: str = "", sub_
         return out
     out["revision"] = revisions[-1].get("rev_no") or None
     req = db.query(ApprovalRequest).filter_by(id=cover.approval_request_id).first() if cover.approval_request_id else None
-    fp = fingerprint(record, info, revisions)
-    if req:
-        out["approval"] = {"id": req.id, "status": req.status, "reviewed_by": req.reviewed_by_name,
-                           "current": cover.approval_fingerprint == fp}
-    if req and req.status == "approved" and cover.approval_fingerprint == fp:
-        out.update(status="AVAILABLE", approved=True, message="Approved cover sheet.")
-    else:
-        out["status"] = "APPROVAL_REQUIRED"
-        out["message"] = ("The document is pending the required engineering approval and cannot yet be issued as an "
-                          "approved client-submission document. It is generated as a DRAFT.")
-        if req and req.status == "approved":
-            out["message"] = "The cover details changed after approval - approval is required again. It is generated as a DRAFT."
-        elif req and req.status == "rejected":
-            out["message"] = "The cover sheet was rejected" + (f" ({req.review_notes})" if req.review_notes else "") + ". It is generated as a DRAFT."
+    if req:                                     # history only: kept as it was recorded, never changes availability
+        out["legacy_approval"] = {"id": req.id, "status": req.status, "reviewed_by": req.reviewed_by_name,
+                                  "reviewed_at": req.updated_at.isoformat() if getattr(req, "updated_at", None) else None}
+    out.update(status="AVAILABLE", message="Cover sheet saved - available to the project's generators.")
     return out
 
 
@@ -200,36 +191,6 @@ def save(db: Session, project_id: str, doc_type: str, sub_key: str, user: str, *
     db.commit()
 
 
-def request_approval(db: Session, project_id: str, doc_type: str, sub_key: str, sub_label: str,
-                     submitter_name: str, submitter_id: str, notes: Optional[str] = None) -> dict:
-    r = resolve(db, project_id, doc_type, sub_key, sub_label)
-    if r["record"] is None or r["revision"] is None:
-        raise CoverError(r["message"] or "The cover sheet is not complete.")
-    if r["approved"]:
-        raise CoverError("This cover sheet is already approved.")
-    cover = _get(db, project_id, doc_type, sub_key)
-    info, revisions = _loads(cover.project_info_json, {}), _loads(cover.revisions_json, [])
-    fp = fingerprint(r["record"], info, revisions)
-    req = ApprovalRequest(request_type="coversheet", instrument_type=sub_label or None, status="pending",
-                          submitted_by_name=submitter_name, submitted_by_id=submitter_id, submitter_notes=notes,
-                          payload_json=json.dumps({"kind": "deliverable_cover", "project_id": project_id,
-                                                   "doc_type": doc_type, "doc_label": r["doc_label"],
-                                                   "document_number": r["record"]["document_number"],
-                                                   "document_title": r["record"]["document_name"],
-                                                   "revision": r["revision"], "project_info": info,
-                                                   "revisions": revisions, "fingerprint": fp}))
-    db.add(req)
-    db.flush()
-    try:
-        from ..routers.approvals import _notify_via_routes
-        _notify_via_routes(db, submitter_id, req.id, "cover sheet", submitter_name)
-    except Exception:
-        pass                                            # a notification problem never blocks the request
-    cover.approval_request_id, cover.approval_fingerprint = req.id, fp
-    db.commit()
-    return {"approval_request_id": req.id}
-
-
 def list_covers(db: Session, project_id: str) -> list[dict]:
     rows = db.query(DeliverableCover).filter_by(project_id=project_id).all()
     return [{"doc_type": c.doc_type, "sub_key": c.sub_key, "mdl_record_id": c.mdl_record_id,
@@ -239,16 +200,13 @@ def list_covers(db: Session, project_id: str) -> list[dict]:
 
 # ── the cover sheet workbook ─────────────────────────────────────────────────
 def cover_workbook(db: Session, resolution: dict, custom_template: Optional[bytes] = None) -> tuple[bytes, list[str]]:
-    """The filled cover sheet (.xlsx) for a resolved document. A draft keeps Checked / Approved empty."""
+    """The filled cover sheet (.xlsx) for a resolved document, with the names exactly as the engineer entered them."""
     from utils.coversheet_generator import generate_cover_sheet
     if resolution["record"] is None or resolution["revision"] is None:
         raise CoverError(resolution["message"] or "No cover sheet is available for this document.")
     cover = _get(db, resolution["project_id"], resolution["doc_type"], resolution["sub_key"])
     info = _loads(cover.project_info_json, {})
     revisions = [dict(r) for r in _loads(cover.revisions_json, [])]
-    if not resolution["approved"]:
-        for r in revisions:
-            r["checked_by"] = r["approved_by"] = ""
     mapped = mdl_service.coversheet_fields(resolution["record"])
     project_info = {**info, **mapped["fields"]}
     if custom_template:

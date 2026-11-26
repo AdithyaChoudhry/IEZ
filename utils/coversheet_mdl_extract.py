@@ -343,15 +343,28 @@ def _ocr_lines(data: bytes, npages: int) -> list[tuple[int, str]]:
     return lines
 
 
+def _password_protected(data: bytes) -> bool:
+    """True when the PDF needs a password to be read (a PDF that only restricts printing / copying opens with an empty one)."""
+    try:
+        from pypdf import PdfReader
+        reader = PdfReader(io.BytesIO(data))
+        return bool(reader.is_encrypted) and not reader.decrypt("")
+    except Exception:
+        return False                                             # unreadable for another reason: reported by the opener
+
+
 def extract_pdf(data: bytes, filename: str) -> dict:
     try:
         import pdfplumber
     except Exception as exc:                                            # pragma: no cover
         raise MdlExtractError(f"PDF support is not installed on the server: {exc}")
+    if _password_protected(data):
+        raise MdlExtractError("This PDF is password-protected. Upload an unlocked (accessible) copy of the MDL.")
     try:
         pdf = pdfplumber.open(io.BytesIO(data))
+        len(pdf.pages)                                           # a damaged file often fails only when the pages are read
     except Exception as exc:
-        raise MdlExtractError(f"The PDF could not be opened (it may be corrupted or encrypted): {exc}")
+        raise MdlExtractError(f"Invalid PDF file: it is corrupted or not a real PDF ({str(exc) or type(exc).__name__}).")
     notes: list[str] = []
     records: list[dict] = []
     skipped = 0
@@ -411,6 +424,10 @@ def extract_pdf(data: bytes, filename: str) -> dict:
                             if not any(x.get("message", "").startswith("Text continued") for x in prev["flags"]):
                                 prev["flags"].append({"level": "warning", "field": "", "kind": "method",
                                                       "message": "Text continued on the next line was joined - check it"})
+                        elif txt and vals.get("revision"):
+                            # a title with a revision but no number is a document with a gap, not a heading: keep and flag it
+                            prev = _record(vals, f"page {pno}", "pdf-table")
+                            records.append(prev)
                         elif any(row):
                             skipped += 1
                         continue

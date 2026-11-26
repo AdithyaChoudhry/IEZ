@@ -103,9 +103,11 @@ export function ModelPreview({ model }: { model: Model }) {
 
 interface Props {
   mdlActive: boolean;
+  /** changes when the MDL is replaced (or documents are added to it): earlier results and picks are discarded */
+  mdlKey?: string;
 }
 
-export default function TemplateCoverSheet({ mdlActive }: Props) {
+export default function TemplateCoverSheet({ mdlActive, mdlKey = '' }: Props) {
   const [projectId, setProjectId] = useState(getCurrentProject());
   const [file, setFile] = useState<File | null>(null);
   const [analysis, setAnalysis] = useState<Analysis | null>(null);
@@ -189,8 +191,9 @@ export default function TemplateCoverSheet({ mdlActive }: Props) {
       finally { if (!cancelled) setSearching(false); }
     }, 250);
     return () => { cancelled = true; clearTimeout(h); };
-  }, [query, projectId, mdlActive]);
-  useEffect(() => { setPicked({}); setPreview(null); }, [projectId]);
+  }, [query, projectId, mdlActive, mdlKey]);
+  const mdlId = mdlKey.split(':')[0];
+  useEffect(() => { setPicked({}); setPreview(null); setDone(null); }, [projectId, mdlId]);   // never keep documents of a replaced MDL
 
   const toggle = (r: MdlRecord) => { setPicked(p => { const n = { ...p }; if (n[r.mdl_record_id]) delete n[r.mdl_record_id]; else n[r.mdl_record_id] = r; return n; }); setPreview(null); setDone(null); };
 
@@ -362,7 +365,7 @@ export default function TemplateCoverSheet({ mdlActive }: Props) {
               <label key={r.mdl_record_id} className="flex items-start gap-2 px-3 py-1.5 text-xs cursor-pointer" style={{ borderBottom: '1px solid var(--b1)', color: 'var(--t1)' }}>
                 <input type="checkbox" className="mt-0.5" checked={!!picked[r.mdl_record_id]} onChange={() => toggle(r)} />
                 <span className="font-mono whitespace-nowrap" style={{ color: 'var(--t0)' }}>{r.document_number}</span>
-                <span className="flex-1">{r.document_name}{r.duplicate_document_number && <span style={{ color: 'var(--gold)' }}> · duplicate number</span>}</span>
+                <span className="flex-1">{r.document_name}{r.revision && <span className="font-mono" style={{ color: 'var(--t2)' }}> · Rev {r.revision}</span>}{r.duplicate_document_number && <span style={{ color: 'var(--gold)' }}> · duplicate number</span>}</span>
                 <span style={{ color: 'var(--t2)' }}>{r.discipline}</span>
               </label>
             ))}
@@ -381,6 +384,11 @@ export default function TemplateCoverSheet({ mdlActive }: Props) {
           ))}
         </div>
         <p className="text-xs" style={{ color: 'var(--t2)' }}>The date is written in the template's own date format.</p>
+        {pickedList.length === 1 && pickedList[0].revision && pickedList[0].revision !== vals.revision && (
+          <p className="text-xs" style={{ color: 'var(--t2)' }}>The MDL lists revision <b style={{ color: 'var(--t1)' }}>{pickedList[0].revision}</b> for this document.
+            <button className="underline ml-1.5" onClick={() => { setVals(v => ({ ...v, revision: pickedList[0].revision || '' })); setPreview(null); setDone(null); }}>Use it</button></p>)}
+        {pickedList.length > 1 && new Set(pickedList.map(d => d.revision || '')).size > 1 && (
+          <p className="text-xs" style={{ color: 'var(--gold)' }}>The selected documents have different revisions in the MDL; the one revision entered here is written to all of them.</p>)}
       </div>
 
       {/* 5. output + preview + generate */}

@@ -434,9 +434,9 @@ export default function CoverSheetGenerator() {
           subtitle="Upload the project MDL - documents are selected from it below"
           defaultOpen={!mdlActive}
           badge={mdlInvalid ? 'Invalid MDL' : mdlActive ? `${mdlSummary?.document_count ?? ''} documents` : 'Not uploaded'}>
-          <MdlSelector selected={mdlSelection} onSelect={setMdlSelection} onSummary={setMdlSummary} onInvalid={setMdlInvalid} />
+          <MdlSelector allowPdf selected={mdlSelection} onSelect={setMdlSelection} onSummary={setMdlSummary} onInvalid={setMdlInvalid} />
         </Section>
-        <TemplateCoverSheet mdlActive={!!mdlActive && !mdlInvalid} />
+        <TemplateCoverSheet mdlActive={!!mdlActive && !mdlInvalid} mdlKey={`${mdlSummary?.mdl_id ?? ''}:${mdlSummary?.document_count ?? ''}`} />
       </div>
     );
   }

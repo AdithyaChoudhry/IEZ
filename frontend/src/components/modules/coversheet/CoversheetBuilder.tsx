@@ -176,6 +176,7 @@ export default function CoversheetBuilder() {
   // ── stage 1 ──
   const uploadMdl = async (f: File) => {
     setMdlBusy(true); setError(null); setSelectedId(''); setEditing(null); stale();
+    setMdl(null); setAdding(null); setVals(v => ({ ...v, revision: '' }));        // nothing of a replaced MDL stays selected
     try {
       const fd = new FormData(); fd.append('file', f);
       const r = await api.post<Extraction>('/coversheet/builder/mdl/extract', fd, { headers: { 'Content-Type': 'multipart/form-data' } });

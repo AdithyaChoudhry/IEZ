@@ -8,6 +8,8 @@ MDL stays the authoritative source of document number and title.
 from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
+from fastapi.concurrency import run_in_threadpool
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from ..auth.models import User
@@ -32,13 +34,15 @@ async def upload_mdl(
     project_id: str,
     file: UploadFile = File(...),
     selected_record_id: Optional[str] = Form(None),
+    allow_pdf: bool = Form(False),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
     """
     Upload the project's MDL (replaces the active one). `selected_record_id` is the
     document currently chosen in the Coversheet; the response says whether it still
-    exists in the new MDL.
+    exists in the new MDL. `allow_pdf` (the uploaded-Excel-template workflow) also
+    accepts a text-based PDF MDL; "unresolved" then lists rows that need completing.
     """
     pid = _pid(project_id)
     data = await file.read()
@@ -46,9 +50,32 @@ async def upload_mdl(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "The uploaded file is empty.")
     if len(data) > MAX_MDL_BYTES:
         raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, "The MDL file is too large (limit 25 MB).")
+    name = file.filename or "MDL.xlsx"
     try:
-        return mdl.upload(db, pid, file.filename or "MDL.xlsx", data, user.username, selected_record_id)
+        if allow_pdf and mdl.is_pdf(name, data):
+            if not name.lower().endswith(".pdf"):
+                raise mdl.MdlError("This is a PDF file with a different file name ending. Rename it to .pdf and upload it again.")
+            parsed, unresolved = await run_in_threadpool(mdl.parse_pdf, data, name)
+            return {**mdl.upload(db, pid, name, data, user.username, selected_record_id, parsed=parsed), "unresolved": unresolved}
+        return mdl.upload(db, pid, name, data, user.username, selected_record_id)
     except (mdl.MdlError, reg.RegistryError) as exc:
+        db.rollback()
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc))
+
+
+class ManualRecord(BaseModel):
+    document_number: str
+    document_name: str
+    revision: str = ""
+    discipline: str = ""
+
+
+@router.post("/records", status_code=status.HTTP_201_CREATED)
+def add_record(project_id: str, body: ManualRecord, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """Complete a row a PDF MDL could not give in full (values typed by the engineer)."""
+    try:
+        return mdl.add_record(db, _pid(project_id), user.username, body.model_dump())
+    except mdl.MdlError as exc:
         db.rollback()
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc))
 

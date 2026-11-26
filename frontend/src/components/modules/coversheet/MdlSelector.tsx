@@ -23,12 +23,15 @@ export interface MdlRecord {
   document_name: string;
   document_category: string;
   remarks: string;
+  /** per-document revision - known only for a register read from a PDF */
+  revision?: string;
   source_file: string;
   source_sheet: string;
   duplicate_document_number: boolean;
 }
 
 export interface MdlSummary {
+  mdl_id?: number;
   uploaded: boolean;
   valid?: boolean;
   file_name?: string;
@@ -58,7 +61,11 @@ interface Props {
   onSummary: (s: MdlSummary | null) => void;
   /** Set when an uploaded MDL is invalid: generation must stay blocked until fixed or removed. */
   onInvalid: (message: string | null) => void;
+  /** The uploaded-Excel-template workflow also accepts a PDF MDL. */
+  allowPdf?: boolean;
 }
+
+interface Unresolved { source: string; document_number: string; document_name: string; revision: string; discipline: string; missing: string[] }
 
 const selKey = (projectId: string) => `iez_mdl_selected:${projectId}`;
 const errText = (e: any, fallback: string) => {
@@ -66,7 +73,7 @@ const errText = (e: any, fallback: string) => {
   return typeof d === 'string' ? d : fallback;
 };
 
-export default function MdlSelector({ selected, onSelect, onSummary, onInvalid }: Props) {
+export default function MdlSelector({ selected, onSelect, onSummary, onInvalid, allowPdf = false }: Props) {
   const [projectId, setProjectId] = useState(getCurrentProject());
   const [summary, setSummary] = useState<MdlSummary | null>(null);
   const [uploading, setUploading] = useState(false);
@@ -77,6 +84,7 @@ export default function MdlSelector({ selected, onSelect, onSummary, onInvalid }
   const [results, setResults] = useState<{ total: number; items: MdlRecord[] } | null>(null);
   const [searching, setSearching] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [unresolved, setUnresolved] = useState<Unresolved[]>([]);      // PDF rows that still need a number / title
   const fileRef = useRef<HTMLInputElement>(null);
   const base = `/projects/${encodeURIComponent(projectId)}/coversheet/mdl`;
 
@@ -99,7 +107,7 @@ export default function MdlSelector({ selected, onSelect, onSummary, onInvalid }
 
   // Load the project's MDL status; revalidate the remembered selection against it.
   useEffect(() => {
-    setResults(null); setQuery(''); setDiscipline(''); setInvalid(null); onInvalid(null); setNotice(null);
+    setResults(null); setQuery(''); setDiscipline(''); setInvalid(null); onInvalid(null); setNotice(null); setUnresolved([]);
     if (!projectId) { publish(null); onSelect(null); return; }
     let cancelled = false;
     (async () => {
@@ -141,16 +149,18 @@ export default function MdlSelector({ selected, onSelect, onSummary, onInvalid }
   }, [query, discipline, pickerOpen, summary?.uploaded, base]);
 
   const upload = async (file: File) => {
-    setUploading(true); setNotice(null);
+    setUploading(true); setNotice(null); setUnresolved([]);
     try {
       const fd = new FormData();
       fd.append('file', file);
       if (selected) fd.append('selected_record_id', selected.record.mdl_record_id);
-      const r = await api.post<MdlSummary & { selection: { status: string; message?: string; record?: MdlRecord }; replaced: boolean; unchanged: boolean }>(
+      if (allowPdf) fd.append('allow_pdf', 'true');
+      const r = await api.post<MdlSummary & { selection: { status: string; message?: string; record?: MdlRecord }; replaced: boolean; unchanged: boolean; unresolved?: Unresolved[] }>(
         `${base}/upload`, fd);
       setInvalid(null); onInvalid(null);
       publish(r.data);
       setResults(null);
+      setUnresolved(r.data.unresolved || []);
       const sel = r.data.selection;
       if (sel.status === 'preserved' && selected) {
         await choose(selected.record.mdl_record_id);              // refresh the displayed record
@@ -170,10 +180,24 @@ export default function MdlSelector({ selected, onSelect, onSummary, onInvalid }
   const removeMdl = async () => {
     try {
       await api.delete(base);
-      clearSelection(); publish({ uploaded: false }); setInvalid(null); onInvalid(null);
+      clearSelection(); publish({ uploaded: false }); setInvalid(null); onInvalid(null); setUnresolved([]);
       setNotice({ kind: 'success', text: 'MDL removed. You can enter the document details manually.' });
     } catch (e) { setNotice({ kind: 'warning', text: errText(e, 'Could not remove the MDL.') }); }
   };
+
+  const addUnresolved = async (i: number) => {
+    const u = unresolved[i];
+    try {
+      const r = await api.post<{ document_count: number }>(`${base}/records`, {
+        document_number: u.document_number, document_name: u.document_name, revision: u.revision, discipline: u.discipline });
+      setUnresolved(list => list.filter((_, j) => j !== i));
+      setResults(null);
+      if (summary) publish({ ...summary, document_count: r.data.document_count });
+      setNotice({ kind: 'success', text: `${u.document_number} added to the document list.` });
+    } catch (e) { setNotice({ kind: 'warning', text: errText(e, 'Could not add the document.') }); }
+  };
+  const editUnresolved = (i: number, k: 'document_number' | 'document_name' | 'revision', v: string) =>
+    setUnresolved(list => list.map((u, j) => (j === i ? { ...u, [k]: v } : u)));
 
   const card = { background: 'var(--s3)', border: '1px solid var(--b2)' };
   const label = 'text-[10px] font-semibold uppercase tracking-wider';
@@ -181,7 +205,7 @@ export default function MdlSelector({ selected, onSelect, onSummary, onInvalid }
   return (
     <div className="space-y-3">
       <ProjectSelector compact />
-      <input ref={fileRef} type="file" accept=".xlsx,.xlsm" className="hidden"
+      <input ref={fileRef} type="file" accept={allowPdf ? '.xlsx,.xlsm,.pdf' : '.xlsx,.xlsm'} aria-label="Master Document List file" className="hidden"
         onChange={e => { const f = e.target.files?.[0]; if (f) upload(f); e.target.value = ''; }} />
 
       {!projectId && (
@@ -204,11 +228,12 @@ export default function MdlSelector({ selected, onSelect, onSummary, onInvalid }
           <div>
             <p className="text-sm font-bold" style={{ color: 'var(--t0)' }}>No MDL uploaded</p>
             <p className="text-xs" style={{ color: 'var(--t2)' }}>
-              Upload the project MDL (.xlsx) to pick the document name and number from it.
+              {allowPdf ? 'Upload the project MDL (Excel .xlsx / .xlsm, or a text-based PDF) to pick the document name and number from it.'
+                : 'Upload the project MDL (.xlsx) to pick the document name and number from it.'}
             </p>
           </div>
           <Button onClick={() => fileRef.current?.click()} loading={uploading}>
-            <FileUp className="w-4 h-4" /> Upload MDL
+            <FileUp className="w-4 h-4" /> {uploading ? 'Extracting documents…' : 'Upload MDL'}
           </Button>
         </div>
       )}
@@ -245,6 +270,23 @@ export default function MdlSelector({ selected, onSelect, onSummary, onInvalid }
           {(summary.warnings || []).map(w => (
             <p key={w} className="text-xs" style={{ color: 'var(--gold)' }}>⚠ {w}</p>
           ))}
+          {unresolved.length > 0 && (
+            <div className="space-y-2" data-testid="mdl-unresolved">
+              <p className={label} style={{ color: 'var(--gold)' }}>Rows to complete ({unresolved.length}) - type only what the MDL document actually shows</p>
+              {unresolved.map((u, i) => (
+                <div key={`${u.source}-${i}`} className="flex flex-wrap items-center gap-2 text-xs" style={{ color: 'var(--t1)' }}>
+                  <span style={{ color: 'var(--t2)' }}>{u.source}: missing {u.missing.join(' and ')}</span>
+                  {(['document_number', 'document_name', 'revision'] as const).map(k => (
+                    <input key={k} value={u[k]} onChange={e => editUnresolved(i, k, e.target.value)} aria-label={`${k} of unresolved row ${i + 1}`}
+                      placeholder={k === 'document_number' ? 'Document number' : k === 'document_name' ? 'Document title' : 'Rev'}
+                      className={`px-2 py-1 rounded-lg outline-none ${k === 'document_name' ? 'flex-1 min-w-[200px]' : k === 'revision' ? 'w-16' : 'w-52'}`}
+                      style={{ background: 'var(--s0)', border: '1px solid var(--b2)', color: 'var(--t0)' }} />
+                  ))}
+                  <Button size="sm" variant="secondary" onClick={() => addUnresolved(i)} disabled={!u.document_number.trim() || !u.document_name.trim()}>Add document</Button>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
@@ -291,7 +333,7 @@ export default function MdlSelector({ selected, onSelect, onSummary, onInvalid }
                             style={{ borderTop: '1px solid var(--b1)', color: 'var(--t1)', background: active ? 'var(--em-dim)' : undefined }}>
                             <td className="px-3 py-1.5 font-mono whitespace-nowrap">{rec.document_number}
                               {rec.duplicate_document_number && <Badge variant="warning" className="ml-2">duplicate no.</Badge>}</td>
-                            <td className="px-3 py-1.5">{rec.document_name}</td>
+                            <td className="px-3 py-1.5">{rec.document_name}{rec.revision && <span className="ml-1.5 font-mono" style={{ color: 'var(--t2)' }}>Rev {rec.revision}</span>}</td>
                             <td className="px-3 py-1.5 whitespace-nowrap">{rec.discipline}</td>
                             <td className="px-3 py-1.5">{rec.document_category}</td>
                           </tr>
@@ -318,6 +360,7 @@ export default function MdlSelector({ selected, onSelect, onSummary, onInvalid }
                 <dt style={{ color: 'var(--t2)' }}>Document Name</dt><dd className="font-semibold">{selected.record.document_name}</dd>
                 <dt style={{ color: 'var(--t2)' }}>Document Number</dt><dd className="font-mono font-semibold">{selected.record.document_number}</dd>
                 <dt style={{ color: 'var(--t2)' }}>Discipline</dt><dd>{selected.record.discipline || '—'}</dd>
+                {selected.record.revision && <><dt style={{ color: 'var(--t2)' }}>Revision in MDL</dt><dd className="font-mono">{selected.record.revision}</dd></>}
                 <dt style={{ color: 'var(--t2)' }}>Source</dt><dd>MDL · {selected.record.source_file}</dd>
               </dl>
               {selected.warnings.map(w => <p key={w} className="text-xs mt-1" style={{ color: 'var(--gold)' }}>⚠ {w}</p>)}

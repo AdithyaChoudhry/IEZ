@@ -36,6 +36,10 @@ class MdlError(Exception):
     """Expected, user-facing MDL problem (invalid file, nothing selected, ...)."""
 
 
+PDF_SHEET = "PDF table"                       # "source sheet" of a register read from a PDF
+_REV_REMARK = "Rev. "                         # a PDF register keeps each document's revision in the remarks column
+
+
 def _audit(db: Session, project_id: str, action: str, actor: Optional[str], **details: Any) -> None:
     db.add(DocumentAuditLog(project_id=project_id, module="coversheet_mdl", action=action,
                             actor=actor, details=json.dumps(details, default=str)))
@@ -68,6 +72,7 @@ def record_to_dict(r: MDLRecord, m: ProjectMDL, duplicate: bool = False) -> dict
         "mdl_record_id": r.record_id, "s_no": r.s_no or "", "discipline": r.discipline or "",
         "document_number": r.doc_no, "document_name": r.description,
         "document_category": r.category or "", "remarks": r.remarks or "",
+        "revision": (r.remarks[len(_REV_REMARK):] if m.sheet_name == PDF_SHEET and (r.remarks or "").startswith(_REV_REMARK) else ""),
         "source_file": m.filename, "source_sheet": m.sheet_name,
         "duplicate_document_number": duplicate,
     }
@@ -96,18 +101,88 @@ def summary(db: Session, project_id: str) -> dict:
                           "revision_label": prev.revision or "Not identified"} if prev else None)}
 
 
+def is_pdf(filename: str, data: bytes) -> bool:
+    return (filename or "").lower().endswith(".pdf") or data[:5] == b"%PDF-"
+
+
+def parse_pdf(data: bytes, filename: str):
+    """
+    A PDF MDL -> (the same parse result the Excel parser gives, the rows that could not be imported).
+    Reuses the Coversheet Builder's extractor. Only a PDF with a text layer and a recognisable document table is accepted into
+    the project register: values read from loose text lines or by OCR need the row-by-row review of the MDL-Driven workflow.
+    Nothing is guessed: a row without a document number or name is returned as unresolved, never completed.
+    """
+    mp = _parser()
+    from utils import coversheet_mdl_extract as mx
+    if not data.startswith(b"%PDF"):
+        raise MdlError("Invalid PDF file: the file does not contain a PDF document.")
+    try:
+        res = mx.extract_pdf(data, filename)
+    except mx.MdlExtractError as exc:
+        raise MdlError(str(exc))
+    except Exception as exc:                                      # a damaged / unusual PDF must not become a server error
+        raise MdlError(f"The PDF MDL could not be processed ({type(exc).__name__}). Check the file or upload the Excel MDL.")
+    if res["method"] != "pdf-table":
+        why = ("This PDF is scanned (image only): it has no selectable text." if res["method"] == "ocr"
+               else "No document table with recognisable column headings (document number and title) was found in this PDF.")
+        raise MdlError(why + "\nUpload a text-based PDF or the Excel MDL, or use 'MDL-Driven Coversheet', where every value "
+                             "read this way can be reviewed and corrected.")
+    if (res.get("pages") or 0) > mx.MAX_PDF_PAGES:
+        raise MdlError(f"The PDF has {res['pages']} pages; at most {mx.MAX_PDF_PAGES} can be read. Upload the Excel MDL "
+                       "so that no document is left out.")
+    records, unresolved = [], []
+    seen: dict[tuple[str, str], int] = {}
+    numbers: dict[str, int] = {}
+    for r in res["records"]:
+        no, name = r["document_number"].strip(), r["document_name"].strip()
+        rev, discipline = r.get("revision", ""), r.get("discipline", "")
+        if not (no and name):
+            unresolved.append({"source": r.get("source", ""), "document_number": no, "document_name": name, "revision": rev,
+                               "discipline": discipline, "missing": [k for k, v in (("document number", no), ("document name", name)) if not v]})
+            continue
+        key = (no.lower(), name.lower())
+        seen[key] = seen.get(key, 0) + 1
+        numbers[no] = numbers.get(no, 0) + 1
+        records.append(mp.MdlRecord(
+            mdl_record_id=mp.record_id_for(no, name, seen[key]), s_no="", discipline=discipline, document_number=no,
+            document_name=name, document_category=r.get("document_type", ""), remarks=_REV_REMARK + rev if rev else "",
+            source_file=filename, source_sheet=PDF_SHEET))
+    if not records:
+        raise MdlError("No complete document record (document number and title) could be read from this PDF.")
+    duplicates = {d: n for d, n in numbers.items() if n > 1}
+    warnings = [f"Read from a PDF ({res['pages']} page(s)): check the selected document's number, title and revision."]
+    if duplicates:
+        warnings.append(f"{len(duplicates)} document number(s) appear more than once; all entries were kept - "
+                        "pick the right one by its revision.")
+    joined = sum(1 for r in res["records"] if any(f.get("message", "").startswith("Text continued") for f in r["flags"]))
+    if joined:
+        warnings.append(f"{joined} title(s) continued over more than one table row were joined - check them.")
+    if unresolved:
+        warnings.append(f"{len(unresolved)} row(s) miss a document number or title and were not imported: "
+                        + ", ".join(sorted({u['source'] for u in unresolved}))[:200] + ".")
+    warnings += res.get("notes") or []
+    file_rev = mp._revision_from_filename(filename)
+    parsed = mp.MdlParseResult(
+        source_file=filename, source_sheet=PDF_SHEET, header_row=0, revision=file_rev,
+        revision_source="file name" if file_rev else None, records=records, section_rows_ignored=res.get("rows_ignored", 0),
+        duplicate_doc_numbers=duplicates, warnings=warnings)
+    return parsed, unresolved
+
+
 def upload(db: Session, project_id: str, filename: str, data: bytes, user: Optional[str],
-           selected_record_id: Optional[str] = None) -> dict:
+           selected_record_id: Optional[str] = None, parsed: Any = None) -> dict:
     """
     Parse + validate + store an MDL, replacing the project's active MDL.
     An invalid file raises MdlError and leaves the existing active MDL untouched.
+    `parsed`: an already parsed PDF register (parse_pdf); otherwise the file is read as an Excel MDL.
     """
     pid = reg.normalize_project_id(project_id)
-    mp = _parser()
-    try:
-        parsed = mp.parse_mdl(data, filename)
-    except mp.MdlFormatError as exc:
-        raise MdlError(str(exc))
+    if parsed is None:
+        mp = _parser()
+        try:
+            parsed = mp.parse_mdl(data, filename)
+        except mp.MdlFormatError as exc:
+            raise MdlError(str(exc))
 
     digest = hashlib.sha256(data).hexdigest()
     previous = get_active(db, pid)
@@ -148,6 +223,37 @@ def upload(db: Session, project_id: str, filename: str, data: bytes, user: Optio
     result.update(unchanged=False, replaced=previous is not None, previous=previous_info,
                   selection=_check_selection(db, new, selected_record_id))
     return result
+
+
+def add_record(db: Session, project_id: str, user: Optional[str], values: dict) -> dict:
+    """Add a document the engineer completed by hand to a register read from a PDF (an Excel MDL is corrected in Excel)."""
+    pid = reg.normalize_project_id(project_id)
+    m = get_active(db, pid)
+    if not m:
+        raise MdlError("No Master Document List is uploaded for this project.")
+    if m.sheet_name != PDF_SHEET:
+        raise MdlError("Documents can be added only to a register read from a PDF. Correct the Excel MDL and upload it again.")
+    clean = {k: " ".join(str(values.get(k) or "").split())[:300] for k in ("document_number", "document_name", "revision", "discipline")}
+    if not clean["document_number"] or not clean["document_name"]:
+        raise MdlError("A document needs both a document number and a document title.")
+    same = db.query(func.count(MDLRecord.id)).filter(
+        MDLRecord.mdl_id == m.id, func.lower(MDLRecord.doc_no) == clean["document_number"].lower(),
+        func.lower(MDLRecord.description) == clean["document_name"].lower()).scalar()
+    remark = _REV_REMARK + clean["revision"] if clean["revision"] else ""
+    if db.query(func.count(MDLRecord.id)).filter(
+            MDLRecord.mdl_id == m.id, func.lower(MDLRecord.doc_no) == clean["document_number"].lower(),
+            func.lower(MDLRecord.description) == clean["document_name"].lower(), func.coalesce(MDLRecord.remarks, "") == remark).scalar():
+        raise MdlError("This document (same number, title and revision) is already in the register.")
+    mp = _parser()
+    rec = MDLRecord(mdl_id=m.id, record_id=mp.record_id_for(clean["document_number"], clean["document_name"], same + 1),
+                    ordinal=m.document_count, s_no="", discipline=clean["discipline"], doc_no=clean["document_number"],
+                    description=clean["document_name"], category="",
+                    remarks=remark)
+    db.add(rec)
+    m.document_count += 1
+    _audit(db, pid, "mdl_record_added", user, file=m.filename, document_number=clean["document_number"])
+    db.commit()
+    return {"record": record_to_dict(rec, m, same > 0), "document_count": m.document_count}
 
 
 def _check_selection(db: Session, mdl: ProjectMDL, selected_record_id: Optional[str]) -> dict:

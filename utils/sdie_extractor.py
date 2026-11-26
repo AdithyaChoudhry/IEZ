@@ -560,21 +560,91 @@ def _parse_specs_dict(specs_dict: dict) -> list[dict[str, Any]]:
     return result
 
 
+class ExtractionError(RuntimeError):
+    """A user-facing reason why nothing could be extracted. Never contains the API key or the request URL."""
+
+
+GEMINI_MODEL = "gemini-3.6-flash"
+GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
+GEMINI_MAX_OUTPUT_TOKENS = 16384            # the model's reasoning ("thinking") shares the output budget
+GEMINI_TIMEOUT = 120
+
+
+def _gemini_key() -> str:
+    """The key from the process environment, else from the application settings (which also read the server's .env file)."""
+    key = os.environ.get("GEMINI_API_KEY", "").strip()
+    if key:
+        return key
+    try:
+        from app.config import settings
+    except Exception:
+        return ""
+    return (getattr(settings, "GEMINI_API_KEY", "") or "").strip()
+
+
+def _call_gemini(prompt: str, api_key: str) -> str:
+    """The model's answer text. Raises ExtractionError with the reason instead of returning nothing."""
+    import requests as _requests
+
+    try:
+        resp = _requests.post(
+            GEMINI_URL,
+            headers={"Content-Type": "application/json", "x-goog-api-key": api_key},     # header, so the key never shows in a URL or log
+            json={
+                "contents": [{"parts": [{"text": prompt}]}],
+                "generationConfig": {"maxOutputTokens": GEMINI_MAX_OUTPUT_TOKENS, "responseMimeType": "application/json"},
+            },
+            timeout=GEMINI_TIMEOUT,
+        )
+    except _requests.Timeout:
+        raise ExtractionError(f"The AI service did not answer within {GEMINI_TIMEOUT} seconds. Please try again.")
+    except _requests.RequestException as exc:
+        logger.error("SDIE: Gemini request failed: %s", type(exc).__name__)
+        raise ExtractionError("The server could not reach the AI service. Please try again in a few minutes.")
+
+    if resp.status_code != 200:
+        try:
+            detail = str(resp.json()["error"]["message"])
+        except Exception:
+            detail = ""
+        detail = detail.replace(api_key, "***")[:300]
+        logger.error("SDIE: Gemini returned HTTP %s: %s", resp.status_code, detail)
+        hint = {400: "The AI service rejected the request (check the API key).", 401: "The AI service rejected the API key.",
+                403: "The AI service refused the API key.", 404: f"The AI model '{GEMINI_MODEL}' is not available.",
+                429: "The AI service quota or rate limit is exhausted. Please try again later."}.get(
+            resp.status_code, "The AI service is temporarily unavailable. Please try again.")
+        raise ExtractionError(f"{hint} (HTTP {resp.status_code}{': ' + detail if detail else ''})")
+
+    try:
+        candidate = resp.json()["candidates"][0]
+        finish = candidate.get("finishReason", "")
+        text = "".join(p.get("text", "") for p in candidate.get("content", {}).get("parts", []) if not p.get("thought")).strip()
+    except Exception:
+        raise ExtractionError("The AI service returned an answer that could not be read.")
+    if finish == "MAX_TOKENS":
+        raise ExtractionError("The AI answer was cut off because the document holds too much for one request. Upload fewer pages.")
+    if not text:
+        raise ExtractionError(f"The AI service returned no text{f' (reason: {finish})' if finish else ''}.")
+    return text
+
+
 def _run_ai_extraction(
     ocr_text: str,
     template_fields: list[str] | None = None,
 ) -> tuple[list[dict[str, Any]], str]:
     """
-    Call Google Gemini Flash API (free tier) — returns (sections, summary_instrument_type).
+    Call Google Gemini Flash API — returns (sections, summary_instrument_type).
     Each section: {heading, instrument_type, specs: [ExtractedSpec-compatible dicts]}
+    Raises ExtractionError when nothing can be extracted, saying why.
     """
-    api_key = os.environ.get("GEMINI_API_KEY", "")
+    api_key = _gemini_key()
     if not api_key:
-        logger.warning("SDIE: GEMINI_API_KEY not set — AI extraction skipped")
-        return [], ""
+        logger.warning("SDIE: GEMINI_API_KEY not set")
+        raise ExtractionError("AI extraction is not configured on the server (GEMINI_API_KEY is not set). Please contact the administrator.")
+    if not ocr_text.strip():
+        raise ExtractionError("No readable text was found in the file. Upload a sharper scan or the original PDF.")
 
     import json as _json
-    import requests as _requests
 
     user_content = ocr_text[:8000]
     if template_fields:
@@ -584,26 +654,7 @@ def _run_ai_extraction(
             f"DOCUMENT TEXT:\n{ocr_text[:7500]}"
         )
 
-    prompt = f"{_GROQ_SYSTEM}\n\nDOCUMENT:\n{user_content}"
-
-    try:
-        resp = _requests.post(
-            f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key={api_key}",
-            headers={"Content-Type": "application/json"},
-            json={
-                "contents": [{"parts": [{"text": prompt}]}],
-                "generationConfig": {
-                    "temperature": 0.1,
-                    "maxOutputTokens": 4096,
-                },
-            },
-            timeout=60,
-        )
-        resp.raise_for_status()
-        raw = resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
-    except Exception as exc:
-        logger.error("SDIE: Gemini API call failed: %s", exc)
-        return [], ""
+    raw = _call_gemini(f"{_GROQ_SYSTEM}\n\nDOCUMENT:\n{user_content}", api_key)
 
     import json as _json
     try:
@@ -613,12 +664,14 @@ def _run_ai_extraction(
         m = _re.search(r"\{.*\}", raw, _re.DOTALL)
         if not m:
             logger.error("SDIE: Could not parse JSON from Gemini response")
-            return [], ""
+            raise ExtractionError("The AI answer was not in the expected format. Please run the extraction again.")
         try:
             ai_result = _json.loads(m.group())
         except _json.JSONDecodeError as e:
             logger.error("SDIE: JSON decode failed: %s", e)
-            return [], ""
+            raise ExtractionError("The AI answer was not in the expected format. Please run the extraction again.")
+    if not isinstance(ai_result, dict):
+        raise ExtractionError("The AI answer was not in the expected format. Please run the extraction again.")
 
     # ── Parse multi-section response ──────────────────────────────────────────
     raw_sections = ai_result.get("sections", [])
@@ -637,6 +690,8 @@ def _run_ai_extraction(
 
     summary_type = ", ".join(s["instrument_type"] for s in sections if s["instrument_type"])
     total_specs = sum(len(s["specs"]) for s in sections)
+    if not total_specs:
+        raise ExtractionError("The AI found no instrument specifications in this file.")
     logger.info("SDIE: AI extracted %d section(s), %d spec(s) total, types=%r", len(sections), total_specs, summary_type)
     return sections, summary_type
 

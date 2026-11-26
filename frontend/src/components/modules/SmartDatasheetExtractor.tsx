@@ -73,6 +73,10 @@ const POLL_MS = 1500;
 const MAX_POLLS = 300;
 const SESSION_KEY = 'sdie_results_v3';
 const STEP_DELAY_MS = 600;
+const MAX_TRANSIENT = 20;                        // about 30 s of interrupted status checks (e.g. a server restart)
+const SERVER_UNREACHABLE = 'The server did not respond (it may be restarting after an update, or overloaded). Wait a minute and run the extraction again.';
+/** No response at all, or a gateway error from the proxy in front of the server. */
+const isTransient = (err: any) => !!err?.isAxiosError && (!err.response || [502, 503, 504, 520, 521, 522, 523, 524].includes(err.response.status));
 
 type Step = 'idle' | 'template_prompt' | 'uploading' | 'ocr' | 'ai' | 'mapping' | 'review' | 'template_assign' | 'done' | 'error';
 
@@ -769,9 +773,19 @@ export default function SmartDatasheetExtractor() {
   };
 
   const pollJob = async (endpoint: string, jobId: string): Promise<any> => {
+    let failures = 0;
     for (let i = 0; i < MAX_POLLS; i++) {
       await new Promise(r => setTimeout(r, POLL_MS));
-      const res = await api.get<any>(`${endpoint}/${jobId}`);
+      let res;
+      try {
+        res = await api.get<any>(`${endpoint}/${jobId}`);
+        failures = 0;
+      } catch (err: any) {
+        // a short gateway / network interruption does not end a job that is still running on the server
+        if (isTransient(err) && ++failures <= MAX_TRANSIENT) continue;
+        if (err.response?.status === 404) throw new Error('The server restarted while this file was being processed. Please run the extraction again.');
+        throw err;
+      }
       if (res.data.status === 'done') return res.data.result;
       if (res.data.status === 'error') throw new Error(res.data.error || 'Job failed');
     }
@@ -816,7 +830,7 @@ export default function SmartDatasheetExtractor() {
           instrumentType: result.instrument_type,
         });
       } catch (err: any) {
-        setError(`"${files[i].name}": ${err.response?.data?.detail || err.message}`);
+        setError(`"${files[i].name}": ${isTransient(err) ? SERVER_UNREACHABLE : err.response?.data?.detail || err.message}`);
         setStep('error');
         stopTimer();
         return;

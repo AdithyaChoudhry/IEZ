@@ -556,6 +556,10 @@ def _row_values(key: str, rec: Rec, group: CableGroup) -> dict[str, Any]:
         "sigtype": rec.io or "TBA", "remarks": None,
         "cd_tb2": show(common),
     }
+    if key in ("mcc_di", "mcc_do"):
+        # TB DETAILS AT MCC: the IODB's JB TERMINAL +/- columns are junction box terminals, not MCC terminals. Until an
+        # MCC terminal source is agreed the two cores stay TBA.
+        v["end_pos"] = v["end_neg"] = "TBA"
     return v
 
 
@@ -803,8 +807,9 @@ def build_sheet(ref_wb, key: str, recs: list[Rec], info: dict) -> tuple[Any, dic
     ws.print_area = f"A1:{get_column_letter(_print_last_col(ws, spec))}{last}"
     stats["rows"] = r - first
     stats["drop_col"] = col("new_tag") if key in ("mcc_di", "mcc_do") else None
-    if key == "mov":
-        stats["drop_col"] = _mov_duplicate_tag_col(snap, fcol, first)
+    if key == "mov":            # two columns of the reference only repeat another column of the same row: neither is delivered
+        stats["drop_col"] = [c for c in (_mov_duplicate_tag_col(snap, fcol, first),
+                                         _mov_duplicate_jb_col(ws, spec, snap, fcol, first)) if c]
     return ws, stats
 
 
@@ -818,6 +823,21 @@ def _mov_duplicate_tag_col(snap: dict, fcol: dict, first: int) -> Optional[int]:
         proto = snap["first"].get(c, (None,))[0]
         if isinstance(proto, str) and re.fullmatch(rf"=\$?{get_column_letter(tag)}\$?{first}", proto.replace(" ", "")):
             return c
+    return None
+
+
+def _mov_duplicate_jb_col(ws, spec: dict, snap: dict, fcol: dict, first: int) -> Optional[int]:
+    """The unlabelled column right of MOV 'To (JB)' that only repeats it (its reference formula is =<To (JB) column><row>).
+    None when the layout has no such column."""
+    jb = fcol.get("to_jb")
+    if not jb:
+        return None
+    c = jb + 1
+    if any(_cell_text(ws.cell(r, c).value) for r in spec["hdr"]):        # a column with its own heading is never removed
+        return None
+    proto = snap["first"].get(c, (None,))[0]
+    if isinstance(proto, str) and re.fullmatch(rf"=\$?{get_column_letter(jb)}\$?{first}", proto.replace(" ", "")):
+        return c
     return None
 
 
@@ -866,21 +886,34 @@ def _shift_formula(f: str, drop: int) -> str:
     return re.sub(r"(\$?)([A-Z]{1,3})(\$?)(\d+)", sub, f)
 
 
-def copy_sheet(src, dst_wb, title: str, index: Optional[int] = None, drop_col: Optional[int] = None):
-    """Copy `src` into `dst_wb`. drop_col: a column removed from the copy (cells, merges, widths, formulas, picture and
-    print area move left). Rows from UNIFORM_FROM_ROW down are Calibri 12, centred horizontally and vertically; no
-    column is hidden."""
+def copy_sheet(src, dst_wb, title: str, index: Optional[int] = None, drop_col=None):
+    """Copy `src` into `dst_wb`. drop_col: a column (or a list of columns) removed from the copy (cells, merges, widths,
+    formulas, picture and print area move left). Rows from UNIFORM_FROM_ROW down are Calibri 12, centred horizontally and
+    vertically; no column is hidden."""
+    drops = sorted({drop_col} if isinstance(drop_col, int) else set(drop_col or ()))
+
+    def before(c):                                # removed columns left of source column c
+        return sum(1 for d_ in drops if d_ < c)
+
+    def upto(c):                                  # removed columns left of, or at, source column c
+        return sum(1 for d_ in drops if d_ <= c)
+
     def mc(c):                                    # source column -> copy column
-        return c - 1 if drop_col and c > drop_col else c
+        return c - before(c)
+
+    def formula(v):
+        for d_ in reversed(drops):                # right to left, so the earlier positions stay valid
+            v = _shift_formula(v, d_)
+        return v
 
     dst = dst_wb.create_sheet(title=title, index=index)
     for row in src.iter_rows():
         for c in row:
-            if type(c).__name__ == "MergedCell" or (drop_col and c.column == drop_col):
+            if type(c).__name__ == "MergedCell" or c.column in drops:
                 continue
             d = dst.cell(c.row, mc(c.column))
             v = c.value
-            d.value = _shift_formula(v, drop_col) if drop_col and isinstance(v, str) and v.startswith("=") else v
+            d.value = formula(v) if drops and isinstance(v, str) and v.startswith("=") else v
             if c.has_style:
                 d.font, d.fill, d.border = copy(c.font), copy(c.fill), copy(c.border)
                 d.alignment, d.number_format, d.protection = copy(c.alignment), c.number_format, copy(c.protection)
@@ -890,21 +923,15 @@ def copy_sheet(src, dst_wb, title: str, index: Optional[int] = None, drop_col: O
                 d.alignment = _CENTER
     for rng in src.merged_cells.ranges:
         c1, c2 = rng.min_col, rng.max_col
-        if drop_col:
-            if c1 == c2 == drop_col:
-                continue
-            n1, n2 = (c1 - 1 if c1 > drop_col else c1), (c2 - 1 if c2 >= drop_col else c2)
-            if n1 == n2 and rng.min_row == rng.max_row:
-                continue
-        else:
-            n1, n2 = c1, c2
+        n1, n2 = c1 - before(c1), c2 - upto(c2)
+        if drops and (n2 < n1 or (n1 == n2 and rng.min_row == rng.max_row)):
+            continue
         dst.merge_cells(start_row=rng.min_row, start_column=n1, end_row=rng.max_row, end_column=n2)
     for k, cd in src.column_dimensions.items():
         lo, hi = cd.min or column_index_from_string(k), cd.max or column_index_from_string(k)
-        if drop_col:
-            if lo == hi == drop_col:
-                continue
-            lo, hi = (lo - 1 if lo > drop_col else lo), (hi - 1 if hi >= drop_col else hi)
+        lo, hi = lo - before(lo), hi - upto(hi)
+        if hi < lo:
+            continue
         d = dst.column_dimensions[get_column_letter(lo)]
         d.min, d.max, d.width, d.hidden = lo, hi, cd.width, False          # nothing stays hidden
     for r, rd in src.row_dimensions.items():
@@ -923,11 +950,11 @@ def copy_sheet(src, dst_wb, title: str, index: Optional[int] = None, drop_col: O
         dst.print_title_rows = src.print_title_rows
     if src.print_area:
         pa = src.print_area if isinstance(src.print_area, str) else str(src.print_area)
-        if drop_col:
+        if drops:
             m = re.match(r"^(.*!)?\$?([A-Z]+)\$?(\d+):\$?([A-Z]+)\$?(\d+)$", pa)
             if m:
                 end = column_index_from_string(m.group(4))
-                end = end - 1 if end >= drop_col else end
+                end = end - upto(end)
                 pa = f"A1:{get_column_letter(end)}{m.group(5)}"
         dst.print_area = pa.split("!")[-1].replace("$", "")
     try:
@@ -940,11 +967,11 @@ def copy_sheet(src, dst_wb, title: str, index: Optional[int] = None, drop_col: O
             new = XlImage(io.BytesIO(data))
             new.width, new.height = img.width, img.height
             new.anchor = deepcopy(img.anchor)
-            if drop_col:
+            if drops:
                 a = new.anchor
                 for pt in (getattr(a, "_from", None), getattr(a, "to", None)):
-                    if pt is not None and pt.col >= drop_col:
-                        pt.col -= 1
+                    if pt is not None:
+                        pt.col -= upto(pt.col)
             dst.add_image(new)
         except Exception:
             continue

@@ -271,7 +271,13 @@ def apply_header(ws, kind: str, values: dict, master: Master, last_col: int) -> 
     tname = _pick_template_sheet(kind, last_col, layouts)
     lay, tws = layouts[tname], tpl_wb[tname]
     exact = lay.last_col == last_col                                    # the approved cells / merges fit the table width: copy them verbatim
-    approved = exact and kind in SHEET_OF and tname == SHEET_OF[kind]  # ... and they are this worksheet's own approved header
+    # a worksheet whose table is deliberately narrower than its approved header: MOV is delivered without the column that only
+    # repeated "To (JB)", so the approved arrangement, one column narrower, is its expected header
+    narrower = not exact and kind == "MOV" and last_col == layouts[SHEET_OF["MOV"]].last_col - 1
+    if narrower:
+        tname = SHEET_OF["MOV"]
+        lay, tws = layouts[tname], tpl_wb[tname]
+    approved = narrower or (exact and kind in SHEET_OF and tname == SHEET_OF[kind])  # this worksheet's own approved header
     res = HeaderResult(sheet=ws.title, kind=kind, mode="approved" if approved else "derived", template_sheet=tname, last_col=last_col)
     if kind not in SHEET_OF:
         res.warnings.append(f"{ws.title}: the approved header template has no {kind} worksheet; the approved arrangement of '{tname}' "

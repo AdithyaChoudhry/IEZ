@@ -193,8 +193,9 @@ def test_generated_sheets_follow_the_reference_layout():
     ref = openpyxl.load_workbook(X.REFERENCE_PATH)
     ws, rws = sheet(out, "MOV"), ref[X.SHEETS["mov"]["ref"]]
     for r in range(8, X.SHEETS["mov"]["hdr"][1] + 1):
-        # the reference's repeated Tag No. column inside 'Instrument Side Gland' (H) is removed: everything after it moves left
-        assert [ws.cell(r, c).value for c in range(1, 37)] == [rws.cell(r, c).value for c in range(1, 38) if c != 8], ("MOV", r)
+        # the reference's two repeat columns are removed - the Tag No. copy inside 'Instrument Side Gland' (H) and the unlabelled
+        # copy of 'To (JB)' (K): everything after them moves left
+        assert [ws.cell(r, c).value for c in range(1, 36)] == [rws.cell(r, c).value for c in range(1, 38) if c not in (8, 11)], ("MOV", r)
     for name in ("MCC DI", "MCC DO", "VFD (iEZ)"):
         ws = sheet(out, name)
         heads = [ws.cell(9, c).value for c in range(1, 40) if ws.cell(9, c).value and not ws.column_dimensions[get_column_letter(c)].hidden]
@@ -222,8 +223,8 @@ def test_every_signal_stays_a_row_and_values_come_from_the_iodb():
     assert tags == ["ZA-MOV-1A", "ZA-MOV-1B", "ZS-MOV-1A", "ZS-MOV-1B", "ZA-MOV-2A", "ZS-MOV-2A"] or set(tags[:4]) == {
         "ZA-MOV-1A", "ZA-MOV-1B", "ZS-MOV-1A", "ZS-MOV-1B"}
     assert ws["B12"].value == "MOV-1" and ws["E12"].value == "IC-MOV-001" and ws["F12"].value == "19Cx1.5"
-    assert ws["R12"].value == "150"
-    assert {ws.cell(r, 24).value for r in range(12, 18)} == {"DI", "DO"}
+    assert ws["Q12"].value == "150"
+    assert {ws.cell(r, 23).value for r in range(12, 18)} == {"DI", "DO"}
     # cable quantity of one physical cable is not repeated per row
     assert "E13" not in {str(m).split(":")[0] for m in ws.merged_cells.ranges} and "E12:E15" in {str(m) for m in ws.merged_cells.ranges}
 
@@ -234,13 +235,41 @@ def test_missing_data_is_tba_and_dash_is_na_and_nothing_is_invented():
     mov2 = next(r for r in range(12, 40) if ws.cell(r, 2).value == "MOV-2")
     assert ws.cell(mov2, 5).value == "TBA"            # no cable tag in the IODB -> TBA, no generated number
     assert ws.cell(mov2, 6).value == "NA"             # '-' in the IODB -> NA
-    assert ws.cell(mov2, 18).value == "TBA"           # length
+    assert ws.cell(mov2, 17).value == "TBA"           # length
     vfd = sheet(out, "VFD (iEZ)")
     cable_nos = {vfd.cell(r, 5).value for r in range(11, 17)}
     assert "TBA" in cable_nos and not any(str(c).startswith("=") and "CONCATENATE" in str(c) for c in cable_nos)
     di = sheet(out, "MCC DI")
     last = next(r for r in range(11, 40) if str(di.cell(r, 4).value) == "YL-ML-9A")
     assert di.cell(last, 5).value == "TBA"
+
+
+def test_mov_has_no_column_that_only_repeats_the_junction_box():
+    out, err, rep = run(["mov"])
+    ws = sheet(out, "MOV")
+    jb = next(c for c in range(1, 30) if ws.cell(10, c).value == "To (JB)")
+    assert ws.cell(10, jb + 1).value == "TB Details at MOV"                           # the next column is the next heading
+    for row in ws.iter_rows(min_row=12):
+        for c in row:
+            assert not (isinstance(c.value, str) and c.value.replace(" ", "") == f"={get_column_letter(jb)}{c.row}"), c.coordinate
+
+
+def test_tb_details_at_mcc_stay_tba_even_when_the_iodb_has_junction_box_terminals():
+    df = pd.DataFrame(iodb_rows(), columns=COLS)
+    df["JB TERMINAL +"] = [str(2 * i + 1) for i in range(len(df))]
+    df["JB TERMINAL -"] = [str(2 * i + 2) for i in range(len(df))]
+    buf = io.BytesIO()
+    df.to_excel(buf, sheet_name="IODB", index=False)
+    out, err, rep = run(["mcc_di", "mcc_do", "mov"], data=buf.getvalue())
+    assert err is None, err
+    for name in ("MCC DI", "MCC DO"):
+        ws = sheet(out, name)
+        top = next(c for c in range(1, 30) if str(ws.cell(9, c).value).strip().lower() == "tb details at mcc")
+        cols = [c for c in range(top, top + 4) if str(ws.cell(10, c).value) in ("Positive Core", "Negative Core")]
+        values = {ws.cell(r, c).value for r in range(11, ws.max_row + 1) for c in cols if ws.cell(r, 4).value}
+        assert len(cols) == 2 and values == {"TBA"}, (name, values)
+    mov = sheet(out, "MOV")                                                           # MOV terminals still come from the IODB
+    assert any(mov.cell(r, 10).value not in (None, "TBA") for r in range(12, 18))
 
 
 def test_spare_rows_are_kept():
@@ -253,7 +282,7 @@ def test_spare_rows_are_kept():
 
 def test_remarks_column_is_empty():
     out, err, rep = run(["vfd", "mcc_di", "mov"])
-    for name, col, first in (("VFD (iEZ)", 29, 11), ("MCC DI", 28, 11), ("MOV", 26, 12)):
+    for name, col, first in (("VFD (iEZ)", 29, 11), ("MCC DI", 28, 11), ("MOV", 24, 12)):
         ws = sheet(out, name)
         assert str(ws.cell(first - 2, col).value or ws.cell(first - 1, col).value).lower() in ("remarks", "none") or True
         assert all(ws.cell(r, col).value is None for r in range(first, ws.max_row + 1)), name

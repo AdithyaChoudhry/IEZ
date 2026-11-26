@@ -412,3 +412,21 @@ def verify_header(ws, values: dict, expect: Optional[HeaderResult] = None) -> li
         if m.min_row <= HEADER_ROWS < m.max_row:
             problems.append(f"{ws.title}: merged range {m} spans the header and the table.")
     return problems
+
+
+def has_v3_header(ws) -> bool:
+    """True when rows 1-6 of `ws` are the approved V3 header: the company line, the seven labelled fields and a schedule title band."""
+    try:
+        company = any(isinstance(ws.cell(1, c).value, str) and "VA TECH WABAG LIMITED" in ws.cell(1, c).value
+                      for c in range(1, min(ws.max_column or 1, 40) + 1))
+        fields = set()
+        for r in range(2, 6):
+            for c in range(1, min(ws.max_column or 1, 40) + 1):
+                v = ws.cell(r, c).value
+                m = _LABEL.match(v) if isinstance(v, str) else None
+                if m:
+                    fields.add(_FIELD_OF[m.group(1).upper()])
+        title = ws.cell(6, 1).value
+        return company and fields == set(KEYS) and isinstance(title, str) and bool(re.search(r"(?i)\b(SCHEDULE|SUMMARY)\s*$", title.strip()))
+    except Exception:
+        return False

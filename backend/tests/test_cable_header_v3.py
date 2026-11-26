@@ -316,3 +316,26 @@ def test_simultaneous_generations_never_mix_their_metadata():
             assert v["project"] in text and v["doc_no"] in text and v["location"] in text
             assert other["project"] not in text and other["doc_no"] not in text
     assert hashlib.md5(HV.TEMPLATE_PATH.read_bytes()).hexdigest() == APPROVED_MD5
+
+
+# ── PDF: a V3-headed sheet is kept one page wide ─────────────────────────────────────────────────────────────────────
+def test_pdf_preparation_keeps_mov_and_lcp_one_page_wide_and_leaves_other_sheets_alone(built):
+    from utils import deliverable_output as DO
+    wb, _ = built
+    buf = io.BytesIO()
+    wb.save(buf)
+    out = openpyxl.load_workbook(io.BytesIO(DO.prepare_for_print(buf.getvalue())))
+    for name in ("MOV", "LCP"):
+        assert out[name].page_setup.fitToWidth == 1, name
+    for name in ("Cable Schedule -INST", "MCC DI", "MCC DO", "VFD"):
+        assert out[name].page_setup.fitToWidth in (None, 1), name
+    assert HV.has_v3_header(out["MOV"]) and HV.has_v3_header(out["LCP"]) and not HV.has_v3_header(out["COVERSHEET"])
+    # the same wide sheet WITHOUT the V3 header keeps the existing readability rule (two pages wide)
+    plain = openpyxl.load_workbook(io.BytesIO(buf.getvalue()))
+    for r in range(1, 7):
+        for c in range(1, 26):
+            if not type(plain["MOV"].cell(r, c)).__name__ == "MergedCell":
+                plain["MOV"].cell(r, c).value = None
+    b2 = io.BytesIO()
+    plain.save(b2)
+    assert openpyxl.load_workbook(io.BytesIO(DO.prepare_for_print(b2.getvalue())))["MOV"].page_setup.fitToWidth == 2

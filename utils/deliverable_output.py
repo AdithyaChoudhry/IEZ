@@ -150,6 +150,7 @@ _PAPER_A3, _PAPER_A4, _SMALL_PAPERS = 8, 9, {None, 1, 5}   # Letter / Legal / un
 
 
 _MIN_SCALE = 0.5
+_HEADER_SHEET_MIN_SCALE = 0.35     # a sheet carrying the Cable Schedule document header is kept one page wide down to this scale (its own Excel print scale)
 
 
 def _print_columns(ws) -> tuple:
@@ -271,6 +272,15 @@ def _header_rows(ws) -> Optional[str]:
     return f"{best}:{nxt if (sub or merged_down) else best}"
 
 
+def _has_cable_header(ws) -> bool:
+    """True for a Cable Schedule worksheet carrying the approved V3 document header (one block across the full table width)."""
+    try:
+        from .cable_header_v3 import has_v3_header
+        return has_v3_header(ws)
+    except Exception:
+        return False
+
+
 def prepare_for_print(workbook: bytes) -> bytes:
     """
     Page setup for the PDF copy only (the Excel deliverable keeps its own): long tables print one page wide over as
@@ -314,6 +324,8 @@ def prepare_for_print(workbook: bytes) -> bytes:
         usable = (1100 if ps.paperSize == _PAPER_A3 else 760) if landscape else 520
         width = sum((ws.column_dimensions[get_column_letter(c)].width or 8.43) for c in range(first, last + 1)) * 5.5
         wide = min(4, max(1, math.ceil(width * _MIN_SCALE / usable)))
+        if wide > 1 and width * _HEADER_SHEET_MIN_SCALE <= usable and _has_cable_header(ws):
+            wide = 1                                          # the full-width document header must not be cut by a page break
         props.pageSetUpPr.fitToPage = True
         ps.fitToWidth, ps.fitToHeight = wide, 0
         if wide > 1 and cols > 6 and not ws.print_title_cols:

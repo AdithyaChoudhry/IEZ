@@ -30,6 +30,8 @@ from openpyxl.cell.cell import MergedCell
 from openpyxl.styles import Alignment
 from openpyxl.worksheet.merge import MergedCellRange
 from openpyxl.utils import get_column_letter, column_index_from_string
+
+from .fast_style import apply as fast_style, merge_block
 from openpyxl.worksheet.dimensions import DimensionHolder, ColumnDimension
 
 INST_REMOVE = {"loopnumber", "loopno", "pidno", "pandidno", "signalto", "iopanel", "iotype", "racknode", "rack",
@@ -285,8 +287,11 @@ def reorder_columns(ws, keep: list[int], hdr_row: int, last_col: int, keep_tail:
 
 def header_texts(ws, rows: Iterable[int], last_col: int) -> dict[int, str]:
     """Column -> header text (first non-empty of the header rows; merged headers give every spanned column the text)."""
+    rows = list(rows)
     anchor = {}
     for mr in ws.merged_cells.ranges:
+        if not rows or mr.min_row > max(rows) or mr.max_row < min(rows):      # only merges that reach the header rows
+            continue
         for r in range(mr.min_row, mr.max_row + 1):
             for c in range(mr.min_col, mr.max_col + 1):
                 anchor[(r, c)] = (mr.min_row, mr.min_col)
@@ -298,18 +303,6 @@ def header_texts(ws, rows: Iterable[int], last_col: int) -> dict[int, str]:
             if v not in (None, "") and str(v).strip():
                 out.setdefault(c, str(v).strip())
     return out
-
-
-def _merge_block(ws, r1: int, c1: int, r2: int, c2: int) -> None:
-    """ws.merge_cells for a block known not to overlap any existing merge.
-
-    openpyxl's merge_cells first scans every existing merge (MultiCellRange.__contains__), so N merges cost N^2:
-    18,000 entry merges of a 1,000-tag schedule took minutes. The entry blocks are disjoint by construction (the data
-    area's merges were removed by reorder_columns), so the scan is skipped; the merge and its borders are the same.
-    """
-    mcr = MergedCellRange(ws, f"{get_column_letter(c1)}{r1}:{get_column_letter(c2)}{r2}")
-    ws.merged_cells.ranges.add(mcr)
-    ws._clean_merge_range(mcr)
 
 
 # ── Instrument Cable Schedule ────────────────────────────────────────────────
@@ -340,7 +333,8 @@ def instrument_layout(ws, hdr_row: int = 7, first_row: int = 9, rows_per_tag: in
 
     # entries (block start rows) in order
     starts, r = [], first_row
-    while r <= ws.max_row:
+    sheet_last = ws.max_row                  # openpyxl works this out from every cell each time it is asked
+    while r <= sheet_last:
         v = ws.cell(r, tag_col).value
         if v is not None and str(v).strip():
             starts.append(r)
@@ -394,7 +388,7 @@ def instrument_layout(ws, hdr_row: int = 7, first_row: int = 9, rows_per_tag: in
             below = [ws.cell(s + i, c).value for i in range(1, e - s + 1)]
             if any(v not in (None, "") for v in below):
                 continue
-            _merge_block(ws, s, c, e, c)
+            merge_block(ws, s, c, e, c)
             if c in main_tag_cols:
                 ws.cell(s, c).alignment = Alignment(horizontal="center", vertical="center", wrap_text=False)
     report["columns"] = [header_texts(ws, (hdr_row, hdr_row + 1), new_last).get(c, "") for c in range(1, new_last + 1)]
@@ -581,6 +575,8 @@ def format_columns(ws, hdr_rows, first_row: int, last_row: int, last_col: int, d
     """
     report = {"columns": {}, "unclassified": []}
     wraps: dict[int, bool] = {}
+    header_merges = [m for m in ws.merged_cells.ranges
+                     if hdr_rows and m.min_col != m.max_col and m.min_row <= max(hdr_rows) and m.max_row >= min(hdr_rows)]
     for c in range(1, last_col + 1):
         label = _header_label(ws, hdr_rows, c)
         pol = column_kind(label)
@@ -588,8 +584,7 @@ def format_columns(ws, hdr_rows, first_row: int, last_row: int, last_col: int, d
         cur = ws.column_dimensions[letter].width or 8.43
         measured = max((_shown_len(ws, ws.cell(r, c)) for r in range(first_row, last_row + 1)), default=0)
         words = max((len(w) for r in hdr_rows for w in re.split(r"[\s/]+", str(ws.cell(r, c).value or "")) if w
-                     if not any(m.min_row <= r <= m.max_row and m.min_col != m.max_col and m.min_col <= c <= m.max_col
-                                for m in ws.merged_cells.ranges)), default=0)
+                     if not any(m.min_row <= r <= m.max_row and m.min_col <= c <= m.max_col for m in header_merges)), default=0)
         need = max(measured * _UNITS_PER_CHAR + _CELL_PAD, words * 1.35 + _CELL_PAD)
         if pol is None:
             report["unclassified"].append(label)
@@ -605,11 +600,14 @@ def format_columns(ws, hdr_rows, first_row: int, last_row: int, last_col: int, d
         ws.column_dimensions[letter].hidden = False
         wraps[c] = wrap
         report["columns"][letter] = (label, round(width, 1))
+        aligned: dict = {}                                    # horizontal -> one Alignment object for the whole column
         for r in range(first_row, last_row + 1):
             cell = ws.cell(r, c)
             keep = cell.alignment.horizontal if cell.alignment is not None else None
-            cell.alignment = Alignment(horizontal=(align if pol and pol[0] == "main_cable" else (keep or align)),
-                                       vertical="center", wrap_text=wrap)           # an alignment the sheet already has is kept
+            horizontal = align if pol and pol[0] == "main_cable" else (keep or align)      # an alignment the sheet has is kept
+            if horizontal not in aligned:
+                aligned[horizontal] = Alignment(horizontal=horizontal, vertical="center", wrap_text=wrap)
+            fast_style(cell, alignment=aligned[horizontal])
         for r in hdr_rows:
             cell = ws.cell(r, c)
             cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)

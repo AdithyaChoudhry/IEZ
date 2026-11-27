@@ -32,6 +32,7 @@ from openpyxl.styles import Alignment, Border, Font, Side
 from openpyxl.utils import column_index_from_string, get_column_letter
 
 from .cable_summary import _norm_col, parse_length, resolve_cable_fields
+from .fast_style import merge_block
 
 REFERENCE_PATH = Path(__file__).resolve().parent.parent / "backend" / "app" / "templates" / "cable_schedule" / "cable_schedule_reference.xlsx"
 
@@ -518,12 +519,20 @@ def _style_from(dst, src):
 def _outline(ws, rng: str):
     from openpyxl.worksheet.cell_range import CellRange
     cr = CellRange(rng)
+    known = ws.parent.__dict__.setdefault("_iez_outlines", {})   # (border before, which edges) -> border number after
     for r in range(cr.min_row, cr.max_row + 1):
         for c in range(cr.min_col, cr.max_col + 1):
             cell = ws.cell(r, c)
+            edges = (c == cr.min_col, c == cr.max_col, r == cr.min_row, r == cr.max_row)
+            key = (cell._style.borderId if cell._style is not None else None, edges)
+            if key in known:
+                cell._style.borderId = known[key]
+                continue
             b = cell.border
-            cell.border = Border(left=_THIN if c == cr.min_col else b.left, right=_THIN if c == cr.max_col else b.right,
-                                 top=_THIN if r == cr.min_row else b.top, bottom=_THIN if r == cr.max_row else b.bottom)
+            cell.border = Border(left=_THIN if edges[0] else b.left, right=_THIN if edges[1] else b.right,
+                                 top=_THIN if edges[2] else b.top, bottom=_THIN if edges[3] else b.bottom)
+            if key[0] is not None:
+                known[key] = cell._style.borderId
 
 
 def _description(rec: Rec) -> str:
@@ -756,7 +765,7 @@ def build_sheet(ref_wb, key: str, recs: list[Rec], info: dict) -> tuple[Any, dic
                 if c:
                     ws.cell(g0, c).value = gv[fld]
                     if gend > g0:
-                        ws.merge_cells(start_row=g0, start_column=c, end_row=gend, end_column=c)
+                        merge_block(ws, g0, c, gend, c)
                     _outline(ws, f"{get_column_letter(c)}{g0}:{get_column_letter(c)}{gend}")
         # block-level cells (merged over the whole block)
         for fld in spec["block_fields"]:
@@ -779,7 +788,7 @@ def build_sheet(ref_wb, key: str, recs: list[Rec], info: dict) -> tuple[Any, dic
                             for rr in range(a + 1, b + 1):
                                 ws.cell(rr, c).value = None
                             if b > a and (key not in ("mcc_di", "mcc_do") or loops[run0].strip().upper() not in _NOT_A_LOOP):
-                                ws.merge_cells(start_row=a, start_column=c, end_row=b, end_column=c)
+                                merge_block(ws, a, c, b, c)
                             _outline(ws, f"{get_column_letter(c)}{a}:{get_column_letter(c)}{b}")
                             run0 = k
                     continue
@@ -790,7 +799,7 @@ def build_sheet(ref_wb, key: str, recs: list[Rec], info: dict) -> tuple[Any, dic
             for rr in range(r0 + 1, r1 + 1):
                 ws.cell(rr, c).value = None
             if r1 > r0:
-                ws.merge_cells(start_row=r0, start_column=c, end_row=r1, end_column=c)
+                merge_block(ws, r0, c, r1, c)
             _outline(ws, f"{get_column_letter(c)}{r0}:{get_column_letter(c)}{r1}")
         r += n
 
@@ -904,6 +913,7 @@ def copy_sheet(src, dst_wb, title: str, index: Optional[int] = None, drop_col=No
         return v
 
     dst = dst_wb.create_sheet(title=title, index=index)
+    formats: dict = {}            # (source cell format, uniform row?) -> copy format: each distinct format is built once
     for row in src.iter_rows():
         for c in row:
             if type(c).__name__ == "MergedCell" or c.column in drops:
@@ -911,6 +921,11 @@ def copy_sheet(src, dst_wb, title: str, index: Optional[int] = None, drop_col=No
             d = dst.cell(c.row, mc(c.column))
             v = c.value
             d.value = formula(v) if drops and isinstance(v, str) and v.startswith("=") else v
+            st = c._style                                                       # None on a cell that was never formatted
+            key = (tuple(st) if st is not None else None, c.row >= UNIFORM_FROM_ROW)
+            if key in formats:
+                d._style = copy(formats[key])
+                continue
             if c.has_style:
                 d.font, d.fill, d.border = copy(c.font), copy(c.fill), copy(c.border)
                 d.alignment, d.number_format, d.protection = copy(c.alignment), c.number_format, copy(c.protection)
@@ -918,12 +933,13 @@ def copy_sheet(src, dst_wb, title: str, index: Optional[int] = None, drop_col=No
                 f = c.font
                 d.font = Font(name="Calibri", size=12, bold=f.b, italic=f.i, color=copy(f.color) if f.color else None)
                 d.alignment = _CENTER
+            formats[key] = copy(d._style)
     for rng in src.merged_cells.ranges:
         c1, c2 = rng.min_col, rng.max_col
         n1, n2 = c1 - before(c1), c2 - upto(c2)
         if drops and (n2 < n1 or (n1 == n2 and rng.min_row == rng.max_row)):
             continue
-        dst.merge_cells(start_row=rng.min_row, start_column=n1, end_row=rng.max_row, end_column=n2)
+        merge_block(dst, rng.min_row, n1, rng.max_row, n2)        # the source sheet's merges never overlap
     for k, cd in src.column_dimensions.items():
         lo, hi = cd.min or column_index_from_string(k), cd.max or column_index_from_string(k)
         lo, hi = lo - before(lo), hi - upto(hi)

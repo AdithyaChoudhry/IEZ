@@ -27,6 +27,8 @@ from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from typing import Any, Optional
 
+from .parsed_cache import cached_table
+
 CABLE_SUMMARY_SHEET = "CABLE SUMMARY"
 SUMMARY_TITLE = "CABLE QUANTITIES"
 UNITS = "METERS"
@@ -400,8 +402,10 @@ def locate_cable_source(df, iodb_bytes: bytes | None = None, tag_column: str | N
         try:
             import io
             import pandas as pd
-            frame = pd.read_excel(io.BytesIO(iodb_bytes), sheet_name=cand["sheet"], header=cand["header_row"] - 1,
-                                  usecols=",".join(letters))
+            frame, _ = cached_table(                    # the same file and columns are read once (server memory)
+                f"cable-source:{cand['sheet']}:{cand['header_row']}:{','.join(letters)}", iodb_bytes,
+                lambda: (pd.read_excel(io.BytesIO(iodb_bytes), sheet_name=cand["sheet"], header=cand["header_row"] - 1,
+                                       usecols=",".join(letters)), None))
             frame = frame.dropna(how="all")
             frame.index = frame.index + (cand["header_row"] - 1)     # index + 2 == Excel row number
             return frame, cand

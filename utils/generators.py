@@ -20,6 +20,7 @@ from openpyxl.utils import get_column_letter, column_index_from_string
 from openpyxl.styles import Alignment, Font, PatternFill, Border, Side
 
 from utils.file_handler import workbook_to_bytes, dataframe_to_bytes, revised_tag_column
+from utils.fast_style import apply as fast_style
 
 # Shared cell style applied to all output cells in list generators
 _LIST_ALIGNMENT = Alignment(horizontal='center', vertical='center', wrap_text=True)
@@ -802,8 +803,7 @@ def generate_cable_schedule(
                         if cell.value is not None:
                             oc = out_ws_new.cell(row=h_row, column=cell.column,
                                                  value=cell.value)
-                            oc.font      = _CS_FONT_BOLD
-                            oc.alignment = _CS_ALIGN
+                            fast_style(oc, font=_CS_FONT_BOLD, alignment=_CS_ALIGN)
 
         out_ws = out_wb[target_sheet]
 
@@ -870,8 +870,7 @@ def generate_cable_schedule(
                                 c.value = _adjust_formula_row(proto_val, src_r, dst_r)
                             else:
                                 c.value = proto_val
-                            c.font      = _CS_FONT
-                            c.alignment = _CS_ALIGN
+                            fast_style(c, font=_CS_FONT, alignment=_CS_ALIGN)
                         except Exception:
                             continue
 
@@ -885,8 +884,7 @@ def generate_cable_schedule(
                     sn = out_ws.cell(row=dst_main, column=1)
                     if not (isinstance(sn.value, str) and sn.value.startswith('=')):
                         sn.value     = sl_no
-                        sn.font      = _CS_FONT
-                        sn.alignment = _CS_ALIGN
+                        fast_style(sn, font=_CS_FONT, alignment=_CS_ALIGN)
                 except Exception:
                     pass
 
@@ -920,8 +918,7 @@ def generate_cable_schedule(
                                 c.value = "TBA"
                             else:
                                 c.value = str(raw).strip() if isinstance(raw, str) else raw
-                        c.font      = _CS_FONT
-                        c.alignment = _CS_ALIGN
+                        fast_style(c, font=_CS_FONT, alignment=_CS_ALIGN)
                     except Exception:
                         continue
 
@@ -981,8 +978,7 @@ def generate_cable_schedule(
                             dst_cell = out_ws.cell(row=dest + off, column=cidx)
                             try:
                                 dst_cell.value = src_cell.value
-                                dst_cell.font = _CS_FONT
-                                dst_cell.alignment = _CS_ALIGN
+                                fast_style(dst_cell, font=_CS_FONT, alignment=_CS_ALIGN)
                             except Exception:
                                 pass
                             try:
@@ -1014,7 +1010,7 @@ def generate_cable_schedule(
                     try:
                         cell = sheet.cell(row=r, column=c)
                         # preserve existing border where possible by overriding
-                        cell.border = full_border
+                        fast_style(cell, border=full_border)
                     except Exception:
                         continue
 

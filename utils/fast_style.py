@@ -9,6 +9,8 @@ from openpyxl.cell.cell import MergedCell
 from openpyxl.styles.borders import Border
 from openpyxl.styles.cell_style import StyleArray
 from openpyxl.utils import get_column_letter
+from openpyxl.worksheet._reader import WorksheetReader
+from openpyxl.worksheet.cell_range import MultiCellRange
 from openpyxl.worksheet.merge import MergedCellRange
 
 _ATTRS = {"font": ("_fonts", "fontId"), "alignment": ("_alignments", "alignmentId"), "border": ("_borders", "borderId")}
@@ -88,3 +90,22 @@ def merge_block(ws, r1: int, c1: int, r2: int, c2: int) -> None:
     merged = _MergedRange(ws, f"{get_column_letter(c1)}{r1}:{get_column_letter(c2)}{r2}")
     ws.merged_cells.ranges.add(merged)
     ws._clean_merge_range(merged)
+
+
+# ── opening workbooks ───────────────────────────────────────────────────────────────────────────────────────────
+# openpyxl rebuilds the borders of every merged range while it opens a file, comparing border objects cell by cell: a
+# generated schedule with tens of thousands of merges takes many seconds per open (and the cover step opens it four times).
+def _bind_merged_cells(self):
+    """openpyxl's WorksheetReader.bind_merged_cells with the range class above - the loaded sheet is the same."""
+    if not self.parser.merged_cells:
+        return
+    ranges = []
+    for cr in self.parser.merged_cells.mergeCell:
+        merged = _MergedRange(self.ws, cr.ref)
+        self.ws._clean_merge_range(merged)
+        ranges.append(merged)
+    self.ws.merged_cells = MultiCellRange(ranges)
+
+
+if hasattr(WorksheetReader, "bind_merged_cells"):
+    WorksheetReader.bind_merged_cells = _bind_merged_cells

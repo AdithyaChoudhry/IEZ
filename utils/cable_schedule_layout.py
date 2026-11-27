@@ -194,8 +194,7 @@ def reorder_columns(ws, keep: list[int], hdr_row: int, last_col: int, keep_tail:
     k = new_last / last_col
 
     merges = [(r.min_row, r.min_col, r.max_row, r.max_col) for r in ws.merged_cells.ranges]
-    for r in list(ws.merged_cells.ranges):
-        ws.merged_cells.remove(r)
+    ws.merged_cells.ranges.clear()           # all of them go (removing one by one compares each with all the others)
     cells = dict(ws._cells)
     dims = _col_dims(ws)
     ws._cells = {}
@@ -259,7 +258,10 @@ def reorder_columns(ws, keep: list[int], hdr_row: int, last_col: int, keep_tail:
             n1, n2 = ks[0], ks[-1]
         if n2 > n1 or r2 > r1:
             try:
-                ws.merge_cells(start_row=r1, start_column=n1, end_row=r2, end_column=n2)
+                if r1 >= hdr_row:        # table merges stay disjoint under the column mapping: no overlap search needed
+                    merge_block(ws, r1, n1, r2, n2)
+                else:                    # title segments are re-laid and may coincide: openpyxl's own check
+                    ws.merge_cells(start_row=r1, start_column=n1, end_row=r2, end_column=n2)
             except Exception:
                 pass
     # column widths

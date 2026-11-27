@@ -32,7 +32,7 @@ from openpyxl.styles import Alignment, Border, Font, Side
 from openpyxl.utils import column_index_from_string, get_column_letter
 
 from .cable_summary import _norm_col, parse_length, resolve_cable_fields
-from .fast_style import merge_block
+from .fast_style import apply as fast_style, merge_block
 
 REFERENCE_PATH = Path(__file__).resolve().parent.parent / "backend" / "app" / "templates" / "cable_schedule" / "cable_schedule_reference.xlsx"
 
@@ -614,6 +614,8 @@ def merge_consecutive_loops(ws, from_col: int, first_row: int, last_row: int, ro
     from openpyxl.worksheet.cell_range import CellRange
     ok = lambda lp: bool(lp) and str(lp).strip().upper() not in _NOT_A_LOOP
     merged, r = 0, first_row
+    in_column = [m for m in ws.merged_cells.ranges if m.min_col == m.max_col == from_col]
+    outlines: dict = {}                                  # (first row?, last row?) -> the border of that cell of a group
     while r <= last_row:
         lp = row_loops.get(r)
         if not ok(lp):
@@ -623,18 +625,22 @@ def merge_consecutive_loops(ws, from_col: int, first_row: int, last_row: int, ro
         while end < last_row and row_loops.get(end + 1) == lp:
             end += 1
         if end > r:
-            for m in [m for m in ws.merged_cells.ranges if m.min_col == m.max_col == from_col and m.max_row >= r and m.min_row <= end]:
-                ws.unmerge_cells(str(m))                      # a block-level merge inside the group is replaced by the loop merge
+            for m in [m for m in in_column if m.max_row >= r and m.min_row <= end]:
+                ws.merged_cells.ranges.discard(m)             # a block-level merge inside the group is replaced by the loop merge
+                for rr in range(m.min_row + 1, m.max_row + 1):
+                    ws._cells.pop((rr, from_col), None)
+                in_column.remove(m)
             anchor = ws.cell(r, from_col)
             anchor.value = str(lp).strip() if not isinstance(lp, str) else lp
             for rr in range(r + 1, end + 1):
                 ws.cell(rr, from_col).value = None
-            ws.merge_cells(start_row=r, start_column=from_col, end_row=end, end_column=from_col)
+            merge_block(ws, r, from_col, end, from_col)
             for rr in range(r, end + 1):                       # one cell: only its outline is drawn, no lines between the rows
-                c = ws.cell(rr, from_col)
-                b = c.border
-                c.border = Border(left=_THIN, right=_THIN, top=_THIN if rr == r else Side(style=None),
-                                  bottom=_THIN if rr == end else Side(style=None))
+                edges = (rr == r, rr == end)
+                if edges not in outlines:
+                    outlines[edges] = Border(left=_THIN, right=_THIN, top=_THIN if edges[0] else Side(style=None),
+                                             bottom=_THIN if edges[1] else Side(style=None))
+                fast_style(ws.cell(rr, from_col), border=outlines[edges])
             anchor.alignment = Alignment(horizontal="center", vertical="center", wrap_text=False)
             merged += 1
         r = end + 1

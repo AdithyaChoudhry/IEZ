@@ -1,4 +1,5 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import UploadProgressBar from './components/ui/UploadProgressBar';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { SharedIodbProvider } from './context/SharedIodbContext';
@@ -156,6 +157,7 @@ export default function App() {
             <AuthProvider>
               <SharedIodbProvider>
                 <AppRoutes />
+                <UploadProgressBar />
               </SharedIodbProvider>
             </AuthProvider>
           </BrowserRouter>

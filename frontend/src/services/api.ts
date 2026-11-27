@@ -4,6 +4,7 @@
 import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';
 import type { TokenResponse } from '@/types';
 import { getCurrentProject } from './projectContext';
+import { uploadProgress } from './uploadProgress';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || '/api';
 
@@ -23,6 +24,29 @@ const REGISTERED_GENERATE_URLS = [
   '/process-data/generate',
 ];
 
+type Tracked = InternalAxiosRequestConfig & { progressId?: string };
+
+const carriesFile = (data: unknown) => data instanceof FormData && Array.from(data.values()).some((v) => v instanceof Blob);
+
+// Progress bar: a request that sends a file reports the bytes sent; a job the page keeps polling stays visible.
+function trackProgress(config: Tracked) {
+  if (!carriesFile(config.data)) return;
+  const id = uploadProgress.start();
+  const own = config.onUploadProgress;
+  config.progressId = id;
+  config.onUploadProgress = (e) => { uploadProgress.sent(id, e.loaded, e.total); own?.(e); };
+}
+
+function settleProgress(config: Tracked | undefined, data?: unknown) {
+  if (!config) return;
+  if (config.progressId) uploadProgress.finish(config.progressId);
+  const url = config.url || '';
+  if (config.method === 'get' && url.includes('/status/')) {
+    if ((data as { status?: string } | undefined)?.status === 'processing') uploadProgress.job(url);
+    else uploadProgress.finish(url);
+  }
+}
+
 // Request interceptor to add auth token
 api.interceptors.request.use(
   (config: InternalAxiosRequestConfig) => {
@@ -39,6 +63,7 @@ api.interceptors.request.use(
         if (projectId) config.data.append('project_id', projectId);
       }
     }
+    trackProgress(config);
     return config;
   },
   (error) => Promise.reject(error)
@@ -46,8 +71,12 @@ api.interceptors.request.use(
 
 // Response interceptor to handle token refresh
 api.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    settleProgress(response.config, response.data);
+    return response;
+  },
   async (error: AxiosError) => {
+    settleProgress(error.config);
     const originalRequest = error.config as InternalAxiosRequestConfig & { _retry?: boolean };
 
     // If error is 401 and we haven't tried to refresh yet

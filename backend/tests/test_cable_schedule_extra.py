@@ -271,9 +271,8 @@ def test_equipment_tb_cores_stay_tba_even_when_the_iodb_has_junction_box_termina
         assert len(cols) == 2, (name, cols)
         return {ws.cell(r, c).value for r in range(spec["first"], ws.max_row + 1) for c in cols if ws.cell(r, tag).value}
 
-    for name, key in (("MCC DI", "mcc_di"), ("MCC DO", "mcc_do"), ("VFD (iEZ)", "vfd"), ("MOV", "mov")):
+    for name, key in (("MCC DI", "mcc_di"), ("MCC DO", "mcc_do"), ("VFD (iEZ)", "vfd"), ("MOV", "mov"), ("LCP", "lcp")):
         assert cores(name, key) == {"TBA"}, name
-    assert cores("LCP", "lcp") - {"TBA"}                                              # LCP terminals still come from the IODB
 
 
 def test_spare_rows_are_kept():

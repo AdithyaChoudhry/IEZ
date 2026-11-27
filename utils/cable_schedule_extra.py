@@ -541,14 +541,16 @@ def _remarks(rec: Rec) -> Optional[str]:
     return " - ".join(parts) if parts else None
 
 
-def _row_values(key: str, rec: Rec, group: CableGroup) -> dict[str, Any]:
+def _row_values(rec: Rec, group: CableGroup) -> dict[str, Any]:
     """Cell values of one signal row, by reference field. Everything comes from the IODB; absent -> TBA."""
     sig = show(rec.terminal_signal)
     common = rec.terminal_common if not is_missing(rec.terminal_common) else rec.terminal_zero
-    v = {
+    return {
         "desc": _description(rec), "tag": show(rec.tag_no), "new_tag": show(rec.new_tag_no),
         "end_unit": show(rec.unit_no), "end_mtb": show(rec.mtb_no),
-        "end_pos": show(rec.jb_terminal_positive), "end_neg": show(rec.jb_terminal_negative),
+        # TB DETAILS AT MCC / VFD / MOV / LCP: the IODB's JB TERMINAL +/- columns are junction box terminals, not terminals
+        # of that equipment. Until its terminal source is agreed the two cores stay TBA.
+        "end_pos": "TBA", "end_neg": "TBA",
         "to_jb": show(rec.jb_tag),
         "cd_panel": show(rec.panel), "cd_drop": show(rec.drop), "cd_rack": show(rec.rack), "cd_slot": show(rec.slot),
         "cd_main_tb": show(rec.terminal_strip), "cd_tb": sig, "cd_card": show(rec.card_no or rec.slot),
@@ -556,11 +558,6 @@ def _row_values(key: str, rec: Rec, group: CableGroup) -> dict[str, Any]:
         "sigtype": rec.io or "TBA", "remarks": None,
         "cd_tb2": show(common),
     }
-    if key in ("mcc_di", "mcc_do", "vfd", "mov"):
-        # TB DETAILS AT MCC / VFD / MOV: the IODB's JB TERMINAL +/- columns are junction box terminals, not terminals of
-        # that equipment. Until its terminal source is agreed the two cores stay TBA.
-        v["end_pos"] = v["end_neg"] = "TBA"
-    return v
 
 
 def _block_values(key: str, block: Block, serial: int) -> dict[str, Any]:
@@ -739,7 +736,7 @@ def build_sheet(ref_wb, key: str, recs: list[Rec], info: dict) -> tuple[Any, dic
                         else:
                             val = _adjust(val, src_row, rr)
                     ws.cell(rr, c).value = val
-                vals = _row_values(key, rec, g)
+                vals = _row_values(rec, g)
                 for fld, c in fcol.items():
                     if fld in vals and vals[fld] is not None:
                         ws.cell(rr, c).value = vals[fld]

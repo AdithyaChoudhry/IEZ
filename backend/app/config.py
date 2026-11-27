@@ -4,7 +4,20 @@ Uses pydantic BaseSettings for environment variable management.
 """
 from pydantic_settings import BaseSettings
 from pydantic import field_validator
+import subprocess
+from pathlib import Path
 from typing import Optional, Union
+
+
+def _git_version() -> str:
+    """V3.<number of commits> (<commit id>) of the running code; 'V3' when there is no git history."""
+    def git(*args):
+        return subprocess.run(["git", *args], cwd=Path(__file__).resolve().parent, capture_output=True, text=True,
+                              timeout=10, check=True).stdout.strip()
+    try:
+        return f"V3.{git('rev-list', '--count', 'HEAD')} ({git('rev-parse', '--short', 'HEAD')})"
+    except (OSError, subprocess.SubprocessError):
+        return "V3"
 
 
 class Settings(BaseSettings):
@@ -12,7 +25,7 @@ class Settings(BaseSettings):
     
     # Application
     APP_NAME: str = "iEZ API"
-    APP_VERSION: str = "1.0.0"
+    APP_VERSION: str = _git_version()
     DEBUG: bool = True
     
     # Security

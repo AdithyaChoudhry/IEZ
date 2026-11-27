@@ -85,7 +85,7 @@ export default function RegisterPage() {
         </div>
 
         <p className="text-center text-[11px] mt-5" style={{ color: 'var(--t2)' }}>
-          Built by Akash Balaji · iEZ v3.1 · Developed for VA TECH WABAG
+          Built by Akash Balaji · iEZ {__APP_VERSION__} · Developed for VA TECH WABAG
         </p>
       </div>
     </div>

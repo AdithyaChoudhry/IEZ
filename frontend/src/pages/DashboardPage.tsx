@@ -212,7 +212,7 @@ export default function DashboardPage() {
       </section>
 
       <p className="mono text-center text-[11px] mt-16" style={{ color: 'var(--t2)' }}>
-        IEZ PLATFORM · VA TECH WABAG · BUILT BY AKASH BALAJI · V3.1
+        IEZ PLATFORM · VA TECH WABAG · BUILT BY AKASH BALAJI · {__APP_VERSION__}
       </p>
     </div>
   );

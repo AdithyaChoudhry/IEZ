@@ -39,7 +39,7 @@ export default function LoginPage() {
             <LoopArt tag="101" tone={{ line: 'rgba(246,245,242,.72)', text: '#8f8b83', accent: '#ff6a2b', faint: 'rgba(255,248,235,.18)', bg: '#171614' }} />
           </div>
         </div>
-        <p className="relative mono text-[11px]" style={{ color: '#6f6b64' }}>VA TECH WABAG · BUILT BY AKASH BALAJI · V3.1</p>
+        <p className="relative mono text-[11px]" style={{ color: '#6f6b64' }}>VA TECH WABAG · BUILT BY AKASH BALAJI · {__APP_VERSION__}</p>
       </div>
 
       {/* ── Form ── */}

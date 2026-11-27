@@ -11,6 +11,7 @@ from .config import settings
 from .database import init_db
 from .auth.router import router as auth_router
 from .routers.validator import router as validator_router
+from .routers.validation_profiles import router as validation_profiles_router
 from .routers.iodb_compare import router as iodb_compare_router
 from .routers.datasheet import router as datasheet_router
 from .routers.coversheet import router as coversheet_router
@@ -95,6 +96,7 @@ async def add_security_headers(request: Request, call_next):
 # Include routers
 app.include_router(auth_router, prefix="/api")
 app.include_router(validator_router, prefix="/api")
+app.include_router(validation_profiles_router, prefix="/api")
 app.include_router(iodb_compare_router, prefix="/api")
 app.include_router(datasheet_router, prefix="/api")
 app.include_router(coversheet_router, prefix="/api")

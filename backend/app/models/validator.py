@@ -17,6 +17,7 @@ class ValidationErrorDetail(BaseModel):
     rule_name: Optional[str] = None
     rule_type: Optional[str] = None
     source: Optional[str] = None
+    severity: Optional[str] = None
 
 
 class ValidationRequest(BaseModel):
@@ -33,6 +34,8 @@ class ValidationResponse(BaseModel):
     has_highlighted: bool
     has_tba: bool
     message: Optional[str] = None
+    profile: Optional[Dict[str, Any]] = None
+    severity_counts: Optional[Dict[str, int]] = None
 
 
 class ValidationJobResponse(BaseModel):

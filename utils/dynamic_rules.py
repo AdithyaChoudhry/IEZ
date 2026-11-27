@@ -63,7 +63,7 @@ PREDEFINED_RULES_META: list[dict] = [
     {"rule": 4,   "name": "TAG keyword → Instrument Name",       "description": "TAG NO keyword must match Instrument Name by substring."},
     {"rule": "4B","name": "TAG NO Capitalisation",               "description": "TAG NO must be fully uppercase."},
     {"rule": 5,   "name": "Power Supply vs Wire Type",           "description": "Non-24V-DC power + not 4-wire → mismatch."},
-    {"rule": 6,   "name": "Signal Type vs Junction Box",         "description": "AI → AJB; DI/DO → DJB."},
+    {"rule": 6,   "name": "Signal Type vs Junction Box",         "description": "Applicable I/O signals: AI → AJB; DI/DO → DJB. Records with IO TYPE '-' are exempt."},
     {"rule": 7,   "name": "Calibration vs Instrument Range",     "description": "Calibration max must not exceed Instrument range max."},
     {"rule": 8,   "name": "Unit Consistency",                    "description": "Calibration unit must match Instrument range unit."},
     {"rule": 9,   "name": "Fail Action Validation",              "description": "Must be FO, FC, or LAST POS."},

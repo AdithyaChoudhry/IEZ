@@ -7,8 +7,12 @@ from typing import List, Optional
 import io
 import json
 import uuid
+from collections import Counter
 
-from ..deps import get_current_user
+from sqlalchemy.orm import Session
+
+from ..deps import get_current_user, get_db
+from .validation_profiles import resolve_profile
 from ..auth.models import User
 from ..models.validator import (
     ValidationRequest,
@@ -25,6 +29,7 @@ from ..models.validator import (
 import sys
 sys.path.insert(0, '/app')
 from utils.template_processor import process_iodb_validation
+from utils.validation_profiles import Profile
 from utils.dynamic_rules import (
     DynamicRule,
     load_rules,
@@ -57,6 +62,7 @@ def _run_validation_job(
     dynamic_rules,
     user_id: int,
     validate_empty_cells: bool = False,
+    profile=None,
 ):
     """Run validation in the background and store the result/status."""
     try:
@@ -65,6 +71,7 @@ def _run_validation_job(
             auto_correct_spelling=auto_correct_spelling,
             dynamic_rules=dynamic_rules if dynamic_rules else None,
             validate_empty_cells=validate_empty_cells,
+            profile=profile,
         )
 
         if err_msg:
@@ -83,6 +90,8 @@ def _run_validation_job(
             ValidationErrorDetail(**error) for error in errors[:MAX_ERRORS_IN_RESPONSE]
         ]
 
+        info = (profile or Profile()).info()
+        counts = Counter(e.get("severity", "error") for e in errors)
         validation_jobs[job_id] = {
             "status": "done",
             "result": ValidationResponse(
@@ -93,9 +102,13 @@ def _run_validation_job(
                 has_highlighted=hl_bytes is not None,
                 has_tba=tba_bytes is not None,
                 message=(
-                    (f"Validation complete: {len(errors)} error(s) found" if errors else "No errors found")
+                    (f"Validation complete: {len(errors)} finding(s)" if info["custom"] and errors else
+                     f"Validation complete: {len(errors)} error(s) found" if errors else "No errors found")
+                    + (f" using the custom profile '{info['name']}'" if info["custom"] else "")
                     + ("" if validate_empty_cells else " (empty-cell check off)")
                 ),
+                profile=info,
+                severity_counts={s: counts[s] for s in ("error", "warning", "information")},
             ),
         }
     except Exception as exc:
@@ -108,7 +121,10 @@ async def validate_iodb(
     file: UploadFile = File(...),
     auto_correct_spelling: bool = Form(False),
     validate_empty_cells: bool = Form(False),   # opt-in: Rule 1 "Cell cannot be empty"
+    profile_id: Optional[int] = Form(None),     # custom rule profile; none = the iEZ default rules
+    project_id: Optional[str] = Form(None),
     current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
     """
     Kick off validation of an IODB Excel file with predefined and dynamic
@@ -117,6 +133,7 @@ async def validate_iodb(
     GET /validator/validate/status/{job_id} for the result.
     """
     file_bytes = await file.read()
+    profile = resolve_profile(db, profile_id, project_id)
     dynamic_rules = load_rules()
 
     job_id = str(uuid.uuid4())
@@ -130,6 +147,7 @@ async def validate_iodb(
         dynamic_rules,
         current_user.id,
         validate_empty_cells,
+        profile,
     )
 
     return ValidationJobResponse(job_id=job_id, status="processing")

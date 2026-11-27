@@ -140,6 +140,7 @@ def init_db():
     from .models.mdl import ProjectMDL, MDLRecord  # noqa: F401
     from .models.deliverable_cover import DeliverableCover  # noqa: F401
     from .models.loop_test import LoopTestTemplate  # noqa: F401
+    from .models.validation_profile import ValidationProfile, ValidationProfileVersion  # noqa: F401
     Base.metadata.create_all(bind=engine)
     _seed_notification_routes()
     _seed_default_admin()

@@ -2,7 +2,7 @@
  * IODB Validator Component
  * Full-featured validation with dynamic rules management
  */
-import { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   CheckCircle2,
   FileText,
@@ -17,6 +17,8 @@ import Card from '../ui/Card';
 import Button from '../ui/Button';
 import Alert from '../ui/Alert';
 import IODBComparison from './IODBComparison';
+import ValidationRulesConfig, { type RuleProfile } from './ValidationRulesConfig';
+import { getCurrentProject, subscribeProject } from '@/services/projectContext';
 
 interface ValidationError {
   row: number;
@@ -29,6 +31,7 @@ interface ValidationError {
   rule_name?: string;
   rule_type?: string;
   source?: string;
+  severity?: string;
 }
 
 interface ValidationResult {
@@ -39,6 +42,8 @@ interface ValidationResult {
   has_highlighted: boolean;
   has_tba: boolean;
   message?: string;
+  profile?: { name: string; version: string; custom: boolean; enabled_rules: number; disabled_rules: number; modified_rules: number };
+  severity_counts?: Record<string, number>;
 }
 
 interface ValidationJob {
@@ -66,6 +71,29 @@ function IODBValidation() {
   const [showRulesManager, setShowRulesManager] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // validation rule profile: the protected iEZ default, or a custom profile of the current project
+  const [projectId, setProjectId] = useState(getCurrentProject());
+  const [profiles, setProfiles] = useState<RuleProfile[]>([]);
+  const [profileId, setProfileId] = useState<number | null>(null);
+  const [configure, setConfigure] = useState(false);
+  const [unsaved, setUnsaved] = useState(false);
+  const [columns, setColumns] = useState<string[]>([]);
+  useEffect(() => subscribeProject(() => { setProjectId(getCurrentProject()); setProfileId(null); setResult(null); }), []);
+  const loadProfiles = useCallback(async () => {
+    if (!projectId) { setProfiles([]); return; }
+    try { setProfiles((await api.get<RuleProfile[]>('/validator/profiles', { params: { project_id: projectId } })).data); }
+    catch { setProfiles([]); setError('The rule profiles of this project could not be loaded.'); }
+  }, [projectId]);
+  useEffect(() => { loadProfiles(); }, [loadProfiles]);
+  useEffect(() => {
+    setColumns([]);
+    if (!configure || !selectedFile) return;
+    const fd = new FormData(); fd.append('file', selectedFile);
+    api.post<{ columns: string[] }>('/validator/columns', fd, { headers: { 'Content-Type': 'multipart/form-data' } })
+      .then((r) => setColumns(r.data.columns)).catch(() => setColumns([]));
+  }, [configure, selectedFile]);
+  const selectedProfile = profiles.find((p) => p.id === profileId) ?? null;
+
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       setSelectedFile(e.target.files[0]);
@@ -84,6 +112,7 @@ function IODBValidation() {
     formData.append('file', selectedFile);
     formData.append('auto_correct_spelling', autoCorrect.toString());
     formData.append('validate_empty_cells', validateEmpty.toString());
+    if (profileId) { formData.append('profile_id', String(profileId)); formData.append('project_id', projectId); }
 
     try {
       const kickoff = await api.post<ValidationJob>('/validator/validate', formData, {
@@ -238,6 +267,22 @@ function IODBValidation() {
             </label>
           </div>
 
+          <div className="flex flex-wrap items-end gap-3">
+            <label className="block text-sm text-gray-700">
+              <span className="block font-medium mb-1">Validation profile</span>
+              <select className="border rounded-lg px-2 py-2 text-sm min-w-[18rem]" style={{ borderColor: 'var(--b1)', background: 'var(--s1)', color: 'var(--t0)' }}
+                      value={profileId ?? ''} data-testid="profile-select"
+                      onChange={(e) => { setProfileId(e.target.value ? Number(e.target.value) : null); setResult(null); }}>
+                <option value="">iEZ Default Validation Rules</option>
+                {profiles.map((p) => <option key={p.id} value={p.id}>{p.name} (v{p.version})</option>)}
+              </select>
+            </label>
+            <Button variant="secondary" onClick={() => setConfigure(!configure)}>
+              <Settings className="w-4 h-4" />{configure ? 'Close Rule Configuration' : 'Configure Validation Rules'}
+            </Button>
+          </div>
+          {unsaved && configure && <p className="text-sm text-amber-600">Rule changes are not saved yet; validation uses the saved profile selected above.</p>}
+
           <Button
             onClick={handleValidate}
             disabled={!selectedFile}
@@ -251,15 +296,29 @@ function IODBValidation() {
         </div>
       </Card>
 
+      {configure && (
+        <ValidationRulesConfig projectId={projectId} profiles={profiles} selected={selectedProfile} columns={columns}
+                               onSelect={(id) => { setProfileId(id); setResult(null); }} onChanged={loadProfiles} onDirty={setUnsaved} />
+      )}
+
       {/* Results Section */}
       {result && (
         <>
+          {result.profile && (
+            <Card title="Validation Profile">
+              <p className="text-sm" style={{ color: 'var(--t0)' }} data-testid="result-profile">
+                <strong>{result.profile.name}</strong>{result.profile.custom ? ` (version ${result.profile.version}) - custom rules, not the iEZ default rules` : ''}
+                <br />Errors: {result.severity_counts?.error ?? 0} · Warnings: {result.severity_counts?.warning ?? 0} · Information: {result.severity_counts?.information ?? 0}
+                {' '}· Disabled rules: {result.profile.disabled_rules} · Modified rules: {result.profile.modified_rules}
+              </p>
+            </Card>
+          )}
           {/* Metrics */}
           {result.error_count === 0 ? (
             <div className="bg-green-50 border border-green-200 rounded-lg p-6 text-center">
               <CheckCircle2 className="w-16 h-16 text-green-500 mx-auto mb-3" />
               <h3 className="text-xl font-bold text-green-800">No Errors Found!</h3>
-              <p className="text-green-700 mt-2">Your IODB file passed all validation checks.</p>
+              <p className="text-green-700 mt-2">{result.profile?.custom ? `No findings under the custom profile "${result.profile.name}".` : 'Your IODB file passed all validation checks.'}</p>
             </div>
           ) : (
             <>
@@ -268,7 +327,7 @@ function IODBValidation() {
                 <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
                   <div className="bg-red-50 border border-red-200 rounded-lg p-4 text-center">
                     <div className="text-3xl font-bold text-red-600">{result.error_count}</div>
-                    <div className="text-sm text-red-700 mt-1">Total Errors</div>
+                    <div className="text-sm text-red-700 mt-1">{result.profile?.custom ? 'Total Findings' : 'Total Errors'}</div>
                   </div>
                   <div className="bg-orange-50 border border-orange-200 rounded-lg p-4 text-center">
                     <div className="text-3xl font-bold text-orange-600">{emptyErrors.length}</div>
@@ -335,7 +394,7 @@ function IODBValidation() {
                                   Column: <strong>{error.column}</strong> | Cell: <strong>{error.cell}</strong>
                                 </div>
                                 <div className="text-red-700 font-medium text-center">
-                                  → {error.message}
+                                  → {error.severity && error.severity !== 'error' ? `${error.severity.toUpperCase()}: ` : ''}{error.message}
                                 </div>
                               </div>
                             ))}

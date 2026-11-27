@@ -10,6 +10,8 @@ All functions return (output_bytes, filename, error_message).
 import io
 import copy
 import re
+from datetime import datetime
+import json
 import zipfile
 import pandas as pd
 import openpyxl
@@ -1704,6 +1706,7 @@ def generate_iodb_validation(
     auto_correct_spelling: bool = False,
     dynamic_rules=None,          # list[DynamicRule] | None
     validate_empty_cells: bool = True,
+    profile=None,                # utils.validation_profiles.Profile | None (= the iEZ default rules)
 ) -> tuple[bytes | None, bytes | None, bytes | None, list[dict], str | None]:
     """
     Run all 12 predefined IODB validation rules *and* any active user-defined
@@ -1727,8 +1730,11 @@ def generate_iodb_validation(
     getCellAddress(col_idx, row_idx) implemented as _val_addr().
     """
     try:
+        from utils.validation_profiles import Profile, ProfileError, matches_pattern
+        profile = profile or Profile()
         errors: list[dict] = []
         col_names = list(df.columns)
+        profile.check_fields(col_names)
 
         # Precompute column arrays for O(1) cell access — _cell(i, col) in a
         # tight loop over a wide dataframe (e.g. 3000+ rows x 160 cols) is
@@ -1739,6 +1745,8 @@ def generate_iodb_validation(
             if col is None:
                 return default
             return _col_arrays[col][i]
+
+        profile_default_fail = ["FO", "FC", "LAST POS", "-", "NA", "N/A", "FAIL OPEN", "FAIL CLOSE"]
 
         # ── Locate key columns ────────────────────────────────────────────────
         sno_col    = _val_find_col(df, "S.NO", "S NO", "SNO", "S.NO.", "SERIAL NO", "SR NO", "SL NO")
@@ -1783,7 +1791,7 @@ def generate_iodb_validation(
         SKIP_EMPTY = {"STATUS", "REMARKS"}
 
         # ── Error builder ─────────────────────────────────────────────────────
-        def _err(i: int, col: str, msg: str, rule: int) -> dict:
+        def _err(i: int, col: str, msg: str, rule: int, rule_id: str | None = None) -> dict:
             """Build a standardised error dict for row i (0-based df index)."""
             # Use the original DataFrame index (preserved from read_excel) so
             # that rows dropped by dropna don't shift the Excel row number.
@@ -1816,6 +1824,8 @@ def generate_iodb_validation(
                 "message": msg,
                 "rule":    rule,
                 "source":  "predefined",
+                "rule_id": rule_id or str(rule),
+                "df_pos":  i,
             }
 
         # ══════════════════════════════════════════════════════════════════════
@@ -1840,12 +1850,12 @@ def generate_iodb_validation(
             for i in range(len(df)):
                 area  = _val_norm(_cell(i, area_col))
                 isnis = _val_norm(_cell(i, isnis_col))
-                if area == "HAZARDOUS" and isnis != "IS":
+                if area == profile.param(2, "hazardous_area").upper() and isnis != profile.param(2, "hazardous_type").upper():
                     errors.append(_err(i, isnis_col,
-                        "Instrument under Hazardous area should be IS type only", 2))
-                elif area == "SAFE AREA" and isnis != "NIS":
+                        f"Instrument under Hazardous area should be {profile.param(2, 'hazardous_type')} type only", 2))
+                elif area == profile.param(2, "safe_area").upper() and isnis != profile.param(2, "safe_type").upper():
                     errors.append(_err(i, isnis_col,
-                        "Instrument under Safe area should be NIS type only", 2))
+                        f"Instrument under Safe area should be {profile.param(2, 'safe_type')} type only", 2))
 
         # ══════════════════════════════════════════════════════════════════════
         # RULE 3 — SCOPE OF SUPPLY vs VENDOR PACKAGE
@@ -1854,7 +1864,7 @@ def generate_iodb_validation(
             for i in range(len(df)):
                 scope  = _val_norm(_cell(i, scope_col))
                 vendor = _cell(i, vendor_col)
-                if scope != "WABAG" and (_val_empty(vendor) or _val_norm(vendor) == "-"):
+                if scope not in {x.upper() for x in profile.param(3, "own_scope")} and (_val_empty(vendor) or _val_norm(vendor) == "-"):
                     errors.append(_err(i, vendor_col,
                         "Instrument is under Vendor package scope so Vendor package name should be mentioned", 3))
 
@@ -1867,13 +1877,14 @@ def generate_iodb_validation(
                 iname  = _val_norm(_cell(i, iname_col))
                 if not tag_v or not iname:
                     continue
-                for key in _TAG_KEYS_SORTED:
+                tag_names = profile.param(4, "tag_names")
+                for key in sorted(tag_names, key=len, reverse=True):
                     if key in tag_v:
-                        expected = _TAG_TYPE_MAP[key].upper()
+                        expected = tag_names[key].upper()
                         if iname != expected:
                             errors.append(_err(i, iname_col,
                                 f"Instrument Name mismatch with TAG NO "
-                                f"(TAG contains '{key}', expected: {_TAG_TYPE_MAP[key]})", 4))
+                                f"(TAG contains '{key}', expected: {tag_names[key]})", 4))
                         break
 
         # ══════════════════════════════════════════════════════════════════════
@@ -1886,7 +1897,7 @@ def generate_iodb_validation(
                     ts = str(tv).strip()
                     if ts != ts.upper():
                         errors.append(_err(i, tag_col,
-                            "Tag name shall be in capital letters", 4))
+                            "Tag name shall be in capital letters", 4, "4B"))
 
         # ══════════════════════════════════════════════════════════════════════
         # RULE 5 — POWER SUPPLY vs 2 WIRE / 4 WIRE
@@ -1895,7 +1906,8 @@ def generate_iodb_validation(
             for i in range(len(df)):
                 power = _val_norm(_cell(i, power_col))
                 wire  = _val_norm(_cell(i, wire_col))
-                if power not in ("24V DC", "-", "") and wire != "4 WIRE - EXT POWER":
+                if (power and power not in {x.upper() for x in profile.param(5, "loop_power")}
+                        and wire not in {x.upper() for x in profile.param(5, "external_wire")}):
                     errors.append(_err(i, wire_col,
                         "2 wire instrument is Loop powered and 24 V DC and "
                         "4 wire is External powered", 5))
@@ -1906,16 +1918,21 @@ def generate_iodb_validation(
         if signal_col and jb_col:
             jb_msg = ("All AI signals should be connected to AJB and "
                       "All DI or DO signals should be connected to DJB")
+            exempt = {x.upper() for x in profile.param(6, "exempt_io")}
+            routes = {io: profile.param(6, f"{io.lower()}_jb") for io in ("AI", "AO", "DI", "DO")}
+            direct = {x.upper() for x in profile.param(6, "direct_subsystems")} | {""}
             for i in range(len(df)):
                 signal = _val_norm(_cell(i, signal_col))
+                # IO TYPE '-' = no electrical I/O signal (gauges, local indicators): routing does not apply to the record
+                if signal in exempt:
+                    continue
                 jb     = _val_norm(_cell(i, jb_col))
                 subsys = _val_norm(_cell(i, subsys_col)) if subsys_col else ""
                 # Only apply when instrument is NOT routed via a sub-system
-                if subsys not in ("-", ""):
+                if subsys not in direct:
                     continue
-                if signal == "AI" and "AJB" not in jb:
-                    errors.append(_err(i, jb_col, jb_msg, 6))
-                elif signal in ("DI", "DO") and "DJB" not in jb:
+                allowed = routes.get(signal)
+                if allowed and not matches_pattern(jb, allowed):
                     errors.append(_err(i, jb_col, jb_msg, 6))
 
         # ══════════════════════════════════════════════════════════════════════
@@ -1946,14 +1963,14 @@ def generate_iodb_validation(
         # RULE 9 — FAIL ACTION must be FO, FC, or LAST POS
         # ══════════════════════════════════════════════════════════════════════
         if fail_col:
-            _valid_fa = {"FO", "FC", "LAST POS", "-", "NA", "N/A",
-                         "FAIL OPEN", "FAIL CLOSE"}
+            _valid_fa = {x.upper() for x in profile.param(9, "allowed")}
             for i in range(len(df)):
                 fa = _val_norm(_cell(i, fail_col))
                 if fa and fa not in _valid_fa:
                     errors.append(_err(i, fail_col,
                         f"Fail action '{fa}' is invalid — allowed: "
-                        "FO (Fail Open), FC (Fail Close), LAST POS", 9))
+                        + ("FO (Fail Open), FC (Fail Close), LAST POS" if profile.param(9, "allowed") ==
+                           profile_default_fail else ", ".join(profile.param(9, "allowed"))), 9))
 
         # ══════════════════════════════════════════════════════════════════════
         # RULE 10 — SETPOINT ALARM ORDER: LL < L < H < HH
@@ -2069,6 +2086,29 @@ def generate_iodb_validation(
                             )
 
         # ══════════════════════════════════════════════════════════════════════
+        # VALIDATION PROFILE — disabled rules, the profile's own conditions and
+        # exceptions, severity and message
+        # ══════════════════════════════════════════════════════════════════════
+        records: dict[int, dict] = {}
+
+        def _record(i: int) -> dict:
+            if i not in records:
+                records[i] = {str(c).strip().upper(): _cell(i, c) for c in col_names}
+            return records[i]
+
+        kept = []
+        for e in errors:
+            rid, i = e["rule_id"], e.pop("df_pos")
+            if not profile.enabled(rid) or not profile.applies(rid, _record(i)):
+                continue
+            e["severity"] = profile.severity(rid)
+            e["message"] = profile.message(rid, e["message"])
+            kept.append(e)
+        errors = kept
+        remaining = {(e["row"], e["column"]) for e in errors if e["rule"] == 12}
+        spell_corrections = {k: v for k, v in spell_corrections.items() if k in remaining}
+
+        # ══════════════════════════════════════════════════════════════════════
         # BUILD HIGHLIGHTED WORKBOOK
         # Apply fills to every error cell; optionally auto-correct spelling.
         # ══════════════════════════════════════════════════════════════════════
@@ -2166,6 +2206,8 @@ def generate_iodb_validation(
                 sno_col=sno_col,
                 tag_col=tag_col,
             )
+            for e in dyn_errors:
+                e["severity"] = "error"
             errors.extend(dyn_errors)
 
             # Highlight dynamic-rule error cells with the logic fill colour
@@ -2203,8 +2245,8 @@ def generate_iodb_validation(
         _dfont = Font(name="Calibri", size=11)
         _c_aln = Alignment(horizontal="center", vertical="center", wrap_text=True)
 
-        log_cols   = ["S.NO", "TAG NO", "Column", "Cell", "Source", "Error Message"]
-        log_widths = [12, 24, 28, 12, 14, 80]
+        log_cols   = ["S.NO", "TAG NO", "Column", "Cell", "Source", "Error Message", "Severity"]
+        log_widths = [12, 24, 28, 12, 14, 80, 14]
 
         for ci, (hdr_txt, w) in enumerate(zip(log_cols, log_widths), start=1):
             c = rpt_ws.cell(row=1, column=ci, value=hdr_txt)
@@ -2219,7 +2261,7 @@ def generate_iodb_validation(
             src_label = "Dynamic" if e.get("source") == "dynamic" else "Predefined"
             vals = [
                 e["sno"], e["tag"], e["column"], e["cell"],
-                src_label, e["message"],
+                src_label, e["message"], e.get("severity", "error").title(),
             ]
             for ci2, val in enumerate(vals, start=1):
                 c = rpt_ws.cell(row=ri, column=ci2, value=val)
@@ -2263,10 +2305,37 @@ def generate_iodb_validation(
             sum_ws.cell(row=sri, column=1, value=str(rn)).font = d_font
             sum_ws.cell(row=sri, column=2, value=cnt).font = d_font
 
+        # which rule configuration produced this report
+        info = profile.info()
+        sev = Counter(e.get("severity", "error") for e in errors)
+        lines = [("Validation Profile", info["name"] + ("  (CUSTOM - not the iEZ default rules)" if info["custom"] else "")),
+                 ("Profile Version", info["version"]), ("Validation Date", datetime.now().strftime("%d.%m.%Y %H:%M")),
+                 ("Total Records", len(df)), ("Enabled Rules", info["enabled_rules"]), ("Disabled Rules", info["disabled_rules"]),
+                 ("Modified Rules", info["modified_rules"]), ("Errors", sev["error"]), ("Warnings", sev["warning"]),
+                 ("Information", sev["information"]), ("Disabled", ", ".join(info["disabled"]) or "None"),
+                 ("Modified", ", ".join(info["modified"]) or "None")]
+        info_ws = log_wb.create_sheet("Rule Profile")
+        info_ws.column_dimensions["A"].width = 24
+        info_ws.column_dimensions["B"].width = 90
+        for ri, (label, value) in enumerate(lines, start=1):
+            info_ws.cell(row=ri, column=1, value=label).font = h2_font
+            c = info_ws.cell(row=ri, column=2, value=value)
+            c.font = d_font
+            c.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
+        if info["custom"]:
+            for ri, (rid, o) in enumerate(profile.config["rules"].items(), start=len(lines) + 2):
+                info_ws.cell(row=ri, column=1, value=f"Rule {rid} settings").font = d_font
+                info_ws.cell(row=ri, column=2, value=json.dumps(o, ensure_ascii=False)[:32000]).alignment = Alignment(wrap_text=True, vertical="top")
+
         log_bytes = workbook_to_bytes(log_wb)
 
         return log_bytes, highlighted_bytes, tba_bytes, errors, None
 
+    except ValueError as exc:
+        if type(exc).__name__ == "ProfileError":
+            return None, None, None, [], str(exc)
+        import traceback
+        return None, None, None, [], f"Validation failed: {exc}\n{traceback.format_exc()}"
     except Exception as exc:
         import traceback
         return None, None, None, [], f"Validation failed: {exc}\n{traceback.format_exc()}"

@@ -21,7 +21,7 @@ import { DeliverableDownloads } from '../../ui/DeliverableCover';
 type Cfg = Record<string, any>;
 interface JB {
   jb_no: string; key: string; instrument_count: number; instruments: string[]; spare_rows: number; io_types: Record<string, number>;
-  branch_cable_count: number; branch_cables: string[]; main_cable_count: number; main_cables: { tag: string; type: string }[];
+  branch_cable_count: number; branch_cables: string[]; main_cable_count: number; main_cables: { tag: string; type: string; gland_size: string }[];
   branch_gland_sizes: string[]; main_gland_sizes: string[]; warnings: string[];
   terminals: { auto_available: boolean; count: number; highest: number | null; pending_count: number; pending_instruments: string[]; duplicates: string[] };
   iodb: Record<string, string[]>;
@@ -45,11 +45,11 @@ const BADGE: Record<string, string> = { Ready: 'bg-green-100 text-green-700', 'I
 const DETAILS: [string, string, string][] = [
   ['category', 'JB category', 'category'], ['jb_desc', 'JB description', ''], ['isnis', 'IS / NIS', 'isnis'], ['unit_name', 'Unit / area name', ''],
   ['location', 'Location', ''],
-  ['gas_group', 'Gas group / temp class', ''], ['protection', 'Enclosure protection', 'protection'], ['material', 'Enclosure material', 'material'],
+  ['protection', 'Enclosure protection', 'protection'], ['material', 'Enclosure material', 'material'],
   ['terminal_type', 'Terminal type', 'term_type'], ['cable_entry', 'Cable entry', 'entry'],
-  ['branch_gland_size', 'Branch gland size', 'gland_size'], ['branch_gland_type', 'Branch gland type', 'gland_type'],
+  ['branch_gland_size', 'Branch gland size', 'gland_size'],
   ['main_cable_no', 'Main cable no.', ''], ['main_cable_type', 'Main cable type', 'cable'],
-  ['main_gland_size', 'Main cable gland size', 'gland_size'], ['main_gland_type', 'Main cable gland type', 'gland_type'],
+  ['main_gland_size', 'Main cable gland size', 'gland_size'],
   ['spare_entries', 'Spare entries (qty)', ''], ['spare_entry_size', 'Spare entry size', 'gland_size'],
 ];
 // Optional header details of the JB_SCHEDULE sheet (a blank stays blank in the workbook; nothing is filled in for you)
@@ -349,12 +349,15 @@ function Detail({ j, r, cfg, lists, onChange }: { j: JB; r: Result; cfg: Cfg; li
       {[...r.errors.map((m) => ({ m, e: true })), ...r.warnings.map((m) => ({ m, e: false }))].map((x, i) => (
         <p key={i} className={x.e ? 'text-red-600' : 'text-amber-700'}>{x.e ? 'Error' : 'Review'}: {x.m}</p>))}
       <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-3">
-        {DETAILS.map(([key, label, list]) => {
-          const shown = cfg[key] ?? r.row[key] ?? '';
+        {DETAILS.map(([key, label, listKey]) => {
+          // several main cables: one value per cable, in order, separated by ';' (a single drop-down cannot hold them)
+          const perCable = j.main_cable_count > 1 && key.startsWith('main_');
+          const list = perCable ? '' : listKey;
+          const shown = cfg[key] ?? String(r.row[key] ?? '').split('\n').join('; ');
           const from = cfg[key] ? SOURCE_NOTE.user : r.source[key] ? `from ${r.source[key]}` : '';
           return (
             <label key={key} className="block">
-              <span className="block mb-0.5">{label}{from && <span className="ml-1 text-[10px]" style={{ color: 'var(--t2)' }}>({from})</span>}</span>
+              <span className="block mb-0.5">{label}{perCable && <span className="ml-1 text-[10px]">(one per cable, separated by ;)</span>}{from && <span className="ml-1 text-[10px]" style={{ color: 'var(--t2)' }}>({from})</span>}</span>
               {list ? (
                 <select className={field} style={fieldStyle} value={shown} onChange={(e) => onChange({ [key]: e.target.value })}>
                   <option value="">—</option>

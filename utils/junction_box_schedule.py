@@ -17,9 +17,11 @@ import io
 import math
 import re
 from collections import Counter, OrderedDict
+from copy import copy
 from typing import Any, Optional
 
 import openpyxl
+from openpyxl.styles import Alignment
 from openpyxl.utils import column_index_from_string, get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
 
@@ -39,7 +41,6 @@ LISTS = {  # LOOKUPS - the controlled lists the output keeps as in-cell drop-dow
     "term_type": ["PUSH-FIT CLAMP-ON", "SPRING CLAMP", "SCREW"],
     "entry": ["BOTTOM", "SIDE", "TOP"],
     "gland_size": ['1/2" NPT', '3/4" NPT', '1" NPT', '1 1/4" NPT', '1 1/2" NPT', '2" NPT', "M20", "M25", "M32", "M40", "NA"],
-    "gland_type": ["SS-316 DOUBLE COMPRESSION", "SS-316 DOUBLE COMPRESSION Ex d", "NA"],
     "cable": ["1P x 1.0 mm2", "1P x 1.5 mm2", "2P x 1.0 mm2", "2P x 1.5 mm2", "1T x 1.5 mm2", "2C x 1.5 mm2", "4C x 1.5 mm2",
               "5C x 1.5 mm2", "12C x 1.5 mm2", "14C x 1.5 mm2", "16C x 1.5 mm2", "24C x 1.5 mm2", "4P x 1.0 mm2", "6P x 1.0 mm2",
               "12P x 1.0 mm2", "12P x 1.5 mm2", "NA"],
@@ -231,6 +232,11 @@ def analyze(schedule: dict, iodb_info: Optional[dict] = None) -> dict:
         for e in es:
             if not is_spare(e["tag"]):
                 tag_jbs.setdefault(e["tag"].upper(), set()).add(key)
+    cable_jbs: dict = {}                                           # main cable (upper) -> the junction boxes it is shown against
+    for key, es in groups.items():
+        for e in es:
+            if not is_spare(e["tag"]) and _cable_tag(e["main_cable_tag"]):
+                cable_jbs.setdefault(_cable_tag(e["main_cable_tag"]).upper(), set()).add(key)
     jbs = []
     for key in sorted(groups, key=natural_key):
         es = groups[key]
@@ -257,18 +263,7 @@ def analyze(schedule: dict, iodb_info: Optional[dict] = None) -> dict:
         for t, ts in btypes.items():
             if len(ts) > 1:
                 warnings.append(f"Branch cable {t} has conflicting cable types in the Cable Schedule ({', '.join(sorted(ts))}).")
-        main_tags = _unique(e["main_cable_tag"] for e in real)
-        mtypes: dict = {}
-        for e in real:
-            if _s(e["main_cable_tag"]) and _s(e["main_cable_type"]):
-                mtypes.setdefault(e["main_cable_tag"].upper(), []).append(_s(e["main_cable_type"]))
-        main_types, main_by_tag = [], []
-        for t in main_tags:
-            ts = _unique(mtypes.get(t.upper(), []))
-            if len(ts) > 1:
-                warnings.append(f"Main cable {t} has conflicting cable types in the Cable Schedule ({', '.join(ts)}). Please review.")
-            main_by_tag.append({"tag": t, "type": ts[0] if len(ts) == 1 else ("" if not ts else " / ".join(ts))})
-            main_types.extend(ts)
+        main_cables = _main_cables(key, real, cable_jbs, warnings)
         for e in real:
             other = tag_jbs.get(e["tag"].upper(), set()) - {key}
             if other and e["tag"] in tags:
@@ -288,7 +283,7 @@ def analyze(schedule: dict, iodb_info: Optional[dict] = None) -> dict:
             "instrument_count": len(tags), "instruments": tags, "spare_rows": len(spares),
             "io_types": dict(io_types),
             "branch_cable_count": len(branch), "branch_cables": branch,
-            "main_cable_count": len(main_tags), "main_cables": main_by_tag,
+            "main_cable_count": len(main_cables), "main_cables": main_cables,
             "branch_gland_sizes": _unique(e["jb_gland_size"] for e in real),
             "branch_gland_qty": _qty_sum(e["jb_gland_qty"] for e in real),
             "main_gland_sizes": _unique(e["main_gland_size"] for e in real),
@@ -302,6 +297,70 @@ def analyze(schedule: dict, iodb_info: Optional[dict] = None) -> dict:
         notes.append(f"{unassigned} instrument row(s) have no JB tag and are not part of any junction box.")
     return {"jbs": jbs, "instrument_total": len({t.upper() for j in jbs for t in j["instruments"]}),
             "sheets": schedule["sheets"], "notes": notes}
+
+
+def _cable_tag(value: Any) -> str:
+    """The identification of a physical main cable; '' for a blank or a placeholder (TBA, NA, - ...)."""
+    v = _s(value)
+    return "" if _PLACEHOLDER.match(v) else v
+
+
+def _type_key(value: str) -> str:
+    """Identity of a cable specification: only case, spacing and the way mm2 is written are ignored. Cores and pairs
+    ('12X1.5' / '12PX1.5'), sizes and every other word stay significant."""
+    v = _s(value).upper().replace("\u00b2", "2")
+    v = re.sub(r"SQ\.?\s*MM\.?|MM\s*2", "MM2", v)
+    return re.sub(r"\s+", "", v)
+
+
+def _distinct(values, key) -> list:
+    """The values that are not placeholders, one per identity, in order of appearance."""
+    out: "OrderedDict[str, str]" = OrderedDict()
+    for v in values:
+        v = _s(v)
+        if v and not _PLACEHOLDER.match(v):
+            out.setdefault(key(v), v)
+    return list(out.values())
+
+
+def _main_cables(jb_key: str, real: list, cable_jbs: dict, warnings: list) -> list:
+    """
+    One record per distinct physical main cable of a junction box: {"tag", "type", "gland_size", "types", "gland_sizes"}.
+    A cable named on many instrument rows is one cable; its type and JB-end gland size are taken from its own rows only.
+    Different values for one cable are all kept (shown as 'a / b') and reported; nothing is picked arbitrarily.
+    """
+    rows: "OrderedDict[str, list]" = OrderedDict()
+    for e in real:
+        tag = _cable_tag(e["main_cable_tag"])
+        if tag:
+            rows.setdefault(tag.upper(), []).append(e)
+    unidentified = sum(1 for e in real if not _cable_tag(e["main_cable_tag"]))
+    if unidentified:
+        warnings.append(f"{unidentified} instrument row(s) of this JB have no main cable number (blank or TBA); "
+                        "the main cable count covers only the identified cables.")
+    out = []
+    for upper in sorted(rows, key=natural_key):
+        es = rows[upper]
+        tag = _s(es[0]["main_cable_tag"])
+        rec = {"tag": tag}
+        for field, plural, source, label, key in (
+                ("type", "types", "main_cable_type", "cable type", _type_key),
+                ("gland_size", "gland_sizes", "main_gland_size", "JB end gland size",
+                 lambda v: _list_spelling(v, LISTS["gland_size"]).upper())):
+            found = _distinct((e[source] for e in es), key)
+            blank = _unique(e[source] for e in es)                    # what is written when there is no real value (TBA ...)
+            rec[plural] = found
+            rec[field] = " / ".join(found) if found else " / ".join(blank)
+            if len(found) > 1:
+                warnings.append(f"Main cable {tag} has conflicting {label}s in the Cable Schedule ({', '.join(found)}). Please review.")
+            elif not found:
+                warnings.append(f"Main cable {tag} has no {label} in the Cable Schedule.")
+        others = cable_jbs.get(upper, set()) - {jb_key}
+        if others:
+            warnings.append(f"Main cable {tag} is also shown against {', '.join(sorted(others, key=natural_key))}. "
+                            "Please verify which junction box it terminates in.")
+        out.append(rec)
+    return out
 
 
 def _qty_sum(values) -> Optional[float]:
@@ -343,8 +402,8 @@ FIELDS_GENERATION = ("category", "terminal_capacity")
 FIELDS_SUBMISSION = [("unit_name", "UNIT / AREA NAME"), ("jb_desc", "JB DESCRIPTION"), ("isnis", "IS / NIS"), ("location", "LOCATION"),
                      ("protection", "ENCLOSURE PROTECTION"), ("material", "ENCLOSURE MATERIAL"),
                      ("main_cable_no", "MAIN CABLE NO."), ("main_cable_type", "MAIN CABLE TYPE"),
-                     ("main_gland_size", "MAIN CABLE GLAND SIZE"), ("main_gland_type", "MAIN CABLE GLAND TYPE")]
-FIELDS_SUBMISSION_NON_SMB = [("branch_gland_size", "BRANCH GLAND SIZE"), ("branch_gland_type", "BRANCH GLAND TYPE")]
+                     ("main_gland_size", "MAIN CABLE GLAND SIZE")]
+FIELDS_SUBMISSION_NON_SMB = [("branch_gland_size", "BRANCH GLAND SIZE")]
 EXCEEDED = "Terminal capacity exceeded. Please review the selected junction box capacity."
 
 
@@ -417,14 +476,41 @@ def evaluate(jb: dict, cfg: Optional[dict], design: Optional[dict] = None) -> di
         warnings.append(f"IS and NIS signals are both connected to this junction box in the IODB ({', '.join(iod['isnis'])}); "
                         "they never share a box - choose IS / NIS for this JB or correct the IODB.")
     pick("unit_name")
-    for f in ("location", "gas_group", "protection", "material", "terminal_type",
-              "cable_entry", "spare_entry_size", "remarks", "branch_gland_type", "main_gland_type"):
+    for f in ("location", "protection", "material", "terminal_type", "cable_entry", "spare_entry_size", "remarks"):
         v = _s(cfg.get(f))
         row[f], src[f] = (v, "user") if v else ("", "")
     # cables and glands: the Cable Schedule, unless the engineer typed a value
-    pick("main_cable_no", _join(m["tag"] for m in jb["main_cables"]))
-    pick("main_cable_type", _join(_list_spelling(m["type"], LISTS["cable"]) for m in jb["main_cables"] if m["type"]))
-    pick("main_gland_size", _join(_list_spelling(x, LISTS["gland_size"]) for x in jb["main_gland_sizes"]))
+    # the main cable columns hold one line per physical cable, in the same order in all three
+    cables = jb["main_cables"]
+    several = len(cables) > 1
+    incomplete = set()
+    for field, key, options, label in (("main_cable_no", "tag", None, "MAIN CABLE NO."),
+                                       ("main_cable_type", "type", LISTS["cable"], "MAIN CABLE TYPE"),
+                                       ("main_gland_size", "gland_size", LISTS["gland_size"], "MAIN CABLE GLAND SIZE")):
+        values = [_s(m.get(key)) for m in cables]
+        if options:
+            values = [_list_spelling(v, options) for v in values]
+        typed = [x.strip() for x in re.split(r"[;\n]", str(cfg.get(field) or "")) if x.strip()]
+        if typed and several:
+            if len(typed) != len(cables):
+                errors.append(f"{label}: this junction box has {len(cables)} main cables - enter one value per cable, in the "
+                              "order shown, separated by ';' (or leave it blank to use the Cable Schedule).")
+            row[field], src[field] = "\n".join(_s(x) for x in typed), "user"
+            continue
+        if typed:
+            row[field], src[field] = _s(cfg.get(field)), "user"
+            continue
+        if several:
+            if any(not v or _PLACEHOLDER.match(v) for v in values):
+                incomplete.add(label)
+            row[field] = "\n".join(v or "-" for v in values)
+        elif cables:
+            row[field] = values[0]
+        elif field == "main_gland_size":                                   # no identified cable: what the schedule shows
+            row[field] = _join(_list_spelling(x, options) for x in jb["main_gland_sizes"])
+        else:
+            row[field] = ""
+        src[field] = "Cable Schedule" if row[field] else ""
     pick("branch_gland_size", _join(_list_spelling(x, LISTS["gland_size"]) for x in jb["branch_gland_sizes"]))
     row["branch_cable_count"], src["branch_cable_count"] = jb["branch_cable_count"], "Cable Schedule"
     row["main_cable_count"], src["main_cable_count"] = jb["main_cable_count"], "Cable Schedule"
@@ -490,8 +576,6 @@ def evaluate(jb: dict, cfg: Optional[dict], design: Optional[dict] = None) -> di
         errors.append(f"The area is classified {zones[0]} but the enclosure protection ({prot}) is not Ex.")
     if not zones and iod.get("area_class") and prot.upper().startswith("EX"):
         warnings.append("An Ex enclosure is selected for a safe area - please confirm.")
-    if zones and not row["gas_group"]:
-        warnings.append("The area is classified; the gas group / temperature class is required.")
     if any(_s(v).upper() in ("TBA", "TBD") for v in cfg.values() if isinstance(v, str)):
         warnings.append("An input still holds TBA / TBD.")
     # what is still missing
@@ -504,7 +588,8 @@ def evaluate(jb: dict, cfg: Optional[dict], design: Optional[dict] = None) -> di
         miss_gen.append("TERMINALS USED")
     if len(iod.get("isnis", [])) > 1 and not row["isnis"]:
         miss_gen.append("IS / NIS")
-    miss_sub = [label for f, label in FIELDS_SUBMISSION + (FIELDS_SUBMISSION_NON_SMB if category != "SMB" else []) if not row.get(f)]
+    miss_sub = [label for f, label in FIELDS_SUBMISSION + (FIELDS_SUBMISSION_NON_SMB if category != "SMB" else [])
+                if not row.get(f) or label in incomplete]
     status = "Error" if errors else ("Input Required" if miss_gen else "Ready")
     return {"jb_no": jb["jb_no"], "row": row, "source": src, "errors": errors, "warnings": list(dict.fromkeys(warnings)),
             "missing_generation": miss_gen, "missing_submission": miss_sub, "status": status,
@@ -522,132 +607,96 @@ def evaluate_all(analysis: dict, configs: dict, design: Optional[dict] = None) -
 
 
 # ── 5. the output workbook ───────────────────────────────────────────────────────────────────────────────────────────
-# Template columns removed from the delivered schedule (by the engineer's request): H NEAR EQUIPMENT TAG, I DESTINATION PANEL,
-# J DESTINATION ROOM / BUILDING. Rows 7 (group headings) and 8 (field codes) are removed too: the column headings are row 7 and
-# the junction boxes start in row 8.
-_REMOVED_COLS = (8, 10)                       # H:J (first, last column index)
+# The stored template IS the delivered layout: one sheet (JB_SCHEDULE), document header rows 1-5, title band row 6, the 22
+# column headings in row 7 and pre-formatted junction box rows from row 8.
 HEADER_ROW, FIRST_DATA_ROW, TITLE_ROW = 7, 8, 6
-
-
-def _new(letter: str) -> str:
-    """Column letter of the template in the delivered sheet (everything right of J moved three columns left)."""
-    idx = column_index_from_string(letter)
-    return get_column_letter(idx - 3 if idx > _REMOVED_COLS[1] else idx)
-
-
-_COLS = {"unit_name": "B", "jb_no": "C", "category": "D", "jb_desc": "E", "isnis": "F", "location": "G",
-         "gas_group": "K", "protection": "L", "material": "M", "terminal_capacity": "N",
-         "terminal_type": "O", "cable_entry": "P", "branch_cable_count": "Q", "branch_gland_size": "R", "branch_gland_type": "S",
-         "main_cable_no": "T", "main_cable_type": "U", "main_cable_count": "V", "main_gland_size": "W", "main_gland_type": "X",
-         "spare_entries": "Y", "spare_entry_size": "Z", "terminals_used": "AA", "spare_terminals": "AB", "spare_pct": "AC",
-         "rev": "AD", "remarks": "AE"}                                    # template letters; _new() gives the delivered ones
-_LIST_COLUMNS = {"D": "category", "F": "isnis", "L": "protection", "M": "material", "O": "term_type", "P": "entry",
-                 "R": "gland_size", "W": "gland_size", "Z": "gland_size", "S": "gland_type", "X": "gland_type", "U": "cable"}
-_HELPER_FIRST, _HELPER_LAST = column_index_from_string("AF"), column_index_from_string("AR")
-_MAX_ROW_PT = 400.0            # Excel stops at 409.5 pt
+HEADINGS = ("S.NO", "UNIT / AREA NAME", "JB NO.", "JB CATEGORY", "JB DESCRIPTION", "IS / NIS", "LOCATION", "ENCLOSURE PROTECTION",
+            "ENCLOSURE MATERIAL", "TERMINAL CAPACITY / WAYS", "TERMINAL TYPE", "CABLE ENTRY", "BRANCH CABLES (FROM TERMINATION)",
+            "BRANCH GLAND SIZE", "MAIN CABLE NO.", "MAIN CABLE TYPE", "MAIN CABLES (FROM TERMINATION)", "MAIN CABLE GLAND SIZE",
+            "SPARE ENTRIES (QTY)", "SPARE ENTRY SIZE", "TERMINALS USED", "REMARKS")
+_COLS = {"unit_name": "B", "jb_no": "C", "category": "D", "jb_desc": "E", "isnis": "F", "location": "G", "protection": "H",
+         "material": "I", "terminal_capacity": "J", "terminal_type": "K", "cable_entry": "L", "branch_cable_count": "M",
+         "branch_gland_size": "N", "main_cable_no": "O", "main_cable_type": "P", "main_cable_count": "Q", "main_gland_size": "R",
+         "spare_entries": "S", "spare_entry_size": "T", "terminals_used": "U", "remarks": "V"}
+_CABLE_COLUMNS = ("O", "P", "R")      # one line per physical main cable
+_LIST_COLUMNS = {"D": "category", "F": "isnis", "H": "protection", "I": "material", "K": "term_type", "L": "entry",
+                 "N": "gland_size", "R": "gland_size", "T": "gland_size", "P": "cable"}
+_HEADER_LABEL_COL, _HEADER_VALUE_COL = "S", "U"
+_LINE_PT, _MAX_ROW_PT = 11.0, 400.0    # Excel stops at 409.5 pt
 
 
 def build_workbook(template: bytes, results: list, meta: dict) -> bytes:
     """
-    Fill the standard JB_SCHEDULE. Only that sheet is kept: the template's own input / reference sheets (COVER with its header
-    and design-parameter cells, INSTRUCTIONS, COLUMN_GUIDE, SUMMARY, EXAMPLE_SCHEDULE, REFERENCE_REVIEW, LOOKUPS) and every defined
-    name are dropped, and no cover sheet is added. Removed from the template: the helper / check columns AF:AR, the columns
-    NEAR EQUIPMENT TAG / DESTINATION PANEL / DESTINATION ROOM, rows 7-8 (group headings, field codes) and every formula that
-    depended on the deleted sheets - the checks are calculated here and nothing in the output refers to another sheet.
-    All table cells are centred. meta: project_info (dict), document_number, revision, date.
+    Fill the standard JB_SCHEDULE template: one row per junction box, nothing but this sheet, no formulas and no cover sheet.
+    The main cable number, type and gland size cells hold one line per physical cable; their columns are widened so a line is
+    never wrapped (which would break the line-to-line correspondence). meta: project_info (dict), document_number, revision, date.
     """
     wb = openpyxl.load_workbook(io.BytesIO(template))
-    for name in list(wb.sheetnames):
-        if name != "JB_SCHEDULE":
-            del wb[name]
-    for name in list(wb.defined_names):
-        del wb.defined_names[name]
+    if wb.sheetnames != ["JB_SCHEDULE"]:
+        raise JBError("The Junction Box Schedule template is not the expected single JB_SCHEDULE sheet.")
     ws = wb["JB_SCHEDULE"]
-    rows = [r for r in results]
+    if [ws.cell(HEADER_ROW, c).value for c in range(1, ws.max_column + 1)] != list(HEADINGS):
+        raise JBError("The column headings of the Junction Box Schedule template are not the expected 22 headings.")
+    rows = list(results)
     n = len(rows)
     if n == 0:
         raise JBError("There are no junction boxes to write.")
-    widths = {c: ws.column_dimensions[get_column_letter(c)].width for c in range(1, _HELPER_FIRST)}
-    # 1. remove the helper / check columns, the three columns and rows 7-8; the merged bands go with them
-    for rng in [str(m) for m in ws.merged_cells.ranges]:
-        ws.unmerge_cells(rng)
-    for r in range(1, ws.max_row + 1):
-        for c in range(_HELPER_FIRST, _HELPER_LAST + 1):
-            ws.cell(r, c).value = None
-    ws.delete_cols(_HELPER_FIRST, _HELPER_LAST - _HELPER_FIRST + 1)
-    ws.delete_cols(_REMOVED_COLS[0], _REMOVED_COLS[1] - _REMOVED_COLS[0] + 1)
-    ws.delete_rows(7, 2)
-    for c in range(_HELPER_FIRST - 3, _HELPER_LAST + 2):
-        key = get_column_letter(c)
-        if key in ws.column_dimensions:
-            del ws.column_dimensions[key]
-    for old, w in widths.items():
-        if w is not None and not _REMOVED_COLS[0] <= old <= _REMOVED_COLS[1]:
-            ws.column_dimensions[get_column_letter(old - 3 if old > _REMOVED_COLS[1] else old)].width = w
-    last_col = column_index_from_string(_new("AE"))                       # the REMARKS column
+    last_col = len(HEADINGS)
     last_letter = get_column_letter(last_col)
-    ws.merge_cells(start_row=TITLE_ROW, start_column=1, end_row=TITLE_ROW, end_column=last_col)
-    ws.row_dimensions[HEADER_ROW].height = 46.0                            # the column-heading row (row heights do not move with rows)
-    ws.conditional_formatting = type(ws.conditional_formatting)()
-    # 2. unused template rows (the template has 500 data rows)
-    last_template = FIRST_DATA_ROW + 499
+    # unused template rows (new rows beyond the formatted ones copy the first data row)
+    last_template = ws.max_row
     if FIRST_DATA_ROW + n <= last_template:
         ws.delete_rows(FIRST_DATA_ROW + n, last_template - (FIRST_DATA_ROW + n) + 1)
-    # 3. title block - plain values (the template's formulas pointed to the template's COVER sheet named cells; blank stays blank)
+    for r in range(last_template + 1, FIRST_DATA_ROW + n):
+        for c in range(1, last_col + 1):
+            ws.cell(r, c)._style = copy(ws.cell(FIRST_DATA_ROW, c)._style)
+    # title block - plain values (blank stays blank)
     info = meta.get("project_info") or {}
     units = meta.get("unit_names") or _unique(r["row"].get("unit_name") for r in rows)
     ws["C1"], ws["C2"], ws["C3"], ws["C4"] = (info.get("project_description") or "", info.get("client") or "",
                                               info.get("pmc") or "", info.get("contractor") or "")
     ws["C5"] = info.get("unit_no") or ", ".join(units)
-    for r, (label, value) in zip((2, 3, 4), (("DOCUMENT NO. :", meta.get("document_number") or ""),
-                                              ("REVISION :", meta.get("revision") or ""), ("DATE :", meta.get("date") or ""))):
-        lab = ws.cell(r, column_index_from_string(_new("AB")))
-        val = ws.cell(r, column_index_from_string(_new("AD")))
-        lab.value, val.value = label, value
-        lab.font = openpyxl.styles.Font(name="Arial", size=9, bold=True)
-        val.font = openpyxl.styles.Font(name="Arial", size=9)
-        val.alignment = openpyxl.styles.Alignment(horizontal="left")
-        val.number_format = "General"
-    # 4. data rows
-    centre = openpyxl.styles.Alignment(horizontal="center", vertical="center", wrap_text=True)
+    for r, value in zip((2, 3, 4), (meta.get("document_number"), meta.get("revision"), meta.get("date"))):
+        ws[f"{_HEADER_VALUE_COL}{r}"].value = value or ""
+    # data rows
+    centre = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    top = Alignment(horizontal="center", vertical="top", wrap_text=True)
+    widths = {c: ws.column_dimensions[c].width or 10 for c in _COLS.values()}
+    for col in _CABLE_COLUMNS:                                   # a cable line must fit on one printed line
+        field = next(f for f, c in _COLS.items() if c == col)
+        longest = max((len(line) for r in rows for line in str(r["row"].get(field) or "").split("\n")), default=0)
+        widths[col] = max(widths[col], min(longest * 1.05 + 2, 60))
+        ws.column_dimensions[col].width = widths[col]
     for i, res in enumerate(rows):
         r = FIRST_DATA_ROW + i
         row = res["row"]
         values = dict(row)
         values["jb_no"] = res["jb_no"]
-        values["rev"] = meta.get("revision") or ""
-        values["remarks"] = None                                   # the REMARKS column stays in the template, its rows stay empty
+        values["remarks"] = None                                 # the REMARKS column stays in the template, its rows stay empty
         ws.cell(r, 1).value = i + 1
+        ws.cell(r, 1).alignment = centre
         lines = 1
-        for field, tcol in _COLS.items():
-            col = _new(tcol)
+        multi = any("\n" in str(values.get(f) or "") for f, c in _COLS.items() if c in _CABLE_COLUMNS)
+        for field, col in _COLS.items():
             v = values.get(field)
             if field == "terminals_used" and row.get("category") == "SMB":
-                v = None                                           # an SMB counts ways = instruments (template example leaves it blank)
-            if field == "spare_pct" and v is not None:
-                v = round(float(v), 6)
+                v = None                                         # an SMB counts ways = instruments (template example leaves it blank)
             cell = ws[f"{col}{r}"]
             cell.value = v if v not in ("", None) else None
+            cell.alignment = top if multi and col in _CABLE_COLUMNS else centre
             if isinstance(v, str):
-                width = ws.column_dimensions[col].width or 10
-                lines = max(lines, sum(max(1, math.ceil(len(p) / max(1.0, width * 1.05))) for p in v.split("\n")))
-        ws.row_dimensions[r].height = min(max(15.0, 10.5 * lines + 4), _MAX_ROW_PT)
-    # 5. every cell of the table (headings and rows) centred, horizontally and vertically
-    for r in range(HEADER_ROW, FIRST_DATA_ROW + n):
-        for c in range(1, last_col + 1):
-            ws.cell(r, c).alignment = centre
-    # 6. controlled lists as in-cell drop-downs (the LOOKUPS sheet is not delivered)
+                lines = max(lines, sum(max(1, math.ceil(len(p) / max(1.0, widths[col] * 1.05))) for p in v.split("\n")))
+        ws.row_dimensions[r].height = min(max(15.0, _LINE_PT * lines + 4), _MAX_ROW_PT)
+    # controlled lists as in-cell drop-downs
     ws.data_validations.dataValidation = []
-    for tcol, key in _LIST_COLUMNS.items():
-        col = _new(tcol)
-        items = LISTS[key]
-        literal = ",".join(x.replace('"', '""') for x in items)
+    for col, key in _LIST_COLUMNS.items():
+        literal = ",".join(x.replace('"', '""') for x in LISTS[key])
         if len(literal) > 250:
             continue
         dv = DataValidation(type="list", formula1=f'"{literal}"', allow_blank=True, showErrorMessage=False)
         dv.add(f"{col}{FIRST_DATA_ROW}:{col}{FIRST_DATA_ROW + n - 1}")
         ws.add_data_validation(dv)
-    # 7. print setup and view
+    # print setup and view
     ws.print_area = f"A1:{last_letter}{FIRST_DATA_ROW + n - 1}"
     ws.print_title_rows = f"{HEADER_ROW}:{HEADER_ROW}"
     ws.freeze_panes = f"E{FIRST_DATA_ROW}"

@@ -181,13 +181,13 @@ def test_branch_and_main_cables_are_unique_physical_cables(client):
     d = analyze(client)
     j1 = jb_of(d, "JB-001")
     assert j1["branch_cable_count"] == 6 and "IC-4B" in j1["branch_cables"]        # FT-101 has two cables; 5 instruments != 6 cables
-    assert j1["main_cable_count"] == 1 and j1["main_cables"] == [{"tag": "MC-1", "type": "12PX1.5 Sqmm"}]   # MC-1 repeats on 6 rows
+    assert j1["main_cable_count"] == 1 and [(m["tag"], m["type"]) for m in j1["main_cables"]] == [("MC-1", "12PX1.5 Sqmm")]   # MC-1 repeats on 6 rows
     j2 = next(j for j in d["analysis"]["jbs"] if j["key"] == "JB-002")
     assert j2["main_cable_count"] == 2 and [m["tag"] for m in j2["main_cables"]] == ["MC-2", "MC-3"]
     res = result_of(d, "JB-002")
     assert res["jb_no"] == "JB-002"                                                 # shown in capitals (two spellings in the schedule)
-    assert res["row"]["main_cable_no"] == "MC-2, MC-3"                              # every cable number kept, none dropped
-    assert res["row"]["main_cable_type"] == "8PX1.5 Sqmm"                          # not in the template list: kept as written
+    assert res["row"]["main_cable_no"] == "MC-2\nMC-3"                             # one line per cable, none dropped
+    assert res["row"]["main_cable_type"] == "8PX1.5 Sqmm\n8PX1.5 Sqmm"            # the same type is repeated on the matching line
     assert any("main cables exceed" in w for w in res["warnings"])
 
 
@@ -287,9 +287,10 @@ def test_missing_information_is_requested_not_invented(client):
     put_schedule()
     d = analyze(client)
     r = result_of(d, "JB-001")
-    for label in ("LOCATION", "ENCLOSURE PROTECTION", "ENCLOSURE MATERIAL", "MAIN CABLE GLAND TYPE", "BRANCH GLAND TYPE"):
+    for label in ("LOCATION", "ENCLOSURE PROTECTION", "ENCLOSURE MATERIAL"):
         assert label in r["missing_submission"]
-    assert r["row"]["location"] == "" and r["row"]["protection"] == "" and r["row"]["branch_gland_type"] == ""       # never TBA / guessed
+    assert r["row"]["location"] == "" and r["row"]["protection"] == ""                                            # never TBA / guessed
+    assert not any("GLAND TYPE" in x for x in r["missing_submission"]) and "main_gland_type" not in r["row"]
     assert r["row"]["main_gland_size"] == '1 1/4" NPT' and r["row"]["branch_gland_size"] == "M20"            # from the schedule, template spelling
     assert r["row"]["isnis"] == "" or r["row"]["isnis"] == "NIS"
     assert "IS / NIS" not in r["missing_generation"] or r["row"]["isnis"] == ""
@@ -317,8 +318,7 @@ def ready_configs():
     out = {}
     for jb, cap in caps.items():
         out[jb] = {"terminal_capacity": cap, "category": "SMB" if "SMB" in jb else ("DJB" if jb == "JB-003" else "AJB"), "isnis": "NIS",
-                   "location": "NEAR TANK", "protection": "WEATHERPROOF (IP66)", "material": "SS316",
-                   "branch_gland_type": "SS-316 DOUBLE COMPRESSION", "main_gland_type": "SS-316 DOUBLE COMPRESSION"}
+                   "location": "NEAR TANK", "protection": "WEATHERPROOF (IP66)", "material": "SS316"}
     out["JB-004"].update(terminals_method="per_instrument", terminals_per_instrument=2)
     out["JB-002"]["protection"] = "Ex d"
     return out
@@ -354,7 +354,7 @@ def test_generates_without_any_cover_sheet_and_never_calls_the_cover_service(cli
     assert wb.sheetnames == ["JB_SCHEDULE"] and J.formula_problems(d.content) == []             # no cover, no placeholder, nothing hidden
     ws = wb["JB_SCHEDULE"]
     assert ws.sheet_state == "visible" and not list(wb.defined_names)
-    assert ws["AA2"].value in (None, "") and ws["AA3"].value in (None, "")                        # no document number / revision is invented
+    assert ws["U2"].value in (None, "") and ws["U3"].value in (None, "")                        # no document number / revision is invented
     assert ws["C1"].value in (None, "") and ws["C2"].value in (None, "")                          # nor a project / client
 
 
@@ -379,8 +379,8 @@ def test_header_details_come_only_from_the_engineer_and_the_project_record(clien
     assert g.json()["filename"] == "DOC-1_A_Junction_Box_Schedule.xlsx"
     ws = openpyxl.load_workbook(io.BytesIO(client.get("/api/cable-schedule/jb/download").content))["JB_SCHEDULE"]
     assert (ws["C1"].value, ws["C2"].value, ws["C4"].value) == ("NEW WWTP", "SAMPLE CLIENT", "SAMPLE CONTRACTOR")
-    assert ws["C3"].value in (None, "") and ws["AA2"].value == "DOC-1" and ws["AA3"].value == "A"
-    assert ws["AA4"].value != "01.01.2000"                                                        # the date is the generation date
+    assert ws["C3"].value in (None, "") and ws["U2"].value == "DOC-1" and ws["U3"].value == "A"
+    assert ws["U4"].value != "01.01.2000"                                                        # the date is the generation date
     g = client.post("/api/cable-schedule/jb/generate", json={"project_id": PID, "jbs": ready_configs(), "header": {"client": "x" * 500}})
     assert g.status_code == 400
     db.add(Project(project_id=PID, name="REGISTERED NAME", created_by="t"))
@@ -417,31 +417,40 @@ def test_final_workbook_is_jb_schedule_only_without_broken_formulas(client):
     for row in ws.iter_rows():                                                                # no formula depends on a deleted sheet
         for c in row:
             assert not (isinstance(c.value, str) and c.value.startswith("=")), c.coordinate
-    # the delivered layout: NEAR EQUIPMENT TAG, DESTINATION PANEL and DESTINATION ROOM / BUILDING are gone, and so are the template's
-    # rows 7 (group headings) and 8 (field codes): headings in row 7, junction boxes from row 8; everything right of J moved 3 left
-    headers = [ws.cell(7, c).value for c in range(1, 29)]
-    for gone in ("NEAR EQUIPMENT TAG", "DESTINATION PANEL", "DESTINATION ROOM / BUILDING", "1. IDENTIFICATION", "JB_NO"):
-        assert not any(gone == c.value for row in ws.iter_rows(min_row=6, max_row=8) for c in row), gone
-    assert headers[0] == "S.NO" and headers[10] == "TERMINAL CAPACITY / WAYS" and headers[23] == "TERMINALS USED" and headers[-1] == "REMARKS"
-    assert headers[1:7] == ["UNIT / AREA NAME", "JB NO.", "JB CATEGORY", "JB DESCRIPTION", "IS / NIS", "LOCATION"] and headers[7] == "GAS GROUP / TEMP CLASS"
-    assert ws.max_column == 28 and ws.cell(7, 3).value == "JB NO."                              # helper / check columns are gone
-    assert ws.max_row == 7 + 5                                                                 # unused template rows removed
+    # the delivered layout: exactly the 22 approved columns, headings in row 7, one row per junction box from row 8
+    headers = [ws.cell(7, c).value for c in range(1, ws.max_column + 1)]
+    assert headers == ["S.NO", "UNIT / AREA NAME", "JB NO.", "JB CATEGORY", "JB DESCRIPTION", "IS / NIS", "LOCATION",
+                       "ENCLOSURE PROTECTION", "ENCLOSURE MATERIAL", "TERMINAL CAPACITY / WAYS", "TERMINAL TYPE", "CABLE ENTRY",
+                       "BRANCH CABLES (FROM TERMINATION)", "BRANCH GLAND SIZE", "MAIN CABLE NO.", "MAIN CABLE TYPE",
+                       "MAIN CABLES (FROM TERMINATION)", "MAIN CABLE GLAND SIZE", "SPARE ENTRIES (QTY)", "SPARE ENTRY SIZE",
+                       "TERMINALS USED", "REMARKS"]
+    for gone in ("GAS GROUP", "GLAND TYPE", "SPARE TERMINALS", "SPARE %", "NEAR EQUIPMENT", "DESTINATION"):
+        assert not any(gone in str(c.value) for row in ws.iter_rows() for c in row if c.value is not None), gone
+    assert "REV" not in headers and ws.max_column == 22 and ws.max_row == 7 + 5
+    assert [str(m) for m in ws.merged_cells.ranges] == ["A6:V6"]
     by_jb = {ws.cell(r, 3).value: r for r in range(8, 13)}
+    assert len(by_jb) == 5                                                                     # one row per junction box
     r1 = by_jb["JB-001"]
-    assert [ws.cell(r1, c).value for c in (11, 14, 19, 24, 25)] == [60, 6, 1, 18, 42]          # capacity, branch, main, used, spare
-    assert ws.cell(r1, 26).value == pytest.approx(0.7) and "%" in ws.cell(r1, 26).number_format   # spare % stored as a fraction -> 70%, not 7000%
-    assert ws.cell(r1, 17).value == "MC-1" and ws.cell(r1, 15).value == "M20"
+    assert [ws.cell(r1, c).value for c in (10, 13, 17, 21)] == [60, 6, 1, 18]                  # capacity, branch, main, used
+    assert ws.cell(r1, 15).value == "MC-1" and ws.cell(r1, 14).value == "M20"
+    r2 = by_jb["JB-002"]                                                                       # two cables: one row, matching lines
+    assert ws.cell(r2, 15).value == "MC-2\nMC-3" and ws.cell(r2, 17).value == 2
+    for c in (15, 16, 18):
+        assert len(ws.cell(r2, c).value.split("\n")) == 2
+        assert (ws.cell(r2, c).alignment.vertical, ws.cell(r2, c).alignment.wrap_text) == ("top", True)
+        assert ws.cell(r2, c).fill.fgColor.rgb == ws.cell(r1, c).fill.fgColor.rgb               # no highlight for several cables
+    assert ws.row_dimensions[r2].height > ws.row_dimensions[r1].height - 0.1
     smb = by_jb["XXXX-SMB-001"]
-    assert ws.cell(smb, 24).value is None and ws.cell(smb, 25).value == 9 and ws.cell(smb, 26).value == 0.75
-    assert ws.cell(by_jb["JB-004"], 24).value == 2                                              # user-confirmed terminals per instrument
-    assert ws.cell(7, 28).value == "REMARKS" and all(ws.cell(r, 28).value is None for r in range(8, 13))   # heading kept, rows empty
-    for r in range(7, 13):                                                                      # every table cell centred
-        for c in range(1, 29):
+    assert ws.cell(smb, 21).value is None
+    assert ws.cell(by_jb["JB-004"], 21).value == 2                                              # user-confirmed terminals per instrument
+    assert all(ws.cell(r, 22).value is None for r in range(8, 13))                              # REMARKS heading kept, rows empty
+    for r in range(7, 13):                                                                      # centred (cable lines top-aligned)
+        for c in range(1, 23):
             al = ws.cell(r, c).alignment
-            assert (al.horizontal, al.vertical) == ("center", "center"), (r, c)
-    assert ws.print_area and "$AB$12" in str(ws.print_area) and ws.page_setup.orientation == "landscape"
+            assert al.horizontal == "center" and al.vertical == ("top" if r == r2 and c in (15, 16, 18) else "center"), (r, c)
+    assert ws.print_area and "$V$12" in str(ws.print_area) and ws.page_setup.orientation == "landscape"
     assert ws.freeze_panes == "E8" and "$7:$7" == str(ws.print_title_rows)
-    assert ws["C1"].value == "NEW WWTP" and ws["AA2"].value == "PC286-10P195-J0007-001" and ws["AA3"].value == "R0"
+    assert ws["C1"].value == "NEW WWTP" and ws["U2"].value == "PC286-10P195-J0007-001" and ws["U3"].value == "R0"
     assert len(ws.data_validations.dataValidation) >= 5                                        # the lists survive as in-cell drop-downs
 
 
@@ -454,16 +463,65 @@ def test_submission_readiness_is_reported_without_blocking(client):
     assert g.json()["submission_ready"] is False and "LOCATION" in g.json()["missing_for_submission"]["JB-001"]
 
 
-def test_template_is_the_standard_one_and_loses_nothing_it_needs():
+def test_stored_template_is_the_22_column_sheet():
     tpl = (ROOT / "backend/app/templates/junction_box_schedule/JB_SCHEDULE_TEMPLATE.xlsx").read_bytes()
     wb = openpyxl.load_workbook(io.BytesIO(tpl))
+    assert wb.sheetnames == ["JB_SCHEDULE"] and not list(wb.defined_names)
     ws = wb["JB_SCHEDULE"]
-    assert [ws.cell(9, c).value for c in (1, 3, 14, 27, 28, 29)] == ["S.NO", "JB NO.", "TERMINAL CAPACITY / WAYS", "TERMINALS USED",
-                                                                      "SPARE TERMINALS / WAYS", "SPARE %"]
-    out = J.build_workbook(tpl, [{"jb_no": "JB-1", "row": {"terminal_capacity": 10, "terminals_used": 4, "spare_terminals": 6, "spare_pct": 0.6,
-                                                           "category": "AJB", "terminals_method": "auto"}}], {})
+    assert ws.max_column == 22 and tuple(ws.cell(7, c).value for c in range(1, 23)) == J.HEADINGS
+    out = J.build_workbook(tpl, [{"jb_no": "JB-1", "row": {"terminal_capacity": 10, "terminals_used": 4, "category": "AJB",
+                                                           "terminals_method": "auto"}}], {})
     assert openpyxl.load_workbook(io.BytesIO(out)).sheetnames == ["JB_SCHEDULE"]
     assert J.formula_problems(out) == []
+
+
+# ── several main cables on one junction box ─────────────────────────────────
+def _block(tag, mtag, mtype, gland="1 1/4\" NPT", jb="JB-9"):
+    return {"tag": tag, "jb": jb, "io": "AI", "branch_cable_tag": "B-" + tag, "branch_cable_type": "1P", "main_cable_tag": mtag,
+            "main_cable_type": mtype, "main_gland_size": gland, "jb_gland_size": "M20", "jb_gland_qty": "1", "terminals": ["1"]}
+
+
+def _evaluate(entries, cfg=None):
+    an = J.analyze({"entries": entries, "sheets": ["x"], "notes": []})
+    jb = an["jbs"][0]
+    return jb, J.evaluate(jb, {"category": "AJB", "terminal_capacity": 40, **(cfg or {})})
+
+
+def test_each_cable_keeps_its_own_type_and_gland_on_the_matching_line():
+    jb, r = _evaluate([_block("A", "MC-2", "8PX1.5 Sqmm", '1" NPT'), _block("B", "MC-1", "12PX1.5 Sqmm"),
+                       _block("C", "MC-1", "12P x 1.5 mm2"), _block("D", "MC-3", "8PX1.5 Sqmm", '1" NPT')])
+    assert jb["main_cable_count"] == 3
+    assert r["row"]["main_cable_no"].split("\n") == ["MC-1", "MC-2", "MC-3"]
+    assert r["row"]["main_cable_type"].split("\n") == ["12P x 1.5 mm2", "8PX1.5 Sqmm", "8PX1.5 Sqmm"]
+    assert r["row"]["main_gland_size"].split("\n") == ['1 1/4" NPT', '1" NPT', '1" NPT']
+    assert not any("conflicting" in w for w in r["warnings"])                  # different notation of one type is not a conflict
+
+
+def test_cores_and_pairs_are_never_merged_and_real_conflicts_are_reported():
+    jb, r = _evaluate([_block("A", "MC-1", "12PX1.5 Sqmm"), _block("B", "MC-1", "12X1.5 Sq.mm"), _block("C", "MC-2", "12PX1.5 Sqmm"),
+                       _block("D", "MC-2", "12PX1.5 Sqmm", "M25")])
+    assert r["row"]["main_cable_type"].split("\n") == ["12PX1.5 Sqmm / 12X1.5 Sq.mm", "12P x 1.5 mm2"]
+    assert any("MC-1 has conflicting cable types" in w for w in r["warnings"])
+    assert any("MC-2 has conflicting JB end gland sizes" in w for w in r["warnings"])
+
+
+def test_missing_unidentified_and_shared_cables_are_reported_not_guessed():
+    entries = [_block("A", "MC-1", "12PX1.5 Sqmm"), _block("B", "MC-2", "TBA", "TBA"), _block("C", "TBA", ""),
+               _block("E", "MC-1", "12PX1.5 Sqmm", jb="JB-10")]
+    jb, r = _evaluate(entries)
+    assert jb["jb_no"] == "JB-9" and jb["main_cable_count"] == 2                 # 'TBA' is not a physical cable
+    assert r["row"]["main_cable_type"].split("\n") == ["12P x 1.5 mm2", "TBA"]
+    assert {"MAIN CABLE TYPE", "MAIN CABLE GLAND SIZE"} <= set(r["missing_submission"])
+    text = " ".join(r["warnings"])
+    assert "no main cable number" in text and "MC-2 has no cable type" in text and "MC-1 is also shown against JB-10" in text
+
+
+def test_typed_values_for_several_cables_must_be_one_per_cable():
+    entries = [_block("A", "MC-1", "12PX1.5 Sqmm"), _block("B", "MC-2", "8PX1.5 Sqmm")]
+    _, r = _evaluate(entries, {"main_gland_size": "M25"})
+    assert any("one value per cable" in e for e in r["errors"]) and r["status"] == "Error"
+    _, r = _evaluate(entries, {"main_gland_size": "M25; M32"})
+    assert r["row"]["main_gland_size"] == "M25\nM32" and r["status"] == "Ready"
 
 
 # ── engine details ───────────────────────────────────────────────────────────

@@ -13,6 +13,7 @@ import uuid
 from pathlib import Path
 from datetime import datetime
 
+from ..offload import off_main_loop
 from ..deps import get_current_user
 from ..auth.models import User
 from ..services.document_registry import register_safe
@@ -121,6 +122,7 @@ def generated_meta(g: Optional[dict]) -> dict:
 
 
 @router.post("/columns", response_model=ColumnsResponse)
+@off_main_loop
 async def get_columns(
     file: UploadFile = File(...),
     current_user: User = Depends(get_current_user),
@@ -136,6 +138,7 @@ async def get_columns(
 
 
 @router.post("/preview", response_model=JBSummaryResponse)
+@off_main_loop
 async def preview_jb_summary(
     file: UploadFile = File(...),
     jb_column: str = Form(...),
@@ -199,6 +202,7 @@ def _extra_frame(iodb_bytes: bytes):
 
 
 @router.post("/extra/availability")
+@off_main_loop
 async def extra_sheet_availability(
     iodb_file: UploadFile = File(...),
     current_user: User = Depends(get_current_user),
@@ -213,6 +217,7 @@ async def extra_sheet_availability(
 
 
 @router.post("/extra/preview")
+@off_main_loop
 async def extra_sheet_preview(
     iodb_file: UploadFile = File(...),
     extra_sheets: str = Form(...),
@@ -301,6 +306,7 @@ async def _template_bytes(upload: Optional[UploadFile]) -> tuple[bytes, str]:
 
 
 @router.post("/composition", response_model=CompositionResponse)
+@off_main_loop
 async def cable_schedule_composition(
     template_file: Optional[UploadFile] = File(None),
     output_mode: str = Form(wa.WITH_SUMMARY),

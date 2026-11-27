@@ -12,6 +12,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from ..offload import off_main_loop
 from ..auth.models import User
 from ..deps import get_current_user, get_db, require_lead
 from ..models.document_registry import Project
@@ -161,6 +162,7 @@ def download_document(project_id: str, document_id: int, db: Session = Depends(g
 
 
 @router.post("/{project_id}/sources", status_code=status.HTTP_201_CREATED)
+@off_main_loop
 async def upload_source(project_id: str, kind: str = Form("iodb"), file: UploadFile = File(...),
                         db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """

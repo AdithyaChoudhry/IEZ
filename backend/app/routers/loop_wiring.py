@@ -8,6 +8,7 @@ import io
 import uuid
 import pandas as pd
 
+from ..offload import off_main_loop
 from ..deps import get_current_user
 from ..auth.models import User
 from ..services.document_registry import register_safe
@@ -43,6 +44,7 @@ def _find_tag_column(df: pd.DataFrame) -> str | None:
 
 
 @router.post("/preview", response_model=LoopWiringPreviewResponse)
+@off_main_loop
 async def preview_loop_wiring(
     file: UploadFile = File(...),
     current_user: User = Depends(get_current_user),

@@ -17,6 +17,7 @@ from utils.xlsx_trim import trim_empty_tail
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import StreamingResponse
 
+from ..offload import off_main_loop
 from ..auth.models import User
 from ..deps import get_current_user
 from .cable_schedule import require_generated
@@ -60,6 +61,7 @@ def _issues(issues, limit=40):
 
 
 @router.post("/demand")
+@off_main_loop
 async def drum_demand(iodb_file: UploadFile = File(...), current_user: User = Depends(get_current_user)):
     """Step 1: how many cable requirements the IODB gives (branch + main, shared main cables once) and its problems."""
     df = _iodb_frame(await _read(iodb_file, "IODB"))
@@ -137,6 +139,7 @@ async def generated_demand(
 
 
 @router.post("/generated/generate")
+@off_main_loop
 async def generated_generate(
     drum_master_file: UploadFile = File(...),
     project_id: Optional[str] = Form(None),
@@ -164,6 +167,7 @@ async def generated_generate(
 
 
 @router.post("/master")
+@off_main_loop
 async def drum_master(drum_master_file: UploadFile = File(...), current_user: User = Depends(get_current_user)):
     """Step 2: read and validate the Drum Master."""
     data = await _read(drum_master_file, "Drum Master")
@@ -177,6 +181,7 @@ async def drum_master(drum_master_file: UploadFile = File(...), current_user: Us
 
 
 @router.post("/generate")
+@off_main_loop
 async def drum_generate(
     iodb_file: UploadFile = File(...),
     drum_master_file: UploadFile = File(...),

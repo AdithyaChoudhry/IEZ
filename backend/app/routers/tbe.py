@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from typing import Optional
 
+from ..offload import off_main_loop
 from ..deps import get_db, get_current_user
 from ..auth.models import User, AdminUser, TBEApprovalLog, TBEVendor
 from ..auth.utils import verify_password
@@ -344,6 +345,7 @@ def _auto_reply(status: str) -> str:
 # ── /analyze ──────────────────────────────────────────────────────────────────
 
 @router.post("/analyze")
+@off_main_loop
 async def analyze_datasheet(
     file: UploadFile = File(...),
     _: User = Depends(get_current_user),
@@ -928,6 +930,7 @@ OFFER_FILE_MAP = {
 
 
 @router.post("/offer/analyze")
+@off_main_loop
 async def analyze_vendor_offer(
     file: UploadFile = File(...),
     _: User = Depends(get_current_user),

@@ -18,6 +18,7 @@ import threading
 import tempfile
 from pathlib import Path
 
+from ..offload import off_main_loop
 from ..deps import get_current_user, get_db
 from ..auth.models import User, ApprovalRequest
 from sqlalchemy.orm import Session
@@ -91,6 +92,7 @@ def _check_ext(filename: str, allowed: set[str]) -> None:
 
 
 @router.post("/analyze", response_model=AnalyzeResponse)
+@off_main_loop
 async def analyze(
     sop_file: UploadFile = File(...),
     iodb_file: UploadFile = File(...),
@@ -122,6 +124,7 @@ async def analyze(
 
 
 @router.post("/instrument-types", response_model=InstrumentTypesResponse)
+@off_main_loop
 async def instrument_types(
     iodb_file: UploadFile = File(...),
     current_user: User = Depends(get_current_user),
@@ -136,6 +139,7 @@ async def instrument_types(
 
 
 @router.post("/datasheets", response_model=DatasheetsResponse)
+@off_main_loop
 async def datasheets(
     sop_file: UploadFile = File(...),
     current_user: User = Depends(get_current_user),
@@ -152,6 +156,7 @@ async def datasheets(
 
 
 @router.post("/fields", response_model=FieldsResponse)
+@off_main_loop
 async def fields(
     sop_file: UploadFile = File(...),
     datasheet_sheet: str = Form(...),
@@ -188,6 +193,7 @@ async def fields(
 
 
 @router.post("/tags", response_model=TagsResponse)
+@off_main_loop
 async def tags(
     iodb_file: UploadFile = File(...),
     instrument_type: str = Form(...),
@@ -580,6 +586,7 @@ async def _groq(prompt: str, max_tokens: int, json_mode: bool = False) -> str:
 
 
 @router.post("/extract-spec", response_model=ExtractSpecResponse)
+@off_main_loop
 async def extract_spec(
     label: str = Form("All specifications"),
     tender_text: str = Form(""),

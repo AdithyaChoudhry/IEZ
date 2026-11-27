@@ -17,6 +17,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPExcepti
 from fastapi.responses import Response
 from pydantic import BaseModel
 
+from ..offload import off_main_loop
 from ..auth.models import User
 from ..deps import get_current_user
 from ..models.loop_wiring import LoopWiringGenerateResponse, LoopWiringJobResponse
@@ -82,6 +83,7 @@ def download_template(variant: str, current_user: User = Depends(get_current_use
 
 
 @router.post("/preview", response_model=AssignmentPreview)
+@off_main_loop
 async def preview(
     assignment_file: UploadFile = File(...),
     template_file: Optional[UploadFile] = File(None),

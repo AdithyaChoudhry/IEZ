@@ -8,6 +8,7 @@ from typing import Optional
 import io
 import json
 
+from ..offload import off_main_loop
 from ..deps import get_current_user
 from ..auth.models import User
 from ..services.document_registry import register_safe
@@ -35,6 +36,7 @@ io_list_cache: dict = {}
 
 
 @router.post("/analyze", response_model=ListAnalyzeResponse)
+@off_main_loop
 async def analyze_iodb(
     file: UploadFile = File(...),
     current_user: User = Depends(get_current_user),
@@ -62,6 +64,7 @@ def _composition(template_bytes: Optional[bytes], mode: str) -> list[dict]:
 
 
 @router.post("/composition", response_model=CompositionResponse)
+@off_main_loop
 async def io_list_composition(
     template_file: Optional[UploadFile] = File(None),
     output_mode: str = Form(wa.WITHOUT_SUMMARY),

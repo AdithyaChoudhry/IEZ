@@ -16,6 +16,7 @@ from utils.xlsx_trim import trim_empty_tail
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import StreamingResponse
 
+from ..offload import off_main_loop
 from ..auth.models import User
 from ..deps import get_current_user
 from .cable_schedule import require_generated
@@ -69,6 +70,7 @@ def _detect(data: bytes) -> dict:
 
 
 @router.post("/detect")
+@off_main_loop
 async def detect(file: UploadFile = File(...), current_user: User = Depends(get_current_user)):
     """Cable schedule sheets found in the workbook (hidden template sheets are listed but not ticked by default)."""
     return _detect(await _read(file))
@@ -188,6 +190,7 @@ def _report_path(user_key: str):
 
 
 @router.post("/analyze")
+@off_main_loop
 async def analyze(
     file: UploadFile = File(...),
     rules: Optional[str] = Form(None),

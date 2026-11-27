@@ -5,6 +5,7 @@ from typing import Optional
 import io
 import json
 
+from ..offload import off_main_loop
 from ..deps import get_current_user
 from ..auth.models import User
 from ..models.process_data import (
@@ -86,6 +87,7 @@ async def get_profile_endpoint(instrument_type: str, subtype: Optional[str] = No
 
 
 @router.post("/match-tags", response_model=ProcessDataMatchResponse)
+@off_main_loop
 async def match_tags_endpoint(
     file: UploadFile = File(...),
     instrument_type: str = Form(...),
@@ -144,6 +146,7 @@ async def match_tags_endpoint(
 
 
 @router.post("/generate", response_model=ProcessDataGenerateResponse)
+@off_main_loop
 async def generate_process_data(
     iodb_file: UploadFile = File(...),
     instrument_type: str = Form(...),

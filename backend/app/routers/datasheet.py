@@ -7,6 +7,7 @@ from typing import List, Optional
 import io
 import json
 
+from ..offload import off_main_loop
 from ..deps import get_current_user
 from ..auth.models import User
 from ..models.datasheet import (
@@ -33,6 +34,7 @@ datasheet_cache: dict = {}
 
 
 @router.post("/tags", response_model=TagsResponse)
+@off_main_loop
 async def get_available_tags(
     file: UploadFile = File(...),
     two_row_header: bool = Form(True),
@@ -75,6 +77,7 @@ async def get_available_tags(
 
 
 @router.post("/generate", response_model=DataSheetResponse)
+@off_main_loop
 async def generate_datasheets(
     iodb_file: UploadFile = File(...),
     template_file: UploadFile = File(...),

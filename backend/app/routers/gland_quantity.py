@@ -19,6 +19,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import StreamingResponse
 
+from ..offload import off_main_loop
 from ..auth.models import User
 from ..deps import get_current_user
 from .cable_schedule import require_generated
@@ -88,6 +89,7 @@ def _detect(data: bytes) -> dict:
 
 
 @router.post("/detect")
+@off_main_loop
 async def detect(file: UploadFile = File(...), current_user: User = Depends(get_current_user)):
     """Cable schedule sheets found in the workbook and the cable types (for the OD table)."""
     return _detect(await _read(file, "cable schedule"))
@@ -143,6 +145,7 @@ async def generated_analyze(
 
 
 @router.post("/analyze")
+@off_main_loop
 async def analyze(
     file: UploadFile = File(...),
     settings: Optional[str] = Form(None),
@@ -240,6 +243,7 @@ async def iodb_job(job_id: str, current_user: User = Depends(get_current_user)):
 
 
 @router.post("/advise")
+@off_main_loop
 async def advise(
     inputs: str = Form(...),
     project: Optional[str] = Form(None),
@@ -269,6 +273,7 @@ async def reference(current_user: User = Depends(get_current_user)):
 
 
 @router.post("/reference/check")
+@off_main_loop
 async def reference_check(reference_file: UploadFile = File(...), current_user: User = Depends(get_current_user)):
     rows, problems = await _extra_rows(reference_file)
     return {"rows": len(rows), "problems": problems, "preview": [r.to_dict() for r in rows[:50]],

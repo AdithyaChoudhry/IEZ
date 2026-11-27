@@ -102,6 +102,15 @@ RULE_TYPES: list[str]        = ["COLUMN", "ROW", "DUPLICATE"]
 LOGICAL_OPERATORS: list[str] = ["AND", "OR"]
 
 
+# the Dynamic Rules Manager screen names some operators differently; saved rules carry those names
+_OPERATOR_ALIASES = {"!CONTAINS": "NOT CONTAINS", "!IN": "NOT IN", "EMPTY": "IS EMPTY", "!EMPTY": "IS NOT EMPTY"}
+
+
+def normalize_operator(operator: Any) -> str:
+    op = str(operator or "").strip().upper()
+    return _OPERATOR_ALIASES.get(op, op)
+
+
 # ── Dataclass ─────────────────────────────────────────────────────────────────
 @dataclass
 class DynamicRule:
@@ -253,7 +262,7 @@ def _evaluate_condition(
     """
     Returns True when the condition is VIOLATED (error should be raised).
     """
-    op = operator.strip().upper()
+    op = normalize_operator(operator)
 
     # Presence checks (value irrelevant)
     if op == "IS EMPTY":
@@ -329,7 +338,9 @@ def _evaluate_rule_on_row(
         p_col   = _resolve_col(primary.get("column", ""), col_names)
         if not p_col:
             return False
-        if _is_truly_empty(row_series.get(p_col, "")):
+        # (a presence rule is about the blank cell itself, so it is never skipped)
+        if (_is_truly_empty(row_series.get(p_col, ""))
+                and normalize_operator(primary.get("operator")) not in ("IS EMPTY", "IS NOT EMPTY")):
             return False
 
         # Evaluate conditions using AND/OR chain on "violated" semantics

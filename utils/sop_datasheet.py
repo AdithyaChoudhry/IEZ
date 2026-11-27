@@ -38,6 +38,7 @@ from typing import Any
 import pandas as pd
 
 from .file_handler import add_revised_tag
+from .parsed_cache import cached_table
 from .datasheet_generator import normalize
 
 # ── Constants ────────────────────────────────────────────────────────────────
@@ -499,6 +500,10 @@ def _find_iodb_sheet(xls: pd.ExcelFile) -> str:
 
 
 def _load_iodb_df(iodb_bytes: bytes) -> tuple[pd.DataFrame | None, str | None]:
+    return cached_table("datasheet-iodb", iodb_bytes, lambda: _parse_iodb_df(iodb_bytes))
+
+
+def _parse_iodb_df(iodb_bytes: bytes) -> tuple[pd.DataFrame | None, str | None]:
     try:
         buf = io.BytesIO(iodb_bytes)
         xls = pd.ExcelFile(buf)

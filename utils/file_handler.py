@@ -10,6 +10,8 @@ import zipfile
 import pandas as pd
 import openpyxl
 
+from .parsed_cache import cached_table
+
 
 _PLAIN_TAG_HEADERS = {"TAG", "TAGNO", "TAGNUMBER", "TAGNUMMBER", "TAGNONEW", "TAGNUMBERNEW"}
 
@@ -35,6 +37,21 @@ def add_revised_tag(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def read_iodb(uploaded_file, revised_tag: bool = True) -> tuple[pd.DataFrame | None, str | None]:
+    """
+    The IODB table of an uploaded workbook (see _parse_iodb). A file already read is answered from server memory.
+    """
+    try:
+        uploaded_file.seek(0)
+        data = uploaded_file.read()
+        uploaded_file.seek(0)
+    except Exception:
+        data = None
+    if not isinstance(data, bytes):                       # not a readable byte stream: read it directly
+        return _parse_iodb(uploaded_file, revised_tag)
+    return cached_table(f"iodb:{int(revised_tag)}", data, lambda: _parse_iodb(uploaded_file, revised_tag))
+
+
+def _parse_iodb(uploaded_file, revised_tag: bool = True) -> tuple[pd.DataFrame | None, str | None]:
     """
     Read the IODB Source Excel file.
     The IODB sheet uses row 1 as the header.

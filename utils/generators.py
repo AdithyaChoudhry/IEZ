@@ -19,7 +19,7 @@ from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter, column_index_from_string
 from openpyxl.styles import Alignment, Font, PatternFill, Border, Side
 
-from utils.file_handler import workbook_to_bytes, dataframe_to_bytes
+from utils.file_handler import workbook_to_bytes, dataframe_to_bytes, revised_tag_column
 
 # Shared cell style applied to all output cells in list generators
 _LIST_ALIGNMENT = Alignment(horizontal='center', vertical='center', wrap_text=True)
@@ -1750,7 +1750,8 @@ def generate_iodb_validation(
 
         # ── Locate key columns ────────────────────────────────────────────────
         sno_col    = _val_find_col(df, "S.NO", "S NO", "SNO", "S.NO.", "SERIAL NO", "SR NO", "SL NO")
-        tag_col    = _val_find_col(df, "TAG NO", "TAG NUMBER", "TAG_NO", "TAG_NUMBER", "TAG")
+        tag_col    = (revised_tag_column(df.columns)
+                      or _val_find_col(df, "TAG NO", "TAG NUMBER", "TAG_NO", "TAG_NUMBER", "TAG"))
         area_col   = _val_find_col(df, "AREA CLASSIFICATION")
         isnis_col  = _val_find_col(df, "IS/NIS TYPE", "IS/NIS", "IS NIS", "IS_NIS", "ISNIS")
         scope_col  = _val_find_col(df, "SCOPE OF SUPPLY", "SUPPLY SCOPE", "SCOPE")

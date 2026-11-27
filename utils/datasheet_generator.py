@@ -42,6 +42,8 @@ import pandas as pd
 from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter
 
+from .file_handler import revised_tag_column
+
 try:
     from rapidfuzz import fuzz, process as rf_process
     _HAS_RAPIDFUZZ = True
@@ -251,6 +253,10 @@ def load_iodb(
             df = raw
 
         df = df.dropna(how="all").reset_index(drop=True)
+        revised = revised_tag_column(col_names)
+        if revised is not None:                              # revised tags are the current tags (added in memory only)
+            df = pd.concat([df, df[revised].rename("TAG NO")], axis=1)
+            col_names = [*col_names, "TAG NO"]
         logger.info("load_iodb: loaded %d rows × %d cols from sheet '%s'", len(df), len(col_names), sheet)
         return df, col_names, None
 
@@ -264,6 +270,9 @@ def load_iodb(
 def _find_col(col_names: list[str], keys: tuple[str, ...]) -> str | None:
     """Find the first column whose normalised name contains any of the (also normalised) keys."""
     norm_keys = [normalize(k) for k in keys]
+    for name in col_names:                                    # an exact heading wins over one that merely contains the key
+        if normalize(name) in norm_keys:
+            return name
     for name in col_names:
         n = normalize(name)
         if any(k in n for k in norm_keys):

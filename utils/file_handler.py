@@ -11,7 +11,30 @@ import pandas as pd
 import openpyxl
 
 
-def read_iodb(uploaded_file) -> tuple[pd.DataFrame | None, str | None]:
+_PLAIN_TAG_HEADERS = {"TAG", "TAGNO", "TAGNUMBER", "TAGNUMMBER", "TAGNONEW", "TAGNUMBERNEW"}
+
+
+def revised_tag_column(columns) -> str | None:
+    """
+    The tag column of an IODB that carries its tags under a revised-tag heading (e.g. 'REVISEDTAGNO(REVA)' beside
+    'TAG NO(REV A)'): the revised column is the current tag. None when the IODB has a plain TAG NO / TAG NUMBER column.
+    """
+    norm = [(re.sub(r"[^A-Z0-9]", "", str(c).upper()), c) for c in columns]
+    if any(n in _PLAIN_TAG_HEADERS for n, _ in norm):
+        return None
+    revised = [c for n, c in norm if re.match(r"REVISEDTAG(NO|NUMBER)", n)]
+    return revised[-1] if revised else None
+
+
+def add_revised_tag(df: pd.DataFrame) -> pd.DataFrame:
+    """In memory only: a 'TAG NO' column holding the revised tags, added after the IODB's own columns."""
+    col = revised_tag_column(df.columns)
+    if col is None:
+        return df
+    return pd.concat([df, df[col].rename("TAG NO")], axis=1)
+
+
+def read_iodb(uploaded_file, revised_tag: bool = True) -> tuple[pd.DataFrame | None, str | None]:
     """
     Read the IODB Source Excel file.
     The IODB sheet uses row 1 as the header.
@@ -27,7 +50,7 @@ def read_iodb(uploaded_file) -> tuple[pd.DataFrame | None, str | None]:
             df = pd.read_excel(uploaded_file, sheet_name="IODB", header=0)
             uploaded_file.seek(0)
             df = df.dropna(how="all").reset_index(drop=True)
-            return df, None
+            return (add_revised_tag(df) if revised_tag else df), None
         except Exception:
             uploaded_file.seek(0)
 
@@ -96,7 +119,7 @@ def read_iodb(uploaded_file) -> tuple[pd.DataFrame | None, str | None]:
         df = xls.parse(match, header=header)
 
         df = df.dropna(how="all").reset_index(drop=True)
-        return df, None
+        return (add_revised_tag(df) if revised_tag else df), None
     except Exception as e:
         return None, str(e)
 

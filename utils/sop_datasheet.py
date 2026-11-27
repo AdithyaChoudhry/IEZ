@@ -37,6 +37,7 @@ from typing import Any
 
 import pandas as pd
 
+from .file_handler import add_revised_tag
 from .datasheet_generator import normalize
 
 # ── Constants ────────────────────────────────────────────────────────────────
@@ -513,7 +514,7 @@ def _load_iodb_df(iodb_bytes: bytes) -> tuple[pd.DataFrame | None, str | None]:
         buf.seek(0)
         df = pd.read_excel(buf, sheet_name=sheet, header=header_row)
         df = df.dropna(how="all").reset_index(drop=True)
-        return df, None
+        return add_revised_tag(df), None
     except Exception as exc:
         return None, str(exc)
 

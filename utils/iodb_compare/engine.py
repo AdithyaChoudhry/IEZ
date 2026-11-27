@@ -108,7 +108,7 @@ def load_table(data: bytes, label: str):
 
     df, err = None, None
     try:
-        df, err = read_iodb(io.BytesIO(data))
+        df, err = read_iodb(io.BytesIO(data), revised_tag=False)
     except Exception as exc:
         err = str(exc)
         df = None

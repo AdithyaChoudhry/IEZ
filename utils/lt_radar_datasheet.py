@@ -24,6 +24,8 @@ from typing import Any
 
 import pandas as pd
 
+from .file_handler import add_revised_tag
+
 # ---------------------------------------------------------------------------
 # 1. FIELD DEFINITIONS
 # ---------------------------------------------------------------------------
@@ -204,7 +206,7 @@ def iodb_lookup(iodb_bytes: bytes, tag_no: str) -> tuple[dict[str, str], str | N
     Returns (values_dict, error_string_or_None).
     """
     try:
-        df = pd.read_excel(io.BytesIO(iodb_bytes))
+        df = add_revised_tag(pd.read_excel(io.BytesIO(iodb_bytes)))
     except Exception as exc:
         return {}, f"Could not read IODB: {exc}"
 
@@ -241,7 +243,7 @@ def iodb_lookup(iodb_bytes: bytes, tag_no: str) -> tuple[dict[str, str], str | N
 def get_iodb_tags(iodb_bytes: bytes) -> tuple[list[str], str | None]:
     """Return list of all tag numbers from the IODB, AI+subsystem filtered."""
     try:
-        df = pd.read_excel(io.BytesIO(iodb_bytes))
+        df = add_revised_tag(pd.read_excel(io.BytesIO(iodb_bytes)))
     except Exception as exc:
         return [], f"Could not read IODB: {exc}"
 

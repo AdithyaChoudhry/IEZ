@@ -200,8 +200,9 @@ function TabA({ project, refFile, setError }: { project: string; refFile: File |
       {detect && (
         <Card title="Step 2 - Cable OD and construction per cable type" description="Optional but needed for the gland check. The schedule's own gland is shown and is never overwritten.">
           <div className="overflow-auto max-h-96 border rounded-lg" style={{ borderColor: 'var(--b1)' }}>
-            <table className="w-full text-xs">
-              <thead style={{ background: 'var(--s2)' }}><tr>{['Cable type', 'Cables', 'Existing gland (schedule)', 'Cable OD (mm)', 'Construction', 'Bedding (mm)', 'Armour min', 'Armour max'].map((h) =>
+            <table className="w-full text-xs min-w-[44rem]">
+              <colgroup>{['28%', '8%', '22%', '18%', '24%'].map((w, i) => <col key={i} style={{ width: w }} />)}</colgroup>
+              <thead style={{ background: 'var(--s2)' }}><tr>{['Cable type', 'Cables', 'Existing gland (schedule)', 'Cable OD (mm)', 'Construction'].map((h) =>
                 <th key={h} className="px-2 py-1.5 text-left font-medium" style={{ color: 'var(--t1)' }}>{h}</th>)}</tr></thead>
               <tbody>
                 {detect.cable_types.map((t: Row) => {
@@ -211,11 +212,9 @@ function TabA({ project, refFile, setError }: { project: string; refFile: File |
                     <tr key={t.key} className="border-t" style={{ borderColor: 'var(--b1)', color: 'var(--t0)' }}>
                       <td className="px-2 py-1">{t.cable_type}</td><td className="px-2 py-1">{t.cables}</td>
                       <td className="px-2 py-1">{t.existing_glands.join(', ') || '-'}</td>
-                      <td className="px-2 py-1"><input className={field} style={{ ...fieldStyle, width: '6rem' }} placeholder={t.od ? String(t.od) : 'mm'} value={v.od ?? ''} onChange={(e) => setType(t.key, { od: e.target.value })} /></td>
-                      <td className="px-2 py-1"><select className={field} style={{ ...fieldStyle, width: '8rem' }} value={cons} onChange={(e) => setType(t.key, { construction: e.target.value })}>
+                      <td className="px-2 py-1"><input className={field} style={{ ...fieldStyle, width: '100%', maxWidth: '10rem' }} aria-label={`Cable OD of ${t.cable_type}`} placeholder={t.od ? String(t.od) : 'mm'} value={v.od ?? ''} onChange={(e) => setType(t.key, { od: e.target.value })} /></td>
+                      <td className="px-2 py-1 whitespace-nowrap"><select className={field} style={{ ...fieldStyle, width: '10rem' }} aria-label={`Construction of ${t.cable_type}`} value={cons} onChange={(e) => setType(t.key, { construction: e.target.value })}>
                         {CONSTRUCTIONS.map((c) => <option key={c}>{c}</option>)}</select>{!t.construction_stated && !v.construction && <span className="ml-1 text-amber-600">assumed</span>}</td>
-                      {['bedding', 'armour_min', 'armour_max'].map((k) => (
-                        <td key={k} className="px-2 py-1"><input disabled={cons !== 'ARMOURED'} className={field} style={{ ...fieldStyle, width: '5rem' }} value={v[k] ?? ''} onChange={(e) => setType(t.key, { [k]: e.target.value })} /></td>))}
                     </tr>);
                 })}
               </tbody>

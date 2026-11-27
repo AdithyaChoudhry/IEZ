@@ -434,7 +434,7 @@ def compare_cable_type(cable_type: str, existing: list[str], data: dict, rows: l
     out["alternatives"] = [f"{a['gland_size']} - {a['thread']}" for a in best["alternatives"]]
     out["source"] = pre["source"]
     if out["result"] == "MISSING GLAND DATA":
-        return out
+        return _mark_incomplete(out, inp)
     valid_labels = {_norm_thread(o) for c in [pre] + best["alternatives"] for o in c["thread_options"]}
     ex_norm = [_norm_thread(e) for e in existing]
     pre_labels = {_norm_thread(o) for o in pre["thread_options"]}
@@ -457,6 +457,20 @@ def compare_cable_type(cable_type: str, existing: list[str], data: dict, rows: l
             out["result"] = "REVIEW"
             out["message"] = (f"Existing {', '.join(existing)} is one size step from the advised {pre['gland_size']} ({pre['thread']}); "
                               "check the cable OD and the manufacturer range. The project gland is not changed automatically.")
+    return _mark_incomplete(out, inp)
+
+
+def _mark_incomplete(out: dict, inp: Inputs) -> dict:
+    """An armoured gland also depends on the bedding diameter and the armour dimensions of the cable. Without them the
+    result is a preliminary check on the overall diameter and is never reported as a confirmed match."""
+    if inp.construction != "ARMOURED" or (inp.bedding is not None and (inp.armour_min is not None or inp.armour_max is not None)):
+        return out
+    if out["result"] == "MATCH":
+        out["result"] = "REVIEW"
+    out["flags"].append("DETAILED COMPATIBILITY INCOMPLETE")
+    out["message"] = (out["message"] + " " if out["message"] else "") + (
+        "Preliminary check on the cable OD only - detailed compatibility verification is incomplete (bedding diameter and "
+        "armour dimensions are not available); verify them against the manufacturer's data.")
     return out
 
 

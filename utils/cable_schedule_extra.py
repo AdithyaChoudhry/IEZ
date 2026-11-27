@@ -556,9 +556,9 @@ def _row_values(key: str, rec: Rec, group: CableGroup) -> dict[str, Any]:
         "sigtype": rec.io or "TBA", "remarks": None,
         "cd_tb2": show(common),
     }
-    if key in ("mcc_di", "mcc_do"):
-        # TB DETAILS AT MCC: the IODB's JB TERMINAL +/- columns are junction box terminals, not MCC terminals. Until an
-        # MCC terminal source is agreed the two cores stay TBA.
+    if key in ("mcc_di", "mcc_do", "vfd", "mov"):
+        # TB DETAILS AT MCC / VFD / MOV: the IODB's JB TERMINAL +/- columns are junction box terminals, not terminals of
+        # that equipment. Until its terminal source is agreed the two cores stay TBA.
         v["end_pos"] = v["end_neg"] = "TBA"
     return v
 

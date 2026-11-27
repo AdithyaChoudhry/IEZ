@@ -254,22 +254,26 @@ def test_mov_has_no_column_that_only_repeats_the_junction_box():
             assert not (isinstance(c.value, str) and c.value.replace(" ", "") == f"={get_column_letter(jb)}{c.row}"), c.coordinate
 
 
-def test_tb_details_at_mcc_stay_tba_even_when_the_iodb_has_junction_box_terminals():
-    df = pd.DataFrame(iodb_rows(), columns=COLS)
+def test_equipment_tb_cores_stay_tba_even_when_the_iodb_has_junction_box_terminals():
+    df = pd.DataFrame(iodb_rows(with_lcp=True), columns=COLS)
     df["JB TERMINAL +"] = [str(2 * i + 1) for i in range(len(df))]
     df["JB TERMINAL -"] = [str(2 * i + 2) for i in range(len(df))]
     buf = io.BytesIO()
     df.to_excel(buf, sheet_name="IODB", index=False)
-    out, err, rep = run(["mcc_di", "mcc_do", "mov"], data=buf.getvalue())
+    out, err, rep = run(["mcc_di", "mcc_do", "vfd", "mov", "lcp"], data=buf.getvalue())
     assert err is None, err
-    for name in ("MCC DI", "MCC DO"):
+
+    def cores(name, key):
         ws = sheet(out, name)
-        top = next(c for c in range(1, 30) if str(ws.cell(9, c).value).strip().lower() == "tb details at mcc")
-        cols = [c for c in range(top, top + 4) if str(ws.cell(10, c).value) in ("Positive Core", "Negative Core")]
-        values = {ws.cell(r, c).value for r in range(11, ws.max_row + 1) for c in cols if ws.cell(r, 4).value}
-        assert len(cols) == 2 and values == {"TBA"}, (name, values)
-    mov = sheet(out, "MOV")                                                           # MOV terminals still come from the IODB
-    assert any(mov.cell(r, 10).value not in (None, "TBA") for r in range(12, 18))
+        spec = X.SHEETS[key]
+        found = X.header_columns(ws, spec["hdr"])
+        cols, tag = found["end_pos"][:1] + found["end_neg"][:1], found["tag"][0]
+        assert len(cols) == 2, (name, cols)
+        return {ws.cell(r, c).value for r in range(spec["first"], ws.max_row + 1) for c in cols if ws.cell(r, tag).value}
+
+    for name, key in (("MCC DI", "mcc_di"), ("MCC DO", "mcc_do"), ("VFD (iEZ)", "vfd"), ("MOV", "mov")):
+        assert cores(name, key) == {"TBA"}, name
+    assert cores("LCP", "lcp") - {"TBA"}                                              # LCP terminals still come from the IODB
 
 
 def test_spare_rows_are_kept():

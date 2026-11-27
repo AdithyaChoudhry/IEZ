@@ -45,7 +45,7 @@ LISTS = {  # LOOKUPS - the controlled lists the output keeps as in-cell drop-dow
               "5C x 1.5 mm2", "12C x 1.5 mm2", "14C x 1.5 mm2", "16C x 1.5 mm2", "24C x 1.5 mm2", "4P x 1.0 mm2", "6P x 1.0 mm2",
               "12P x 1.0 mm2", "12P x 1.5 mm2", "NA"],
 }
-DESIGN_DEFAULTS = {"max_instruments": 10, "max_main_cables": 1, "design_spare_pct": 0.20}   # COVER!B29:B31 of the template
+DESIGN_DEFAULTS = {"max_instruments": 10, "design_spare_pct": 0.20}   # COVER!B29 / B31 of the original template
 _SPARE_TAGS = re.compile(r"^(SPARES?|SPARE[\s\-_]*\d*|NA|N/A|-+|TBA|TBD|NIL)$", re.I)
 _PLACEHOLDER = re.compile(r"^(TBA|TBD|NA|N/A|-+|NIL)?$", re.I)
 
@@ -566,8 +566,6 @@ def evaluate(jb: dict, cfg: Optional[dict], design: Optional[dict] = None) -> di
     # template checks (COVER design parameters, editable)
     if inst > d["max_instruments"] and category != "SMB":
         warnings.append(f"{inst} instruments exceed the design maximum of {d['max_instruments']} per junction box.")
-    if jb["main_cable_count"] > d["max_main_cables"] and category != "SMB":
-        warnings.append(f"{jb['main_cable_count']} main cables exceed the design maximum of {d['max_main_cables']} per junction box.")
     if pct is not None and pct < d["design_spare_pct"]:
         warnings.append(f"Spare terminals ({pct:.0%}) are below the design spare of {d['design_spare_pct']:.0%}.")
     zones = [z for z in iod.get("area_class", []) if z.upper().startswith("ZONE")]

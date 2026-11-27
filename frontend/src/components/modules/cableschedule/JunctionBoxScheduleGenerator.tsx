@@ -34,7 +34,7 @@ interface Result {
 interface Evaluation { results: Result[]; duplicates: string[]; summary: Record<string, number>; ready: boolean; submission_ready: boolean }
 interface Analysis { generated: any; project_name: string; design: Design; lists: Record<string, string[]>; categories: Record<string, string>;
   analysis: { jbs: JB[]; instrument_total: number; sheets: string[]; notes: string[] }; evaluation: Evaluation }
-interface Design { max_instruments: number; max_main_cables: number; design_spare_pct: number }
+interface Design { max_instruments: number; design_spare_pct: number }
 interface Generated { filename: string; message: string; warnings: number; submission_ready: boolean; missing_for_submission: Record<string, string[]> }
 
 const field = 'w-full border rounded-lg px-2 py-1 text-sm';
@@ -259,9 +259,8 @@ export default function JunctionBoxScheduleGenerator() {
             {design && (
               <details className="mt-3 text-sm" style={{ color: 'var(--t1)' }}>
                 <summary className="cursor-pointer">Design parameters used by the review warnings (from the standard template)</summary>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-2">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-2">
                   <label>Max instruments per JB<input className={field} style={fieldStyle} value={design.max_instruments} onChange={(e) => setDesign({ ...design, max_instruments: Number(e.target.value) || 0 })} /></label>
-                  <label>Max main cables per JB<input className={field} style={fieldStyle} value={design.max_main_cables} onChange={(e) => setDesign({ ...design, max_main_cables: Number(e.target.value) || 0 })} /></label>
                   <label>Design spare terminals (fraction)<input className={field} style={fieldStyle} value={design.design_spare_pct} onChange={(e) => setDesign({ ...design, design_spare_pct: Number(e.target.value) || 0 })} /></label>
                 </div>
               </details>)}

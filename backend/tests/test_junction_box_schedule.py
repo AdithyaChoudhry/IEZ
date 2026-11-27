@@ -159,7 +159,7 @@ def test_uses_the_users_generated_schedule_only(client):
     r = client.post("/api/cable-schedule/jb/analyze", json={"project_id": PID, "generated_id": "old"})
     assert r.status_code == 409 and "newer Cable Schedule" in r.json()["detail"]
     st = client.get("/api/cable-schedule/jb/status", params={"project_id": PID}).json()
-    assert st["generated"]["available"] and st["design"] == {"max_instruments": 10, "max_main_cables": 1, "design_spare_pct": 0.2}
+    assert st["generated"]["available"] and st["design"] == {"max_instruments": 10, "design_spare_pct": 0.2}
 
 
 # ── Tests 2-5: identification and counting ───────────────────────────────────
@@ -188,7 +188,7 @@ def test_branch_and_main_cables_are_unique_physical_cables(client):
     assert res["jb_no"] == "JB-002"                                                 # shown in capitals (two spellings in the schedule)
     assert res["row"]["main_cable_no"] == "MC-2\nMC-3"                             # one line per cable, none dropped
     assert res["row"]["main_cable_type"] == "8PX1.5 Sqmm\n8PX1.5 Sqmm"            # the same type is repeated on the matching line
-    assert any("main cables exceed" in w for w in res["warnings"])
+    assert not any("main cables exceed" in w for w in res["warnings"])   # several main cables are normal
 
 
 def test_same_jb_written_two_ways_is_merged_and_reported(client):

@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from typing import Any, Optional
 
+from .file_handler import code_dtypes
 from .parsed_cache import cached_table
 
 CABLE_SUMMARY_SHEET = "CABLE SUMMARY"
@@ -365,7 +366,15 @@ def inspect_workbook(iodb_bytes: bytes) -> list[dict]:
     return found
 
 
-def locate_cable_source(df, iodb_bytes: bytes | None = None, tag_column: str | None = None):
+def _read_source(iodb_bytes: bytes, sheet: str, header: int, usecols: str):
+    import io
+    import pandas as pd
+    book = pd.ExcelFile(io.BytesIO(iodb_bytes))
+    headings = book.parse(sheet, header=header, usecols=usecols, nrows=0).columns
+    return book.parse(sheet, header=header, usecols=usecols, dtype=code_dtypes(headings))
+
+
+def locate_cable_source(df, iodb_bytes: bytes | None = None, tag_column: str | None = None, extra_columns: tuple = ()):
     """
     (DataFrame holding the cable columns, info about where it came from).
 
@@ -395,6 +404,7 @@ def locate_cable_source(df, iodb_bytes: bytes | None = None, tag_column: str | N
         letters = [cand["columns"][f] for f in cand["columns"]]
         wanted = [tag_column] if tag_column else []
         wanted += [a for aliases in _TAG_ALIASES.values() for a in aliases]   # cable tags: one physical cable counted once
+        wanted += list(extra_columns)                                         # e.g. the columns of the engineering scope filters
         for name in wanted:
             letter = next((lt for h, lt in cand["letters_by_header"].items() if _norm_col(h) == _norm_col(name)), None)
             if letter and letter not in letters:
@@ -404,8 +414,7 @@ def locate_cable_source(df, iodb_bytes: bytes | None = None, tag_column: str | N
             import pandas as pd
             frame, _ = cached_table(                    # the same file and columns are read once (server memory)
                 f"cable-source:{cand['sheet']}:{cand['header_row']}:{','.join(letters)}", iodb_bytes,
-                lambda: (pd.read_excel(io.BytesIO(iodb_bytes), sheet_name=cand["sheet"], header=cand["header_row"] - 1,
-                                       usecols=",".join(letters)), None))
+                lambda: (_read_source(iodb_bytes, cand["sheet"], cand["header_row"] - 1, ",".join(letters)), None))
             frame = frame.dropna(how="all")
             frame.index = frame.index + (cand["header_row"] - 1)     # index + 2 == Excel row number
             return frame, cand

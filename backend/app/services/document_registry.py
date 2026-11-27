@@ -518,6 +518,7 @@ def _run_generator(module: str, src: bytes, tmpl: bytes | None, params: dict
             io.BytesIO(src), io.BytesIO(tmpl),
             params.get("jb_column") or "JUNCTION BOX", params.get("tag_column") or "TAG NO",
             selected_jbs=params.get("selected_jbs") or None,
+            scope=params.get("scope") or {},                       # the stored filters; deleted tags excluded by default
         )
         return out, name, err, None
     if module == "loop_wiring":

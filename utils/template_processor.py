@@ -205,6 +205,9 @@ def process_cable_schedule(
     output_mode: str = "WITH_SUMMARY",
     extra_sheets: list | None = None,
     extra_report: dict | None = None,
+    terminals=None,                       # utils.io_terminals.Matcher (I/O Assignment)
+    scope: dict | None = None,            # {"areas", "area_codes", "statuses"} (utils.cable_scope); None = no filtering
+    scope_report: dict | None = None,     # filled with the scope object and its counts
     include_schedule: bool = True,
     selected_jbs: list | None = None,
     header_meta: dict | None = None,
@@ -235,6 +238,22 @@ def process_cable_schedule(
     if err:
         return None, None, f"Failed to read IODB: {err}"
 
+    # engineering scope: the IODB rows are filtered before anything is built from them
+    chosen = None
+    if scope is not None:
+        from utils.cable_scope import Scope, ScopeError
+        try:
+            chosen = Scope(df, scope)
+            eligible = chosen.apply(df)
+        except ScopeError as exc:
+            return None, None, str(exc)
+        if eligible.empty:
+            return None, None, ("No IODB records match the selected area, area code and tag status. "
+                                "Change the filters; no Cable Schedule was generated.")
+        if scope_report is not None:
+            scope_report.update(scope=chosen, full=df, eligible=eligible)
+        df = eligible
+
     # Read raw bytes so the generator can build a writable output workbook
     try:
         template_file.seek(0)
@@ -254,8 +273,8 @@ def process_cable_schedule(
     return generate_cable_schedule(
         df, wb, jb_column, tag_column, progress_callback,
         template_bytes=tmpl_bytes, iodb_bytes=iodb_raw, output_mode=output_mode,
-        extra_sheets=extra_sheets, extra_report=extra_report, include_schedule=include_schedule,
-        selected_jbs=selected_jbs, header_meta=header_meta,
+        extra_sheets=extra_sheets, extra_report=extra_report, include_schedule=include_schedule, terminals=terminals,
+        selected_jbs=selected_jbs, header_meta=header_meta, scope=chosen,
     )
 
 

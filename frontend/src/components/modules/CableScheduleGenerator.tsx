@@ -13,7 +13,8 @@ import Alert from '../ui/Alert';
 import FileUploadCard from '../ui/FileUploadCard';
 import SharedIodbCard from '../ui/SharedIodb';
 import OutputWorkbookOptions, { type OutputMode } from '../ui/OutputWorkbookOptions';
-import ExtraCableSheets from './cableschedule/ExtraCableSheets';
+import ExtraCableSheets, { appendTerminals, TerminalSummary, type TerminalReport, type TerminalSource } from './cableschedule/ExtraCableSheets';
+import ScopeFilters, { DEFAULT_SCOPE, scopeParam, type ScopeSelection, type ScopeSummary } from './cableschedule/ScopeFilters';
 import DrumScheduleGenerator from './cableschedule/DrumScheduleGenerator';
 import GlandQuantityGenerator from './cableschedule/GlandQuantityGenerator';
 import LugQuantityGenerator from './cableschedule/LugQuantityGenerator';
@@ -43,6 +44,8 @@ interface GenerateResponse {
   output_mode?: OutputMode;
   sheets?: string[];   // sheets of the generated workbook, read from the output file
   extra_sheets?: string[] | null;
+  terminals?: TerminalReport | null;
+  scope?: { selection: ScopeSelection; summary: ScopeSummary; notes: string[] } | null;
   extra_warnings?: string[] | null;
   cover?: AppliedCover | null;
   header?: { values: Record<string, string>; sources: Record<string, string>; sheets: Record<string, { mode: string }> } | null;
@@ -64,7 +67,12 @@ export default function CableScheduleGenerator() {
   const [view, setView] = useState<'schedule' | 'drum' | 'gland' | 'lug' | 'jb' | 'complete'>('schedule');
   const [includeSchedule, setIncludeSchedule] = useState(true);
   const [extraSheets, setExtraSheets] = useState<string[]>([]);
+  const [terminals, setTerminals] = useState<TerminalSource>({ file: null, equipment: 'device', panel: 'none' });
   const [coverTemplate, setCoverTemplate] = useState<File | null>(null);
+  // AREA / AREA CODE / STATUS scope of the next generation; `eligible` = records it leaves (null while being counted)
+  const [scope, setScope] = useState<ScopeSelection>(DEFAULT_SCOPE);
+  const [eligible, setEligible] = useState<number | null>(null);
+  const changeScope = (s: ScopeSelection) => { setScope(s); setJbSummary(null); setResult(null); };
 
   const [loadingColumns, setLoadingColumns] = useState(false);
   const [loadingPreview, setLoadingPreview] = useState(false);
@@ -121,6 +129,7 @@ export default function CableScheduleGenerator() {
     formData.append('jb_column', jbColumn);
     formData.append('tag_column', tagColumn);
     formData.append('output_mode', cableOutputMode);
+    formData.append('scope_filters', scopeParam(scope));
 
     try {
       const response = await api.post<JBSummaryResponse>('/cable-schedule/preview', formData, {
@@ -188,6 +197,8 @@ export default function CableScheduleGenerator() {
     formData.append('output_mode', cableOutputMode);
     formData.append('extra_sheets', extraSheets.join(','));
     formData.append('include_schedule', String(includeSchedule));
+    appendTerminals(formData, terminals);
+    formData.append('scope_filters', scopeParam(scope));
     if (includeSchedule && jbSummary && selectedJbs.length < jbSummary.length) formData.append('selected_jbs', JSON.stringify(selectedJbs));
     if (coverTemplate) formData.append('cover_template_file', coverTemplate);
     if (overrides && Object.keys(overrides).length) {
@@ -260,6 +271,18 @@ export default function CableScheduleGenerator() {
       link.remove();
     } catch (err: any) {
       setError(err.response?.data?.detail || 'Download failed');
+    }
+  };
+
+  const handleDiagnostics = async () => {
+    try {
+      const response = await api.get('/cable-schedule/diagnostics', { responseType: 'blob' });
+      const link = document.createElement('a');
+      link.href = window.URL.createObjectURL(new Blob([response.data]));
+      link.setAttribute('download', (result?.filename || 'Cable_Schedule.xlsx').replace(/\.[^.]+$/, '') + '_Diagnostics.xlsx');
+      document.body.appendChild(link); link.click(); link.remove();
+    } catch (err: any) {
+      setError(err.response?.data?.detail || 'The diagnostics could not be downloaded');
     }
   };
 
@@ -375,6 +398,7 @@ export default function CableScheduleGenerator() {
             setColumns([]);
             setJbSummary(null);
             setResult(null);
+            setScope(DEFAULT_SCOPE);
           }}
         >
           <Button onClick={handleLoadColumns} disabled={!iodbFile} loading={loadingColumns} fullWidth className="mt-3 bg-blue-600 hover:bg-blue-700">
@@ -391,7 +415,12 @@ export default function CableScheduleGenerator() {
         />
       </div>
 
+      <ScopeFilters iodbFile={iodbFile} value={scope} onChange={changeScope} onEligible={setEligible} />
+
       <ExtraCableSheets
+        scope={scopeParam(scope)}
+        terminals={terminals}
+        onTerminalsChange={(t) => { setTerminals(t); setResult(null); }}
         iodbFile={iodbFile}
         includeSchedule={includeSchedule}
         onIncludeScheduleChange={changeIncludeSchedule}
@@ -413,7 +442,7 @@ export default function CableScheduleGenerator() {
 
       {extraOnly && (
         <Card title="Generate">
-          <Button onClick={handleGenerate} disabled={!iodbFile} loading={generating} size="lg" fullWidth className="text-lg py-4">
+          <Button onClick={handleGenerate} disabled={!iodbFile || !eligible} loading={generating} size="lg" fullWidth className="text-lg py-4">
             <Cable className="w-6 h-6" />
             {generating ? 'Generating...' : `Generate ${extraSheets.join(' + ')}`}
           </Button>
@@ -506,7 +535,7 @@ export default function CableScheduleGenerator() {
           {/* Generate */}
           <Button
             onClick={handleGenerate}
-            disabled={selectedJbs.length === 0}
+            disabled={selectedJbs.length === 0 || !eligible}
             loading={generating}
             size="lg"
             fullWidth
@@ -550,6 +579,15 @@ export default function CableScheduleGenerator() {
                   {result.extra_warnings.map((w, i) => <li key={i}>{w}</li>)}
                 </ul>
               )}
+              {result.scope && (
+                <div className="text-sm text-green-800 mb-3" data-testid="result-scope">
+                  <p>Area: {result.scope.selection.areas?.join(', ') || 'All'} · Area code: {result.scope.selection.area_codes?.join(', ') || 'All'} ·
+                    Tag status: {result.scope.selection.statuses?.join(', ') || 'All except deleted'}</p>
+                  <p>Records used: {result.scope.summary.eligible} of {result.scope.summary.total}</p>
+                  <button className="underline" onClick={handleDiagnostics}>Download diagnostics (excluded records, shared cables, terminal trace)</button>
+                </div>
+              )}
+              {result.terminals && <div className="mb-4"><TerminalSummary report={result.terminals} /></div>}
               <p className="text-sm text-green-800 mb-2 font-mono">{result.filename}</p>
               <DeliverableDownloads module="cable_schedule" filename={result.filename} cover={result.cover} onExcel={handleDownload} />
               <p className="text-sm text-green-800 mt-3">

@@ -24,6 +24,10 @@ class CableScheduleGenerateResponse(BaseModel):
     extra_sheets: Optional[List[str]] = None
     extra_stats: Optional[List[Dict[str, Any]]] = None
     extra_warnings: Optional[List[str]] = None
+    # terminal matching summary when an I/O Assignment was uploaded (utils.io_terminals)
+    terminals: Optional[Dict[str, Any]] = None
+    # AREA / AREA CODE / STATUS selection applied, record counts and notes (utils.cable_scope)
+    scope: Optional[Dict[str, Any]] = None
     # Centralised cover sheet applied to the deliverable (status, MDL document, revision, draft)
     cover: Optional[Dict[str, Any]] = None
     # Document header of the worksheets: the values written, where each came from (cover | manual) and how each sheet was built

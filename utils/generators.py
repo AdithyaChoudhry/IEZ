@@ -584,6 +584,8 @@ def generate_cable_schedule(
     output_mode: str = "WITH_SUMMARY",
     extra_sheets: list | None = None,
     extra_report: dict | None = None,
+    terminals=None,                       # utils.io_terminals.Matcher: terminal details for the extra sheets
+    scope=None,                           # utils.cable_scope.Scope: `df` is already filtered; the cable source is filtered here
     include_schedule: bool = True,
     selected_jbs: list | None = None,
     header_meta: dict | None = None,
@@ -1018,7 +1020,8 @@ def generate_cable_schedule(
         redundant_rows: set = set()
         if extra_sheets:
             from utils.cable_schedule_extra import add_extra_sheets, redundant_main_cable_rows
-            _report = add_extra_sheets(out_wb, df, list(extra_sheets), target_sheet, list(template_wb.sheetnames))
+            _report = add_extra_sheets(out_wb, df, list(extra_sheets), target_sheet, list(template_wb.sheetnames),
+                                       terminals=terminals)
             redundant_rows = redundant_main_cable_rows(df, list(extra_sheets))
             if extra_report is not None:
                 extra_report.update(_report)
@@ -1091,7 +1094,10 @@ def generate_cable_schedule(
             try:
                 from utils.cable_summary import (build_cable_summary, append_cable_summary_sheet,
                                                  locate_cable_source, formula_hint_for)
-                _src_df, _info = locate_cable_source(df, iodb_bytes, tag_column)
+                _src_df, _info = locate_cable_source(df, iodb_bytes, tag_column,
+                                                     extra_columns=tuple(scope.needed_columns) if scope is not None else ())
+                if scope is not None and scope.active and _src_df is not df:
+                    _src_df = scope.apply(_src_df)           # the same rows are left out here as of every worksheet
                 if redundant_rows:      # a main cable shared by several signal rows is one physical cable
                     from utils.cable_summary import resolve_cable_fields
                     _mt = resolve_cable_fields(_src_df.columns)["MAIN_CABLE_TYPE"]
@@ -1115,6 +1121,8 @@ def generate_cable_schedule(
                     print(_line, file=sys.stderr)
             except Exception as _exc:
                 import sys
+                if scope is not None and scope.active:       # a summary of the wrong records must not be delivered silently
+                    raise
                 print(f"[Cable Summary] not added: {_exc}", file=sys.stderr)
         else:
             drop_sheet(out_wb, CABLE_SUMMARY_SHEET)        # no stale / template summary in the output

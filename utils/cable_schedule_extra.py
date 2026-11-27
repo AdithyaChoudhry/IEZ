@@ -752,6 +752,8 @@ def build_sheet(ref_wb, key: str, recs: list[Rec], info: dict) -> tuple[Any, dic
                             val = _adjust(val, src_row, rr)
                     ws.cell(rr, c).value = val
                 vals = _row_values(rec, g)
+                if info.get("terminals") is not None:           # I/O Assignment: each signal matched on its own, before merging
+                    info["terminals"].apply(key, rec, vals)
                 for fld, c in fcol.items():
                     if fld in vals and vals[fld] is not None:
                         ws.cell(rr, c).value = vals[fld]
@@ -1046,7 +1048,8 @@ def project_info(wb, schedule_sheet: Optional[str]) -> dict:
     return info
 
 
-def add_extra_sheets(out_wb, df, selected: list[str], schedule_sheet: Optional[str], template_names: list[str]) -> dict:
+def add_extra_sheets(out_wb, df, selected: list[str], schedule_sheet: Optional[str], template_names: list[str],
+                     terminals=None) -> dict:
     """
     Append the selected sheets to `out_wb`, right after the schedule sheet (before any CABLE SUMMARY).
     Raises ExtraSheetError when a selected sheet cannot be built. Returns {"sheets": [names], "stats": [...],
@@ -1061,6 +1064,8 @@ def add_extra_sheets(out_wb, df, selected: list[str], schedule_sheet: Optional[s
     avail = availability(df)
     titles = sheet_titles(template_names, selected)
     info = project_info(out_wb, schedule_sheet)
+    if terminals is not None:                      # utils.io_terminals.Matcher
+        info = {**info, "terminals": terminals}
     names: list[str] = []
     stats: list[dict] = []
     warnings: list[str] = []
@@ -1088,10 +1093,14 @@ def add_extra_sheets(out_wb, df, selected: list[str], schedule_sheet: Optional[s
         st["sheet"] = titles[key]
         stats.append(st)
         warnings += [f"{SHEETS[key]['label']}: {w}" for w in st["warnings"]]
-    return {"sheets": names, "stats": stats, "warnings": warnings}
+    result = {"sheets": names, "stats": stats, "warnings": warnings}
+    if terminals is not None:
+        result["terminals"] = terminals.report({k: v["label"] for k, v in SHEETS.items()})
+        result["warnings"] = warnings + [f"I/O Assignment: {w}" for w in result["terminals"]["warnings"]]
+    return result
 
 
-def preview(df, selected: list[str], max_rows: int = 40) -> dict:
+def preview(df, selected: list[str], max_rows: int = 40, terminals=None) -> dict:
     """What would be generated, from the real data: counts, warnings and the first rows of each sheet."""
     recs, _ = normalize(df)
     parts = split_records(recs)
@@ -1113,7 +1122,15 @@ def preview(df, selected: list[str], max_rows: int = 40) -> dict:
                                                   "cable": show(g.tag), "cable_size": show(g.ctype),
                                                   "signal": rec.io, "device": device_key(rec)})
         out.append(entry)
-    return {"sheets": out}
+        if terminals is not None and a["available"]:              # the same matching the generation will do
+            for block in plan_blocks(key, parts[key]):
+                for g in block.groups:
+                    for rec in g.recs:
+                        terminals.apply(key, rec, _row_values(rec, g))
+    result = {"sheets": out}
+    if terminals is not None:
+        result["terminals"] = terminals.report({k: v["label"] for k, v in SHEETS.items()})
+    return result
 
 
 def redundant_main_cable_rows(df, selected: list[str]) -> set[int]:

@@ -39,6 +39,7 @@ from utils import cable_header_v3 as HV
 router = APIRouter(prefix="/cable-schedule", tags=["Cable Schedule"])
 
 cable_schedule_cache: dict = {}
+cable_diagnostics: dict = {}          # user id -> the diagnostics of the last generation
 
 # The last SUCCESSFULLY generated Cable Schedule per (user, project): the single input of the Gland Quantity, Cable Lug
 # Quantity and Drum Schedule generators (they read it here, server side - the bytes never go back to the browser).
@@ -118,7 +119,7 @@ def generated_meta(g: Optional[dict]) -> dict:
         return {"available": False, "message": NOT_GENERATED}
     return {"available": True, "id": g["id"], "filename": g["filename"], "generated_at": g["generated_at"],
             "project_id": g["project_id"] or None, "sheets": g["sheets"], "iodb_filename": g["iodb_filename"],
-            "selected_jbs": len(g["selected_jbs"]) if g["selected_jbs"] else None}
+            "selected_jbs": len(g["selected_jbs"]) if g["selected_jbs"] else None, "scope": g.get("scope")}
 
 
 @router.post("/columns", response_model=ColumnsResponse)
@@ -143,6 +144,7 @@ async def preview_jb_summary(
     file: UploadFile = File(...),
     jb_column: str = Form(...),
     tag_column: str = Form(...),
+    scope_filters: str = Form(""),
     current_user: User = Depends(get_current_user),
 ):
     """Junction boxes with ALL their tags (IODB order) - exactly the rows the Instrument Cable Schedule writes."""
@@ -152,6 +154,7 @@ async def preview_jb_summary(
     df, err = read_iodb(io.BytesIO(file_bytes))
     if err:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=err)
+    df = _scoped(df, scope_filters)
     try:
         rows = jb_groups(df, jb_column, tag_column)
     except ValueError as e:
@@ -201,18 +204,94 @@ def _extra_frame(iodb_bytes: bytes):
     return df
 
 
+def _scope_selection(value: str) -> dict:
+    """The request's AREA / AREA CODE / STATUS selection (JSON); {} = defaults (every area, deleted tags excluded)."""
+    from utils.cable_scope import ScopeError, parse
+    try:
+        raw = json.loads(value) if (value or "").strip() else {}
+        if not isinstance(raw, dict):
+            raise ValueError
+        parse(raw)
+    except ScopeError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid filter selection.")
+    return raw
+
+
+def _scoped(df, scope_filters: str):
+    """The eligible rows of an IODB table for the request's selection."""
+    from utils.cable_scope import Scope, ScopeError
+    selection = _scope_selection(scope_filters)
+    try:
+        return Scope(df, selection).apply(df)
+    except ScopeError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@router.post("/scope")
+@off_main_loop
+async def engineering_scope(
+    iodb_file: UploadFile = File(...),
+    scope_filters: str = Form(""),
+    current_user: User = Depends(get_current_user),
+):
+    """The AREA / AREA CODE / STATUS values of this IODB and the record counts of the current selection."""
+    from utils.cable_scope import Scope, ScopeError, report
+    selection = _scope_selection(scope_filters)
+    df = _extra_frame(trim_empty_tail(await iodb_file.read()))
+    try:
+        chosen = Scope(df, selection)
+        return {**chosen.options(), **report(chosen, df)}
+    except ScopeError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@router.get("/diagnostics")
+async def download_diagnostics(current_user: User = Depends(get_current_user)):
+    """Scope, excluded records, shared cables and terminal trace of the user's last generation (not a deliverable)."""
+    cached = cable_diagnostics.get(current_user.id)
+    if not cached:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Generate a Cable Schedule first.")
+    from utils.cable_scope import diagnostics_workbook
+    data = await run_in_threadpool(diagnostics_workbook, cached["info"])
+    return StreamingResponse(io.BytesIO(data), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                             headers={"Content-Disposition": f"attachment; filename={cached['filename']}"})
+
+
 @router.post("/extra/availability")
 @off_main_loop
 async def extra_sheet_availability(
     iodb_file: UploadFile = File(...),
+    scope_filters: str = Form(""),
     current_user: User = Depends(get_current_user),
 ):
     """Which of MCC DI / MCC DO / VFD / MOV / LCP can be built from this IODB (counts, warnings, reasons)."""
     from utils.cable_schedule_extra import ExtraSheetError, availability
-    df = _extra_frame(trim_empty_tail(await iodb_file.read()))
+    df = _scoped(_extra_frame(trim_empty_tail(await iodb_file.read())), scope_filters)
     try:
         return availability(df)
     except ExtraSheetError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+async def _terminal_matcher(upload: Optional[UploadFile], options: str):
+    """The optional I/O Assignment of this request. An invalid file is reported, never ignored."""
+    if upload is None:
+        return None
+    from utils.io_terminals import AssignmentError, Matcher, read_assignment
+    name = (upload.filename or "").lower()
+    if not name.endswith((".xlsx", ".xlsm")):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Upload the I/O Assignment as an Excel .xlsx workbook.")
+    try:
+        chosen = json.loads(options) if options.strip() else {}
+        if not isinstance(chosen, dict):
+            raise ValueError
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid terminal source selection.")
+    try:
+        return Matcher(await run_in_threadpool(read_assignment, await upload.read()), chosen)
+    except AssignmentError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
@@ -221,14 +300,18 @@ async def extra_sheet_availability(
 async def extra_sheet_preview(
     iodb_file: UploadFile = File(...),
     extra_sheets: str = Form(...),
+    io_assignment_file: Optional[UploadFile] = File(None),
+    terminal_options: str = Form(""),
+    scope_filters: str = Form(""),
     current_user: User = Depends(get_current_user),
 ):
     """Real preview of the selected extra sheets (rows come from the IODB, nothing is stored)."""
     from utils.cable_schedule_extra import ExtraSheetError, preview
     extras = _parse_extras(extra_sheets)
-    df = _extra_frame(trim_empty_tail(await iodb_file.read()))
+    terminals = await _terminal_matcher(io_assignment_file, terminal_options)
+    df = _scoped(_extra_frame(trim_empty_tail(await iodb_file.read())), scope_filters)
     try:
-        return preview(df, extras)
+        return preview(df, extras, terminals=terminals)
     except ExtraSheetError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
@@ -343,6 +426,9 @@ async def generate_cable_schedule(
     cover_template_file: Optional[UploadFile] = File(None),  # optional custom cover sheet template (default: iEZ cover sheet)
     header_overrides: str = Form(""),          # JSON {field: value}: only the header fields the cover could not supply, confirmed by the user
     header_fingerprint: str = Form(""),        # from /header-metadata: ties header_overrides to this project's cover as the user saw it
+    io_assignment_file: Optional[UploadFile] = File(None),   # optional: terminal details for MCC / VFD / MOV / LCP
+    terminal_options: str = Form(""),          # JSON {"equipment": "device"|"ts", "panel": "none"|"ts"}
+    scope_filters: str = Form(""),             # JSON {"areas", "area_codes", "statuses"}; empty: all areas, deleted excluded
     current_user: User = Depends(get_current_user),
 ):
     try:
@@ -388,6 +474,9 @@ async def generate_cable_schedule(
         raise _incomplete(resolution, fingerprint)
 
     extra_report: dict = {}
+    terminals = await _terminal_matcher(io_assignment_file, terminal_options)
+    selection = _scope_selection(scope_filters)
+    scoped: dict = {}
     # CPU-bound: run in the worker pool so one long generation does not freeze the server for every other request
     out_bytes, filename, err = await run_in_threadpool(
         process_cable_schedule,
@@ -401,14 +490,20 @@ async def generate_cable_schedule(
         include_schedule=include_schedule,
         selected_jbs=jbs,
         header_meta=resolution.values,
+        terminals=terminals,
+        scope=selection,
+        scope_report=scoped,
     )
 
-    reg_params = {"jb_column": jb_column, "tag_column": tag_column, "output_mode": output_mode}
+    reg_params = {"jb_column": jb_column, "tag_column": tag_column, "output_mode": output_mode, "scope": selection}
     if jbs:
         reg_params["selected_jbs"] = jbs
     if extras:
         reg_params["extra_sheets"] = extras
         reg_params["include_schedule"] = include_schedule
+    if terminals is not None and not extras:
+        extra_report["warnings"] = list(extra_report.get("warnings") or []) + [
+            "I/O Assignment: terminal details apply only to the MCC DI, MCC DO, VFD, MOV and LCP sheets; none was selected."]
     if err:
         register_safe("failure", project_id=project_id, module="cable_schedule", user=current_user.username,
                       error=err, source_bytes=iodb_bytes, source_filename=iodb_file.filename or "IODB.xlsx",
@@ -429,11 +524,34 @@ async def generate_cable_schedule(
         planned = [cover["cover_sheet"]] + planned
     if cover.get("applied") and extra_report.get("warnings"):          # the project cover replaced the template's cover: the header follows it
         extra_report["warnings"] = [w for w in extra_report["warnings"] if not str(w).startswith("COVERSHEET:")]
+    scope_info, snapshot_iodb = None, iodb_bytes
+    if scoped:
+        from utils.cable_scope import excluded_rows, report, row_scope, scoped_iodb
+        chosen, full = scoped["scope"], scoped["full"]
+        scope_info = report(chosen, full)
+        suffix = chosen.file_suffix()
+        if suffix:                                    # area / historical downloads stay apart; the document number is the cover's
+            stem, dot, ext = filename.rpartition(".")
+            filename = f"{stem}_{suffix}{dot}{ext}" if dot else f"{filename}_{suffix}"
+        if chosen.active:                             # Gland / Lug / Drum / JB generators then work on the same records
+            snapshot_iodb = await run_in_threadpool(scoped_iodb, scoped["eligible"])
+        where = row_scope(chosen, full)
+        trace = []
+        for t in (terminals.trace if terminals is not None else []):
+            area, code, state = where.get(t["iodb_row"], ("", "", ""))
+            trace.append([t["tag"], t["iodb_row"], area, code, state, t["sheet"], t["field"], t["endpoint"], "IO_ASSIGNMENT",
+                          t["source_row"], t["source_column"], t["value"], t["result"]])
+        cable_diagnostics[current_user.id] = {
+            "filename": filename.rsplit(".", 1)[0] + "_Diagnostics.xlsx",
+            "info": {**scope_info, "excluded": excluded_rows(chosen, full), "trace": trace,
+                     "notes": scope_info["notes"] + list((extra_report.get("terminals") or {}).get("warnings") or [])}}
+        extra_report["warnings"] = list(extra_report.get("warnings") or []) + scope_info["notes"]
     cache_key = f"{current_user.id}_cable_schedule"
     cable_schedule_cache[cache_key] = {"bytes": out_bytes, "filename": filename}
     snap = {"id": uuid.uuid4().hex, "bytes": out_bytes, "filename": filename, "project_id": _project_key(project_id),
             "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "sheets": planned,
-            "iodb_bytes": iodb_bytes, "iodb_filename": iodb_file.filename or "IODB.xlsx", "selected_jbs": jbs}
+            "iodb_bytes": snapshot_iodb, "iodb_filename": iodb_file.filename or "IODB.xlsx", "selected_jbs": jbs,
+            "scope": (scope_info or {}).get("selection")}
     with _generated_lock:
         _generated[(current_user.id, _project_key(project_id))] = snap
         try:
@@ -454,6 +572,8 @@ async def generate_cable_schedule(
                                          extra_sheets=extra_report.get("sheets") or None,
                                          extra_stats=extra_report.get("stats") or None,
                                          extra_warnings=extra_report.get("warnings") or None, cover=cover,
+                                         terminals=extra_report.get("terminals"),
+                                         scope=scope_info,
                                          header={"values": resolution.values, "sources": {f.key: f.source for f in resolution.fields},
                                                  "sheets": extra_report.get("header") or {}, "fingerprint": fingerprint})
 

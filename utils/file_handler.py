@@ -13,6 +13,14 @@ import openpyxl
 from .parsed_cache import cached_table
 
 
+_CODE_HEADERS = {"AREA", "AREACODE", "AREANAME", "PLANTAREA"}
+
+
+def code_dtypes(columns) -> dict:
+    """Area names and codes are identifiers: read them as written, so a text code '001' does not become the number 1."""
+    return {c: object for c in columns if re.sub(r"[^A-Z0-9]", "", str(c).upper()) in _CODE_HEADERS}
+
+
 _PLAIN_TAG_HEADERS = {"TAG", "TAGNO", "TAGNUMBER", "TAGNUMMBER", "TAGNONEW", "TAGNUMBERNEW"}
 
 
@@ -64,7 +72,9 @@ def _parse_iodb(uploaded_file, revised_tag: bool = True) -> tuple[pd.DataFrame |
         uploaded_file.seek(0)
         # First try a direct (case-sensitive) read for speed
         try:
-            df = pd.read_excel(uploaded_file, sheet_name="IODB", header=0)
+            book = pd.ExcelFile(uploaded_file)
+            headings = book.parse("IODB", header=0, nrows=0).columns
+            df = book.parse("IODB", header=0, dtype=code_dtypes(headings))
             uploaded_file.seek(0)
             df = df.dropna(how="all").reset_index(drop=True)
             return (add_revised_tag(df) if revised_tag else df), None
@@ -133,7 +143,7 @@ def _parse_iodb(uploaded_file, revised_tag: bool = True) -> tuple[pd.DataFrame |
                     # if candidate has tag header, it's the best possible — stop early
                     if has_tag_cand:
                         break
-        df = xls.parse(match, header=header)
+        df = xls.parse(match, header=header, dtype=code_dtypes(xls.parse(match, header=header, nrows=0).columns))
 
         df = df.dropna(how="all").reset_index(drop=True)
         return (add_revised_tag(df) if revised_tag else df), None

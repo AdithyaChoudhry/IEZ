@@ -27,6 +27,7 @@ import io
 import json
 import re
 from dataclasses import dataclass, field, replace
+import threading
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Optional
@@ -88,14 +89,20 @@ def template_bytes(t: dict) -> bytes:
     return (LIB_DIR / t["file"]).read_bytes()
 
 
-@lru_cache(maxsize=16)
+# Every library workbook stays parsed: the Engineering Guide look-ups walk the whole library, so a cache smaller than the
+# library re-reads all of it again and again (the first request then runs past the proxy's 120-second limit).
+@lru_cache(maxsize=None)
 def _sheets_cached(template_id: str, mtime: float) -> dict[str, SheetModel]:
     t = entry(template_id)
     return read_workbook(template_bytes(t), t["file"])
 
 
+_PARSE_LOCK = threading.RLock()      # the start-up warm-up and the first requests must not parse the same workbook twice
+
+
 def sheets_of(t: dict) -> dict[str, SheetModel]:
-    return _sheets_cached(t["id"], (LIB_DIR / t["file"]).stat().st_mtime)
+    with _PARSE_LOCK:
+        return _sheets_cached(t["id"], (LIB_DIR / t["file"]).stat().st_mtime)
 
 
 # ── sheet roles ───────────────────────────────────────────────────────────────

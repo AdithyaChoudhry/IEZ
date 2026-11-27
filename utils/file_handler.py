@@ -62,43 +62,38 @@ def read_iodb(uploaded_file) -> tuple[pd.DataFrame | None, str | None]:
             return None, "Worksheet named 'IODB' not found. Please ensure the IODB sheet is present or contains a 'Tag' column."
 
         # Read the detected sheet with header detection: sometimes the real
-        # header row is not the first row (leading notes/metadata). Try
-        # header=0 first, then probe header rows up to 10 to find a sensible
-        # header that contains a Tag-like column or has non-empty column names.
-        uploaded_file.seek(0)
-        df = pd.read_excel(uploaded_file, sheet_name=match, header=0)
+        # header row is not the first row (leading notes/metadata). The header
+        # row is chosen from a short sample of the sheet, and the full sheet is
+        # then read once - a large IODB takes many seconds per full read.
+        tag_keys = ('tag no', 'tag', 'tag number', 'tag_number', 'tag_nummber')
+
+        def sample(hr):
+            cols = list(xls.parse(match, header=hr, nrows=20).columns)
+            has_tag = any(k in [str(c).strip().lower() for c in cols] for k in tag_keys)
+            named = sum(1 for c in cols if not str(c).startswith('Unnamed') and str(c).strip() != '')
+            return cols, has_tag, named
+
+        header = 0
+        cols, has_tag, _ = sample(0)
         # If columns are mostly unnamed or the standard tag column is missing,
         # attempt to detect header row.
-        cols = [str(c) for c in df.columns]
-        unnamed_count = sum(1 for c in cols if c.startswith('Unnamed'))
-        tag_keys = ('tag no', 'tag', 'tag number', 'tag_number', 'tag_nummber')
-        has_tag = any(k in [str(c).strip().lower() for c in cols] for k in tag_keys)
-
+        unnamed_count = sum(1 for c in cols if str(c).startswith('Unnamed'))
         if unnamed_count > max(1, len(cols) // 2) or not has_tag:
             # probe header rows and pick the best candidate by score.
             # Score = 100 if contains tag-like header + number of non-unnamed columns.
             best_score = -1
-            best_df = df
             for hr in range(0, 11):
                 try:
-                    uploaded_file.seek(0)
-                    cand = pd.read_excel(uploaded_file, sheet_name=match, header=hr)
-                    uploaded_file.seek(0)
+                    _, has_tag_cand, named = sample(hr)
                 except Exception:
-                    uploaded_file.seek(0)
                     continue
-                cand_cols_raw = list(cand.columns)
-                cand_cols = [str(c).strip().lower() for c in cand_cols_raw]
-                n_non_unnamed = sum(1 for c in cand_cols_raw if not str(c).startswith('Unnamed') and str(c).strip() != '')
-                has_tag_cand = any(k in cand_cols for k in tag_keys)
-                score = (100 if has_tag_cand else 0) + n_non_unnamed
+                score = (100 if has_tag_cand else 0) + named
                 if score > best_score:
-                    best_score = score
-                    best_df = cand
+                    best_score, header = score, hr
                     # if candidate has tag header, it's the best possible — stop early
                     if has_tag_cand:
                         break
-            df = best_df
+        df = xls.parse(match, header=header)
 
         df = df.dropna(how="all").reset_index(drop=True)
         return df, None

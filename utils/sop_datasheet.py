@@ -274,6 +274,7 @@ def _read_xlsx(file_bytes: bytes) -> dict[str, SheetModel]:
 
     wb = load_workbook(io.BytesIO(file_bytes), data_only=True)
     out: dict[str, SheetModel] = {}
+    seen: dict[tuple, tuple] = {}                       # cell format -> (fill rgb, style descriptor)
     for ws in wb.worksheets:
         values: dict[tuple[int, int], str] = {}
         fills: dict[tuple[int, int], tuple | None] = {}
@@ -285,10 +286,15 @@ def _read_xlsx(file_bytes: bytes) -> dict[str, SheetModel]:
                 r, c = cell.row - 1, cell.column - 1
                 if cell.value not in (None, ""):
                     values[(r, c)] = str(cell.value)
-                rgb = _openpyxl_fill_rgb(cell)
+                # one fill / style descriptor per distinct cell format (a template has a few hundred formats over
+                # tens of thousands of cells); the descriptors are shared and only ever read
+                st = getattr(cell, "_style", None)
+                key = tuple(st) if st is not None else ()    # a cell inside a merge may carry no format of its own
+                if key not in seen:
+                    seen[key] = (_openpyxl_fill_rgb(cell), _openpyxl_style(cell))
+                rgb, styles[(r, c)] = seen[key]
                 if rgb:
                     fills[(r, c)] = rgb
-                styles[(r, c)] = _openpyxl_style(cell)
 
         merged = []
         for mr in ws.merged_cells.ranges:

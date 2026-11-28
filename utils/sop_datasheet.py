@@ -537,85 +537,30 @@ def _find_column(df: pd.DataFrame, keys: tuple[str, ...]) -> str | None:
     return None
 
 
-_BLANK_VALS = {"", "nan", "none"}
-
-
-def _apply_ai_subsystem_filter(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Retain only rows where:
-      SIGNAL I/O TYPE == "AI"  (case-insensitive)
-      AND SUB SYSTEM contains "-"
-    Falls back to the full dataframe if either column is not found.
-    """
-    signal_col = _find_column(df, IODB_SIGNAL_KEYS)
-    subsys_col = _find_column(df, IODB_SUBSYS_KEYS)
-
-    mask = pd.Series([True] * len(df), index=df.index)
-    if signal_col is not None:
-        mask &= df[signal_col].fillna("").astype(str).str.strip().str.upper() == "AI"
-    if subsys_col is not None:
-        mask &= df[subsys_col].fillna("").astype(str).str.contains("-", na=False)
-
-    filtered = df.loc[mask]
-    return filtered if not filtered.empty else df
-
-
 def get_iodb_instrument_types(iodb_bytes: bytes) -> tuple[list[str], str | None]:
-    """
-    Return unique INSTRUMENT TYPE values from the IODB.
-
-    Only rows that pass the AI-subsystem dual filter are considered:
-      SIGNAL I/O TYPE = "AI"  AND  SUB SYSTEM contains "-"
-
-    Blank and duplicate values are removed. Result is sorted.
-    """
+    """The instrument types of the IODB that have at least one eligible physical instrument (utils.datasheet_eligibility). Sorted."""
+    from . import datasheet_eligibility as DE
     df, err = _load_iodb_df(iodb_bytes)
     if err:
         return [], err
-    type_col = _find_column(df, IODB_TYPE_KEYS)
-    if type_col is None:
+    if _find_column(df, IODB_TYPE_KEYS) is None:
         return [], "No 'INSTRUMENT TYPE' column found in IODB."
-
-    # Apply AI + sub-system filter so dropdown only shows relevant types.
-    df = _apply_ai_subsystem_filter(df)
-
-    types: set[str] = set()
-    for _, row in df.iterrows():
-        itype = str(row.get(type_col, "") or "").strip()
-        if itype and itype.lower() not in _BLANK_VALS:
-            types.add(itype)
-
-    return sorted(types), None
+    index = DE.build_index(df)
+    return sorted(g.label for g in index.groups.values() if g.can_have_datasheet and g.eligible), None
 
 
 def get_iodb_tags(iodb_bytes: bytes, instrument_type: str) -> tuple[list[str], str | None]:
-    """
-    Return tags whose rows match `instrument_type`, after applying the
-    AI-subsystem dual filter (SIGNAL I/O TYPE = "AI" AND SUB SYSTEM contains "-").
-    Matches on INSTRUMENT TYPE column only (case-insensitive, exact match).
-    """
+    """The tags of the eligible physical instruments of `instrument_type` (utils.datasheet_eligibility): one per instrument, sorted."""
+    from . import datasheet_eligibility as DE
     df, err = _load_iodb_df(iodb_bytes)
     if err:
         return [], err
-    type_col = _find_column(df, IODB_TYPE_KEYS)
-    tag_col = _find_column(df, IODB_TAG_KEYS)
-    if tag_col is None:
+    if _find_column(df, IODB_TAG_KEYS) is None:
         return [], "No 'TAG NO' column found in IODB."
-    if type_col is None:
+    if _find_column(df, IODB_TYPE_KEYS) is None:
         return [], "No 'INSTRUMENT TYPE' column found in IODB."
-
-    df = _apply_ai_subsystem_filter(df)
-
-    mask = (
-        df[type_col].fillna("").astype(str).str.strip().str.lower()
-        == instrument_type.strip().lower()
-    )
-
-    tags = (
-        df.loc[mask, tag_col].dropna().astype(str).str.strip()
-        .loc[lambda s: s != ""].unique().tolist()
-    )
-    return sorted(tags), None
+    group = DE.build_index(df).groups.get(DE.type_key(instrument_type))
+    return (group.eligible_tags if group is not None and group.can_have_datasheet else []), None
 
 
 # ── Generation (Phase 2) ──────────────────────────────────────────────────────
@@ -853,6 +798,9 @@ def generate_with_report(
     tag_col = _find_column(df, IODB_TAG_KEYS)
     if tag_col is None:
         return None, "Datasheets.zip", "No 'TAG NO' column found in IODB.", failed
+    from . import datasheet_eligibility as DE
+    full_df = df
+    df = DE.eligible_frame(full_df, instrument_type)          # only eligible physical instruments can get a datasheet
 
     iodb_colmap = _build_iodb_colmap(df, fields)
 
@@ -867,7 +815,8 @@ def generate_with_report(
 
             match = df[df[tag_col].astype(str).str.strip() == str(tag).strip()]
             if match.empty:
-                failed.append({"tag": str(tag), "reason": "Tag not found in the IODB"})
+                reason = DE.reason_for(full_df, tag, instrument_type)
+                failed.append({"tag": str(tag), "reason": "Tag not found in the IODB" if reason == DE.NOT_IN_IODB else reason})
                 continue
             iodb_row = match.iloc[0]
 

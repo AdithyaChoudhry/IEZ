@@ -246,7 +246,7 @@ _NOT_INSTRUMENT = {
 _INSTRUMENT = {
     "transmitter", "element", "switch", "swtich", "gauge", "indicator", "indicatoe", "rotameter", "rota", "analyzer",
     "analyser", "meter", "orifice", "flume", "sensor", "probe", "thermocouple", "rtd", "thermowell", "venturi",
-    "detector", "glass", "radar", "ultrasonic", "manometer", "thermometer", "hygrometer", "density", "conductivity",
+    "detector", "glass", "radar", "ultrasonic", "manometer", "thermometer", "hygrometer", "density", "densitymeter", "conductivity",
 }
 
 
@@ -255,7 +255,10 @@ def is_instrument_type(text: Any) -> bool:
     commands / feedbacks and DCS soft points (alarms, indications, fault flags)."""
     toks = set(norm_type(text).replace("/", " ").split())
     expanded = type_tokens(text)
-    if toks & _NOT_INSTRUMENT:
+    blocked = toks & _NOT_INSTRUMENT
+    if blocked == {"local"} and expanded & {"indicator", "gauge"}:           # a local indicator / gauge is a field instrument
+        blocked = set()
+    if blocked:
         return False
     if (toks | expanded) & _INSTRUMENT:
         return True
@@ -264,68 +267,73 @@ def is_instrument_type(text: Any) -> bool:
 
 
 def analyze_iodb(iodb_bytes: bytes) -> dict:
+    """
+    Instrument types of the IODB with their ELIGIBLE physical instruments only (utils.datasheet_eligibility): SOFT signals and
+    non-applicable I/O types never count. A type without an eligible instrument is not offered; it is listed in `excluded_types`.
+    """
+    from . import datasheet_eligibility as DE
     df, err = _load_iodb_df(iodb_bytes)
     if err or df is None:
         raise LibraryError(f"The IODB could not be read: {err}")
-    cols = {"tag": _find_column(df, IODB_TAG_KEYS), "type": _find_column(df, IODB_TYPE_KEYS),
-            "name": _find_column(df, IODB_NAME_KEYS), "description": _find_column(df, IODB_DESC_KEYS),
-            "signal": _find_column(df, IODB_SIGNAL_KEYS), "subsystem": _find_column(df, IODB_SUBSYS_KEYS)}
+    index = DE.build_index(df)
+    cols = index.columns
     if not cols["tag"]:
         raise LibraryError("The IODB has no TAG NO column.")
     if not cols["type"] and not cols["name"] and not cols["description"]:
         raise LibraryError("The IODB has no INSTRUMENT TYPE, INSTRUMENT NAME or DESCRIPTION column.")
-    groups: dict[str, dict] = {}
-    hidden: dict[str, set] = {}
-    for _, row in df.iterrows():
-        tag = _clean(row.get(cols["tag"]))
-        if not tag:
-            continue
-        typ = _clean(row.get(cols["type"])) if cols["type"] else ""
-        desc = " ".join(x for x in (_clean(row.get(cols["name"])) if cols["name"] else "",
-                                    _clean(row.get(cols["description"])) if cols["description"] else "") if x)
-        key = typ or (f"(no type) {desc}" if desc else "")
-        if not key:
-            continue
-        if not is_instrument_type(typ or desc):
-            h = hidden.setdefault(typ or desc, set())
-            h.add(tag)
-            continue
-        g = groups.setdefault(key, {"instrument_type": typ or desc, "type_blank": not typ, "tags": [], "seen": {},
-                                    "descriptions": {}})
-        g["seen"][tag] = g["seen"].get(tag, 0) + 1
-        if g["seen"][tag] == 1:
-            g["tags"].append(tag)
-        if desc:
-            g["descriptions"][desc] = g["descriptions"].get(desc, 0) + 1
-    out = []
     names = {t["id"]: t["display_name"] for t in library()}
-    for key, g in groups.items():
-        m = match_type(g["instrument_type"])
+    out, excluded, hidden = [], [], []
+    for key, g in index.groups.items():
+        if not g.field_instrument:
+            hidden.append({"instrument_type": g.label, "tag_count": len(g.all_tags)})
+            continue
+        label, diag = g.label, g.diagnostics()
+        if not g.eligible:
+            excluded.append({"instrument_type": label, "category": g.category, "diagnostics": diag})
+            continue
+        m = match_type(label)
         how = "type"
-        if g["type_blank"]:
+        if g.matched_on_description:
             how = "description"
             if m["template_id"]:
                 m = {**m, "status": "description",
                      "reason": "No instrument type in the IODB; matched from the description - confirm the template."}
-        elif not m["template_id"] and g["descriptions"]:
-            top = max(g["descriptions"], key=g["descriptions"].get)
+        elif not m["template_id"] and g.descriptions:
+            top = g.descriptions.most_common(1)[0][0]
             md = match_type(top)
-            if md["template_id"]:
+            if md["template_id"] and DE.category(top) == g.category:
                 m = {**md, "status": "description",
                      "reason": f"Instrument type not recognised; matched from the description '{top}' - confirm the template."}
                 how = "description"
-        out.append({"instrument_type": g["instrument_type"], "tag_count": len(g["tags"]), "tags": sorted(g["tags"]),
-                    "duplicates": sorted(t for t, n in g["seen"].items() if n > 1),
+        conflicts = []
+        for tag, rows in g.eligible.items():
+            others = index.other_types(tag, key)
+            if others:
+                conflicts.append({"tag": rows[0].tag, "reason": f"also listed in the IODB as {', '.join(others)}"})
+            if len({r.deleted for r in rows}) > 1:
+                conflicts.append({"tag": rows[0].tag, "reason": "has a DELETED row and a current row - the current row is used"})
+        out.append({"instrument_type": label, "tag_count": len(g.eligible), "tags": g.eligible_tags,
+                    "duplicates": sorted(r[0].tag for r in g.eligible.values() if len(r) > 1),
+                    "category": g.category, "diagnostics": diag, "conflicts": conflicts,
+                    "deleted_tags": sorted(r[0].tag for r in g.eligible.values() if r[0].deleted),
+                    "spellings": sorted(g.spellings),
                     "template_id": m["template_id"], "template_name": names.get(m["template_id"]),
                     "status": m["status"], "candidates": [{"id": c, "name": names.get(c)} for c in m["candidates"]],
                     "reason": m["reason"], "matched_on": how,
-                    "descriptions": sorted(g["descriptions"], key=g["descriptions"].get, reverse=True)[:3]})
+                    "descriptions": [d for d, _ in g.descriptions.most_common(3)]})
     out.sort(key=lambda g: (g["template_id"] is None, g["instrument_type"].lower()))
-    return {"columns": cols, "rows": int(len(df)), "groups": out,
+    shown = [g["diagnostics"] for g in out] + [g["diagnostics"] for g in excluded]
+    summary = {k: sum(d[k] for d in shown)
+               for k in ("records", "soft_excluded", "not_applicable_excluded", "no_tag_excluded", "duplicates_excluded", "eligible")}
+    warnings = []
+    if not cols["signal"]:
+        warnings.append("The IODB has no SIGNAL I/O TYPE column: only gauges, local indicators and primary elements can be identified; "
+                        "transmitters and switches cannot be verified and are excluded.")
+    return {"columns": cols, "rows": int(len(df)), "groups": out, "summary": summary, "warnings": warnings,
+            "excluded_types": sorted(excluded, key=lambda x: x["instrument_type"].lower()),
             "supported": sum(1 for g in out if g["template_id"]), "unsupported": [g["instrument_type"] for g in out if not g["template_id"]],
-            "hidden": sorted(({"instrument_type": k, "tag_count": len(v)} for k, v in hidden.items()),
-                             key=lambda x: x["instrument_type"].lower()),
-            "hidden_tags": sum(len(v) for v in hidden.values())}
+            "hidden": sorted(hidden, key=lambda x: x["instrument_type"].lower()),
+            "hidden_tags": sum(h["tag_count"] for h in hidden)}
 
 
 # ── field rules from the Example / Engineering Guide ─────────────────────────────────────────────────────────────
@@ -606,7 +614,9 @@ def _derived_annexure(t: dict, main: SheetModel, lib_fields: list[LibField]) -> 
     return SC.AnnexureSpec("ANNEXURE-I", 6, 8, 9, cols, 1, 0)
 
 
-def load_context(template_id: str, iodb_bytes: bytes, field_scope: Optional[dict] = None) -> LibContext:
+def load_context(template_id: str, iodb_bytes: bytes, field_scope: Optional[dict] = None,
+                 instrument_type: Optional[str] = None) -> LibContext:
+    """`instrument_type` given ("" = any): the context holds only the eligible physical instruments of that type. None: template details."""
     t = entry(template_id)
     roles = roles_for(t)
     sheets = sheets_of(t)
@@ -625,6 +635,8 @@ def load_context(template_id: str, iodb_bytes: bytes, field_scope: Optional[dict
     else:
         ann, derived = _derived_annexure(t, sheets[roles["main"]], lib_fields), True
     ctx = SC.Context(sheets, roles["main"], roles["main"], [lf.spec for lf in lib_fields], df, tag_col, ann, [])
+    if instrument_type is not None:
+        SC.restrict_to_eligible(ctx, instrument_type)
     return LibContext(t, roles, lib_fields, ctx, derived, info["notes"])
 
 
@@ -794,24 +806,25 @@ def annexure_gaps(ann: SC.AnnexureSpec, tags: list[str], recs: list[dict[int, An
 
 def generate(template_id: str, iodb_bytes: bytes, tags: list[str], overrides: Optional[dict] = None,
              user_mapping: Optional[dict] = None, header: Optional[dict] = None, field_scope: Optional[dict] = None,
-             annexure_values: Optional[dict] = None) -> tuple[Optional[bytes], str, Optional[str], list[dict]]:
-    """One consolidated workbook from a copy of the library template. -> (bytes, filename, error, failed)."""
+             annexure_values: Optional[dict] = None, instrument_type: str = "") -> tuple[Optional[bytes], str, Optional[str], list[dict]]:
+    """One consolidated workbook from a copy of the library template. -> (bytes, filename, error, failed).
+    Only eligible physical instruments of `instrument_type` are written; any other selected tag is reported in `failed`."""
     from openpyxl import load_workbook
     from openpyxl.cell.cell import MergedCell
     from .workbook_assembly import restore_template_fidelity
     overrides = overrides or {}
     try:
-        lc = load_context(template_id, iodb_bytes, field_scope)
+        lc = load_context(template_id, iodb_bytes, field_scope, instrument_type)
     except LibraryError as exc:
         return None, "", str(exc), []
     t, ctx = lc.t, lc.ctx
     filename = output_filename(t)
     clean_tags, _ = SC._unique(tags)
     rows, missing, _ = SC._rows_for(ctx, clean_tags)
-    failed = [{"tag": x, "reason": "Tag not found in the IODB"} for x in missing]
+    failed = [{"tag": x, "reason": ctx.why(x)} for x in missing]
     present = [x for x in clean_tags if x in rows]
     if not present:
-        return None, filename, "No datasheet generated - none of the selected tags is in the IODB.", failed
+        return None, filename, "No datasheet generated - none of the selected tags is an eligible physical instrument in the IODB.", failed
     mapping = SC.normalize_mapping(ctx.annexure, [str(c) for c in ctx.df.columns], user_mapping)
     recs = SC.annexure_records(ctx, present, mapping, rows)
     apply_annexure_values(ctx.annexure, present, recs, annexure_values)
@@ -852,7 +865,7 @@ def generate(template_id: str, iodb_bytes: bytes, tags: list[str], overrides: Op
 def validate(template_id: str, iodb_bytes: bytes, tags: list[str], overrides: dict, user_mapping: Optional[dict],
              instrument_type: str = "", header: Optional[dict] = None, field_scope: Optional[dict] = None,
              ai_confidence: Optional[dict] = None, annexure_values: Optional[dict] = None) -> dict:
-    lc = load_context(template_id, iodb_bytes, field_scope)
+    lc = load_context(template_id, iodb_bytes, field_scope, instrument_type)
     res = SC.validate(lc.ctx, SC.CONSOLIDATED, tags, overrides, user_mapping)
     issues = res["issues"]
 

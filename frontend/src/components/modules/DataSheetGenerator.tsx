@@ -18,6 +18,7 @@ import Button from '../ui/Button';
 import Alert from '../ui/Alert';
 import { scoreVendors, VendorScore, VendorModel } from '@/data/ltRadarVendors';
 import { SharedIodbPanel } from '../ui/SharedIodb';
+import InstrumentSummary, { type InstrumentDiagnostics, type TagNote } from './datasheet/InstrumentSummary';
 import { DeliverableCoverCard, DeliverableDownloads, type AppliedCover } from '../ui/DeliverableCover';
 import { getCurrentProject } from '@/services/projectContext';
 
@@ -49,9 +50,22 @@ type GenFormat = 'INDIVIDUAL' | 'CONSOLIDATED';
 /* Standard template library (backend: /sop-datasheet/library) */
 interface LibField extends FieldSpec { key: string; scope: 'tag' | 'annexure2' | 'common'; origin: string; example: string[]; unit: string }
 interface IodbGroup { instrument_type: string; tag_count: number; tags: string[]; duplicates: string[]; template_id: string | null;
-  template_name: string | null; status: string; candidates: { id: string; name: string }[]; reason: string; matched_on: string; descriptions: string[] }
+  template_name: string | null; status: string; candidates: { id: string; name: string }[]; reason: string; matched_on: string; descriptions: string[];
+  category: string; diagnostics: InstrumentDiagnostics; conflicts: TagNote[]; deleted_tags: string[]; spellings: string[] }
 interface IodbAnalysis { groups: IodbGroup[]; rows: number; supported: number; unsupported: string[]; columns: Record<string, string | null>;
+  summary: Omit<InstrumentDiagnostics, 'not_applicable_by_io'>; warnings: string[];
+  excluded_types: { instrument_type: string; category: string; diagnostics: InstrumentDiagnostics }[];
   hidden?: { instrument_type: string; tag_count: number }[]; hidden_tags?: number }
+/** Saved workflows made before only physical instruments were listed may hold software tags: they are not restored. */
+const ELIGIBILITY_VERSION = 2;
+const NO_ELIGIBLE = 'No eligible physical instrument tags were found for the selected instrument type. Associated SOFT signals and non-applicable I/O classifications have been excluded.';
+/** Identifies an IODB by its content, so that a replaced file clears everything derived from the previous one. */
+async function fingerprintOf(file: File): Promise<string> {
+  try {
+    const hash = await crypto.subtle.digest('SHA-256', await file.arrayBuffer());
+    return Array.from(new Uint8Array(hash)).map((b) => b.toString(16).padStart(2, '0')).join('');
+  } catch { return `${file.name}|${file.size}`; }
+}
 interface TemplateInfo { id: string; code: string; display_name: string; category: string; version: string; original_filename: string; title: string;
   sheets: { role: string; label: string; sheet: string; in_output: boolean }[]; annexure: { sheet: string; columns: number; capacity: number; generated: boolean };
   field_counts: { total: number; tag: number; common: number; vendor: number }; has_guide: boolean; output_filename: string }
@@ -614,6 +628,8 @@ export default function DataSheetGenerator() {
   const [instrumentTypes, setInstrumentTypes] = useState<string[]>([]);
   const [selectedType, setSelectedType] = useState('');
   const [typeSearch, setTypeSearch] = useState('');
+  const [iodbPrint, setIodbPrint] = useState('');
+  const iodbPrintRef = useRef('');
 
   // Step 2
   const [tags, setTags] = useState<string[]>([]);
@@ -689,8 +705,10 @@ export default function DataSheetGenerator() {
   useEffect(() => {
     try {
       const saved = sessionStorage.getItem('datasheet_state');
-      if (saved) {
+      if (saved && JSON.parse(saved).eligibility !== ELIGIBILITY_VERSION) sessionStorage.removeItem('datasheet_state');
+      else if (saved) {
         const s = JSON.parse(saved);
+        if (s.iodbPrint) { iodbPrintRef.current = s.iodbPrint; setIodbPrint(s.iodbPrint); }
         if (s.step) setStep(!VENDOR_STEPS_ENABLED && VENDOR_STEP_NOS.includes(s.step) ? 9 : s.step);
         if (s.instrumentTypes) setInstrumentTypes(s.instrumentTypes);
         if (s.selectedType) setSelectedType(s.selectedType);
@@ -737,6 +755,7 @@ export default function DataSheetGenerator() {
     if (step === 1 && instrumentTypes.length === 0) return; // nothing worth saving yet
     try {
       sessionStorage.setItem('datasheet_state', JSON.stringify({
+        eligibility: ELIGIBILITY_VERSION, iodbPrint,
         step, instrumentTypes, selectedType, tags, selectedTags,
         selectedDatasheet, fields, specValues, specSources,
         kbValues, iodbGreen, iodbConfirmed, overrides,
@@ -749,7 +768,7 @@ export default function DataSheetGenerator() {
       fields, specValues, specSources, kbValues, iodbGreen, iodbConfirmed, overrides,
       vendorScores, selectedVS, approval, pendingReqId, reqStatus, genStatus,
       genFormat, annexMap, aiResults, requestedFp, approvedFp,
-      templateId, templateInfo, headerFields, header, fieldScope, aiConf, typeTemplate, annexValues]);
+      templateId, templateInfo, headerFields, header, fieldScope, aiConf, typeTemplate, annexValues, iodbPrint]);
 
   const filteredTags = useMemo(() => tags.filter(t => t.toLowerCase().includes(tagSearch.toLowerCase())), [tags, tagSearch]);
   const iodbFields = useMemo(() => fields.filter(f => f.input_type === 'iodb'), [fields]);
@@ -769,10 +788,26 @@ export default function DataSheetGenerator() {
       const fd = new FormData(); fd.append('iodb_file', iodbFile);
       const res = await api.post('/sop-datasheet/library/analyze-iodb', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
       setIodbAnalysis(res.data); setInstrumentTypes(res.data.groups.map((g: IodbGroup) => g.instrument_type));
-      setSelectedType(''); setTypeTemplate({});
+      setSelectedType(''); setTags([]); setSelectedTags([]); setValidation(null); setTypeTemplate({});
     } catch (e: any) { setIodbAnalysis(null); setError(e?.response?.data?.detail || 'The IODB could not be analysed.'); }
     finally { setBusy(false); }
   };
+  const changeIodb = async (f: File | null) => {
+    setIodbFile(f);
+    if (!f) { setIodbAnalysis(null); return; }
+    const print = await fingerprintOf(f);
+    if (print === iodbPrintRef.current) return;                     // the same IODB again: the work in progress stays valid
+    const replaced = !!iodbPrintRef.current;
+    iodbPrintRef.current = print; setIodbPrint(print);
+    setIodbAnalysis(null); setInstrumentTypes([]); setSelectedType(''); setTags([]); setSelectedTags([]); setTagSearch('');
+    setValidation(null); setGenStatus(null); setAnnexValues({}); setStep(1);
+    if (replaced) {                                                 // (called from an earlier render too: no state is read here)
+      if (reqPollRef.current) clearInterval(reqPollRef.current);
+      setApproval(null); setReqStatus('idle'); setPendingReqId(null); setRequestedFp(null); setApprovedFp(null);
+      setNotice('The IODB was replaced: the instrument selection was cleared and any earlier approval no longer applies.');
+    }
+  };
+  const group = iodbAnalysis?.groups.find((g) => g.instrument_type === selectedType) ?? null;
   const templateFor = (g: IodbGroup) => typeTemplate[g.instrument_type] ?? g.template_id ?? '';
   const loadTemplate = async (id: string, scope?: Record<string, string>) => {
     setTemplateId(id); setTemplateInfo(null); setFields([]); setOverrides({}); setAiConf({}); setAnnexValues({});
@@ -1064,8 +1099,8 @@ export default function DataSheetGenerator() {
               <span className="text-sm font-bold" style={{ color: 'var(--t0)' }}>Upload IODB</span>
             </div>
             <p className="text-xs mb-3" style={{ color: 'var(--t2)' }}>
-              iEZ reads every instrument row (tag, instrument type, name / description) and matches each instrument type to the
-              standard datasheet template library ({libraryList.length ? `${libraryList.length} templates` : 'loading…'}). The IODB is only read.
+              iEZ lists the physical instruments only: SOFT signals (software alarms and indications) are excluded, and each tag counts once.
+              Each instrument type is matched to the standard datasheet template library ({libraryList.length ? `${libraryList.length} templates` : 'loading…'}). The IODB is only read.
             </p>
             {libraryList.length > 0 && (
               <details className="text-xs mb-3" style={{ color: 'var(--t2)' }}>
@@ -1075,7 +1110,7 @@ export default function DataSheetGenerator() {
                 </ul>
               </details>
             )}
-            <SharedIodbPanel compact file={iodbFile} onChange={f => { setIodbFile(f); setIodbAnalysis(null); setInstrumentTypes([]); setSelectedType(''); }} />
+            <SharedIodbPanel compact file={iodbFile} onChange={changeIodb} />
             {iodbFile && !iodbAnalysis && (
               <Button onClick={analyseIodb} loading={busy} fullWidth className="mt-3">
                 <Search className="w-3.5 h-3.5" /> Analyse IODB
@@ -1083,12 +1118,14 @@ export default function DataSheetGenerator() {
             )}
             {iodbAnalysis && (
               <p className="text-xs mt-3" style={{ color: 'var(--t2)' }}>
-                {iodbAnalysis.rows} rows · {iodbAnalysis.groups.length} instrument type(s) · <b style={{ color: 'var(--ok)' }}>{iodbAnalysis.supported} with a template</b>
+                {iodbAnalysis.rows} rows · <b style={{ color: 'var(--t0)' }}>{iodbAnalysis.summary.eligible} physical instrument(s)</b> in {iodbAnalysis.groups.length} instrument type(s) · {iodbAnalysis.summary.soft_excluded} SOFT record(s) excluded · <b style={{ color: 'var(--ok)' }}>{iodbAnalysis.supported} with a template</b>
+                {iodbAnalysis.excluded_types.length > 0 && <> · <span title={iodbAnalysis.excluded_types.map((x) => `${x.instrument_type} (${x.diagnostics.records} records: ${x.diagnostics.soft_excluded} SOFT, ${x.diagnostics.not_applicable_excluded} other I/O)`).join('\n')} style={{ textDecoration: 'underline dotted', cursor: 'help' }}>{iodbAnalysis.excluded_types.length} type(s) with no eligible instrument not listed</span></>}
                 {(iodbAnalysis.hidden?.length ?? 0) > 0 && <> · <span title={iodbAnalysis.hidden!.map(h => `${h.instrument_type} (${h.tag_count})`).join('\n')}>{iodbAnalysis.hidden!.length} non-instrument type(s) hidden (motors, valves, alarms, commands)</span></>}
                 {iodbAnalysis.unsupported.length > 0 && <> · <b style={{ color: 'var(--rose)' }}>{iodbAnalysis.unsupported.length} without</b></>}
                 {' '}· columns: {Object.entries(iodbAnalysis.columns).filter(([, v]) => v).map(([k, v]) => `${k} "${v}"`).join(', ')}
               </p>
             )}
+            {iodbAnalysis?.warnings.map((w) => <p key={w} className="text-xs mt-2" style={{ color: 'var(--gold)' }}>{w}</p>)}
           </>)}
 
           {iodbAnalysis && card(<>
@@ -1104,7 +1141,7 @@ export default function DataSheetGenerator() {
             <div className="overflow-x-auto rounded-xl" style={{ border: '1px solid var(--b1)' }}>
               <table className="w-full text-xs min-w-[640px]">
                 <thead style={{ background: 'var(--s2)' }}><tr className="text-left" style={{ color: 'var(--t2)' }}>
-                  <th className="px-3 py-2 w-8" /><th className="px-3">Instrument type (IODB)</th><th className="px-3">Tags</th><th className="px-3">Datasheet template</th><th className="px-3">Match</th>
+                  <th className="px-3 py-2 w-8" /><th className="px-3">Instrument type (IODB)</th><th className="px-3">Instruments</th><th className="px-3">Datasheet template</th><th className="px-3">Match</th>
                 </tr></thead>
                 <tbody>
                   {iodbAnalysis.groups.filter(g => g.instrument_type.toLowerCase().includes(typeSearch.toLowerCase())).map(g => {
@@ -1115,6 +1152,7 @@ export default function DataSheetGenerator() {
                       <tr key={g.instrument_type} className="align-top" style={{ borderTop: '1px solid var(--b1)', background: active ? 'var(--em-dim)' : undefined }}>
                         <td className="px-3 py-2"><input type="radio" checked={active} disabled={!tid} onChange={() => chooseGroup(g)} aria-label={`Select ${g.instrument_type}`} /></td>
                         <td className="px-3 py-2"><span className="font-semibold" style={{ color: 'var(--t0)' }}>{g.instrument_type}</span>
+                          {g.diagnostics.soft_excluded > 0 && <span className="block text-[10px]" style={{ color: 'var(--t2)' }}>{g.diagnostics.records} IODB records · {g.diagnostics.soft_excluded} SOFT excluded</span>}
                           {g.duplicates.length > 0 && <span className="block text-[10px]" style={{ color: 'var(--gold)' }}>{g.duplicates.length} tag(s) on several IODB rows</span>}
                           {g.matched_on === 'description' && <span className="block text-[10px]" style={{ color: 'var(--t2)' }}>matched from the description</span>}</td>
                         <td className="px-3 py-2 font-mono">{g.tag_count}</td>
@@ -1136,9 +1174,11 @@ export default function DataSheetGenerator() {
               </table>
             </div>
             <p className="text-[11px] mt-2" style={{ color: 'var(--t2)' }}>A type without a template cannot be generated until you pick its template. Matches made by key words or from the description are listed for you to confirm - nothing is assigned silently.</p>
+            {group && <div className="mt-3"><InstrumentSummary diagnostics={group.diagnostics} conflicts={group.conflicts} deletedTags={group.deleted_tags} /></div>}
+            {iodbAnalysis.groups.length === 0 && <p className="text-xs mt-3" style={{ color: 'var(--rose)' }}>{NO_ELIGIBLE}</p>}
             {selectedType && templateId && (
-              <Button onClick={() => setStep(2)} className="mt-4 w-full" disabled={busy || !templateInfo}>
-                Continue - {tags.length} tag(s) of {selectedType} <ChevronRight className="w-3.5 h-3.5" />
+              <Button onClick={() => setStep(2)} className="mt-4 w-full" disabled={busy || !templateInfo || tags.length === 0}>
+                Continue - {tags.length} instrument(s) of {selectedType} <ChevronRight className="w-3.5 h-3.5" />
               </Button>
             )}
           </>)}
@@ -1152,17 +1192,20 @@ export default function DataSheetGenerator() {
             <div className="flex items-center gap-2 mb-3">
               <Search className="w-4 h-4" style={{ color: 'var(--em)' }} />
               <span className="text-sm font-bold" style={{ color: 'var(--t0)' }}>{selectedType} — Select Tags</span>
-              <span className="ml-auto text-xs" style={{ color: 'var(--t2)' }}>{tags.length} tags</span>
+              <span className="ml-auto text-xs" style={{ color: 'var(--t2)' }} data-testid="eligible-count">Eligible physical instruments: <b style={{ color: 'var(--t0)' }}>{tags.length}</b></span>
             </div>
+            {group && <div className="mb-3"><InstrumentSummary diagnostics={group.diagnostics} conflicts={group.conflicts} deletedTags={group.deleted_tags} /></div>}
+            {tags.length === 0 && <p className="text-xs mb-3" style={{ color: 'var(--rose)' }}>{NO_ELIGIBLE}</p>}
 
             <div className="flex items-center gap-2 mb-3">
               <div className="relative flex-1">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3 h-3" style={{ color: 'var(--t2)' }} />
-                <input value={tagSearch} onChange={e => setTagSearch(e.target.value)} placeholder="Filter tags…"
+                <input value={tagSearch} onChange={e => setTagSearch(e.target.value)} placeholder="Search eligible instrument tags…"
                   className="w-full pl-8 pr-3 py-1.5 rounded-lg text-xs"
                   style={{ background: 'var(--s1)', border: '1px solid var(--b2)', color: 'var(--t0)', outline: 'none' }} />
               </div>
               <button onClick={() => setSelectedTags(selectedTags.length === filteredTags.length ? [] : [...filteredTags])}
+                disabled={filteredTags.length === 0}
                 className="text-xs font-semibold px-3 py-1.5 rounded-lg whitespace-nowrap"
                 style={{ background: 'var(--s3)', color: 'var(--em-lt)', border: '1px solid var(--b2)' }}>
                 {selectedTags.length === filteredTags.length ? 'Deselect All' : 'Select All'}
@@ -1177,10 +1220,12 @@ export default function DataSheetGenerator() {
                     style={{ background: checked ? 'var(--em-dim)' : 'var(--s3)', border: `1px solid ${checked ? 'rgba(59,130,246,0.3)' : 'transparent'}` }}>
                     <input type="checkbox" checked={checked} onChange={() => setSelectedTags(s => checked ? s.filter(x => x !== tag) : [...s, tag])} className="accent-emerald-500 w-3.5 h-3.5" />
                     <span className="text-xs font-mono font-bold flex-1" style={{ color: checked ? 'var(--em-lt)' : 'var(--t1)' }}>{tag}</span>
+                    {group?.deleted_tags.includes(tag) && <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded" style={{ color: 'var(--gold)', border: '1px solid var(--gold)' }}>DELETED in IODB</span>}
                     {checked && <CheckCircle2 className="w-3.5 h-3.5" style={{ color: 'var(--em)' }} />}
                   </label>
                 );
               })}
+              {tags.length > 0 && filteredTags.length === 0 && <p className="text-xs px-1 py-2" style={{ color: 'var(--t2)' }}>No eligible instrument tag matches the search.</p>}
             </div>
 
             {selectedTags.length > 0 && (
@@ -2013,6 +2058,7 @@ export default function DataSheetGenerator() {
                 setSpecValues({}); setSpecSources({}); setApproval(null); setLocked(false);
                 setVendorScores(null); setSelectedVS(null); setGenStatus(null);
                 setGenFormat(''); setAnnexMap({}); setValidation(null); setRequestedFp(null); setApprovedFp(null); setPendingReqId(null); setReqStatus('idle');
+                iodbPrintRef.current = ''; setIodbPrint('');
                 setIodbAnalysis(null); setTypeTemplate({}); setTemplateId(''); setTemplateInfo(null); setHeader({}); setFieldScope({}); setAiConf({}); setOverrides({});
               }}>
                 New Datasheet

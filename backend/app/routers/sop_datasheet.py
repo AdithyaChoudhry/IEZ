@@ -4,7 +4,7 @@ SOP-driven interactive Datasheet Generator router — Phase 1 (analysis).
 Flow:
   POST /sop-datasheet/analyze  (SOP workbook + IODB)  -> available datasheets + IODB instrument types
   POST /sop-datasheet/fields   (SOP workbook + sheet) -> field spec for the interactive form
-  POST /sop-datasheet/tags     (IODB + instrument_type) -> matching tags
+  POST /sop-datasheet/tags     (IODB + instrument_type) -> eligible physical instrument tags
 """
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, status
 from fastapi.responses import StreamingResponse
@@ -48,9 +48,11 @@ from utils.sop_datasheet import (
     get_iodb_instrument_types,
     get_iodb_tags,
     generate_with_report as generate_datasheets,
+    _load_iodb_df,
 )
 from utils import sop_consolidated as SC
 from utils import datasheet_library as DL
+from utils import datasheet_eligibility as DE
 
 logger = logging.getLogger(__name__)
 
@@ -199,7 +201,7 @@ async def tags(
     instrument_type: str = Form(...),
     current_user: User = Depends(get_current_user),
 ):
-    """Return the IODB tags whose INSTRUMENT TYPE matches the selection."""
+    """Return the tags of the eligible physical instruments of the selected instrument type."""
     _check_ext(iodb_file.filename or "", ALLOWED_IODB_EXTENSIONS)
     iodb_bytes = await iodb_file.read()
 
@@ -268,7 +270,7 @@ def _run_generate_job(job_id, sop_bytes, sop_filename, datasheet_sheet,
     try:
         if template_id:
             zip_bytes, filename, err, failed = DL.generate(template_id, iodb_bytes, selected_tags, overrides,
-                                                           annexure_mapping, header, field_scope, annexure_values)
+                                                           annexure_mapping, header, field_scope, annexure_values, instrument_type)
         elif generation_format == SC.INDIVIDUAL:
             zip_bytes, filename, err, failed = generate_datasheets(
                 sop_bytes, sop_filename, datasheet_sheet,
@@ -372,6 +374,15 @@ def _approved_package(db: Session, approval_id: int, fmt: str, tags: list, datas
     return overrides, (mapping if isinstance(mapping, dict) else None)
 
 
+def _ineligible(iodb_bytes: bytes, tags: list, instrument_type: str) -> list:
+    df, err = _load_iodb_df(iodb_bytes)
+    if err or df is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"The IODB could not be read: {err}")
+    if not str(instrument_type or "").strip():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Select the instrument type.")
+    return DE.check_selection(df, tags, instrument_type)
+
+
 def _json_obj(raw: str, what: str) -> dict:
     try:
         v = json.loads(raw) if raw else {}
@@ -420,7 +431,7 @@ async def validate_package(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Select a datasheet template.")
     _check_ext(sop_file.filename or "", ALLOWED_SOP_EXTENSIONS)
     try:
-        ctx = SC.load_context(await sop_file.read(), sop_file.filename or "", datasheet_sheet, await iodb_file.read())
+        ctx = SC.load_context(await sop_file.read(), sop_file.filename or "", datasheet_sheet, await iodb_file.read(), instrument_type)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
     return SC.validate(ctx, (generation_format or "").strip().upper(), tags_list, overrides_dict, mapping_dict)
@@ -486,6 +497,12 @@ async def generate(
     sop_bytes = await sop_file.read() if sop_file is not None else b""
     iodb_bytes = await iodb_file.read()
     cover_tpl = await cover_template_file.read() if cover_template_file is not None else None
+
+    # The selection is checked against THIS IODB and instrument type: an excluded record (SOFT, another type ...) is never generated,
+    # whatever the browser (or a hand-made request) sends.
+    problems = await run_in_threadpool(_ineligible, iodb_bytes, tags_list, instrument_type)
+    if problems:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=DE.ineligible_message(problems))
 
     job_id = str(uuid.uuid4())
     generation_jobs[job_id] = {"status": "processing"}

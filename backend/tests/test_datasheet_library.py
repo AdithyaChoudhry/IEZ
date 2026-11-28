@@ -44,11 +44,13 @@ def iodb_for(tid, n=5, typ=None, blank=(), dup=None):
             if h not in heads:
                 heads.append(h); cols.append(h)
     ws.append(heads)
+    from utils.datasheet_eligibility import category
+    io_type = "-" if category(typ or t["display_name"]) == "gauge" else "DI"           # a mechanical gauge has no electrical signal
     for i in range(1, n + 1):
-        ws.append([f"{t['code']}-{100 + i}", typ or t["display_name"], "DI"]
+        ws.append([f"{t['code']}-{100 + i}", typ or t["display_name"], io_type]
                   + [None if (i in blank and j == 0) else f"V{j}-{i}" for j, _ in enumerate(cols)])
     if dup:
-        ws.append([f"{t['code']}-{100 + dup}", typ or t["display_name"], "DI"] + ["OTHER"] * len(cols))
+        ws.append([f"{t['code']}-{100 + dup}", typ or t["display_name"], io_type] + ["OTHER"] * len(cols))
     b = io.BytesIO(); wb.save(b); return b.getvalue()
 
 
@@ -285,10 +287,10 @@ def test_instrument_types_are_offered(text):
 
 def test_iodb_analysis_hides_motors_valves_and_soft_points():
     wb = openpyxl.Workbook(); ws = wb.active; ws.title = "IODB"
-    ws.append(["TAG NO", "INSTRUMENT TYPE"])
+    ws.append(["TAG NO", "INSTRUMENT TYPE", "SIGNAL I/O TYPE"])
     for r in [("PDT-1", "DP TRANSMITTER"), ("M-1A", "MOTOR COMMAND START"), ("M-1B", "MOTOR RUNNING STATUS"),
               ("XV-1", "ON/OFF VALVE PNEUMATIC"), ("PAH-1", "PRESSURE ALARM HIGH"), ("PI-1", "PRESSURE INDICATION"), ("P-1", "PUMP")]:
-        ws.append(list(r))
+        ws.append([*r, "AI"])
     b = io.BytesIO(); wb.save(b)
     res = DL.analyze_iodb(b.getvalue())
     assert [g["instrument_type"] for g in res["groups"]] == ["DP TRANSMITTER"]
@@ -358,6 +360,7 @@ def test_values_common_vendor_and_quantity():
 # ── validation ───────────────────────────────────────────────────────────────
 def test_validation_rules():
     io_b = iodb_for("dpt", 3, dup=1)
+    io_b = iodb_for("dpt", 3, typ="D.P. TRANSMITTER", dup=1)
     res = DL.validate("dpt", io_b, tags_for("dpt", 3) + ["DPT-101", "NOPE-1"], {}, None, "D.P. TRANSMITTER", {},
                       ai_confidence={"TRANSMITTER::Accuracy": 0.3})
     codes = {i["code"]: i["severity"] for i in res["issues"]}
@@ -366,7 +369,7 @@ def test_validation_rules():
     assert codes["LOW_CONFIDENCE_AI"] == "REVIEW" and codes["VENDOR_DATA_PENDING"] == "INFO"
     assert codes["ANNEXURE_II_TEMPLATE"] == "INFO"
     assert res["counts"]["ERROR"] == 2 and res["counts"]["INFO"] >= 2
-    manual = DL.validate("dpt", iodb_for("dpt", 2), tags_for("dpt", 2), {}, None, "Pressure Transmitter", HEADER)
+    manual = DL.validate("dpt", iodb_for("dpt", 2, typ="Pressure Transmitter"), tags_for("dpt", 2), {}, None, "Pressure Transmitter", HEADER)
     assert any(i["code"] == "TEMPLATE_CHOSEN_MANUALLY" for i in manual["issues"])
     ok = DL.validate("dpt", iodb_for("dpt", 2), tags_for("dpt", 2), {}, None, "Differential Pressure Transmitter", HEADER)
     assert ok["counts"]["ERROR"] == 0
@@ -416,7 +419,7 @@ def form(approval_id=None, tags=TAGS, template_id="dpt", overrides=None, mapping
             "annexure_mapping": json.dumps(mapping or {}), "generation_format": "CONSOLIDATED"}
     if approval_id is not None:
         data["approval_id"] = str(approval_id)
-    return {"files": {"iodb_file": ("iodb.xlsx", iodb_for("dpt", 3))}, "data": data}
+    return {"files": {"iodb_file": ("iodb.xlsx", iodb_for("dpt", 3, typ="DP TRANSMITTER"))}, "data": data}
 
 
 def run(api, **kw):
@@ -437,7 +440,7 @@ def test_api_library_and_iodb_analysis(api):
     t = api.get("/api/sop-datasheet/library/dpt").json()
     assert t["template"]["has_guide"] and len(t["fields"]) == 34 and "client" in t["header_fields"]
     assert api.get("/api/sop-datasheet/library/..%2Fsecret").status_code == 404
-    r = api.post("/api/sop-datasheet/library/analyze-iodb", files={"iodb_file": ("i.xlsx", iodb_for("dpt", 3))})
+    r = api.post("/api/sop-datasheet/library/analyze-iodb", files={"iodb_file": ("i.xlsx", iodb_for("dpt", 3, typ="DP TRANSMITTER"))})
     assert r.status_code == 200 and r.json()["groups"][0]["template_id"] == "dpt"
     assert api.post("/api/sop-datasheet/library/analyze-iodb", files={"iodb_file": ("i.txt", b"x")}).status_code == 400
     assert api.post("/api/sop-datasheet/library/analyze-iodb", files={"iodb_file": ("i.xlsx", b"garbage")}).status_code == 400
@@ -471,7 +474,7 @@ def test_api_approval_gate_for_library_templates(api, db):
 
 
 def test_api_approved_annexure_entries_are_generated(api, db):
-    io_b = iodb_for("dpt", 3, blank=(2,))
+    io_b = iodb_for("dpt", 3, typ="DP TRANSMITTER", blank=(2,))
     ann = DL.load_context("dpt", io_b).ctx.annexure
     col = next(ac for ac in ann.columns if ac.kind == "data").col
     f = form(approval(db, annexure_values={"DPT-102": {str(col): "APPROVED ENTRY"}}))

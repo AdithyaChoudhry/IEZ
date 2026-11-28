@@ -251,9 +251,27 @@ class Context:
     tag_col: str
     annexure: Optional[AnnexureSpec]
     missing_refs: list[str]
+    full_df: Optional[pd.DataFrame] = None       # set when `df` holds only the eligible instruments of `instrument_type`
+    instrument_type: str = ""
+
+    def why(self, tag: str) -> str:
+        """Why a selected tag has no row in `df`."""
+        if self.full_df is None:
+            return "Tag not found in the IODB"
+        from . import datasheet_eligibility as DE
+        reason = DE.reason_for(self.full_df, tag, self.instrument_type)
+        return "Tag not found in the IODB" if reason == DE.NOT_IN_IODB else reason
 
 
-def load_context(sop_bytes: bytes, sop_filename: str, datasheet_sheet: str, iodb_bytes: bytes) -> Context:
+def restrict_to_eligible(ctx: "Context", instrument_type: str) -> None:
+    """Keep only the eligible physical instruments (utils.datasheet_eligibility) in the context used for validation and generation."""
+    from . import datasheet_eligibility as DE
+    ctx.full_df, ctx.instrument_type = ctx.df, instrument_type or ""
+    ctx.df = DE.eligible_frame(ctx.df, ctx.instrument_type)
+
+
+def load_context(sop_bytes: bytes, sop_filename: str, datasheet_sheet: str, iodb_bytes: bytes,
+                 instrument_type: Optional[str] = None) -> Context:
     sheets = read_workbook(sop_bytes, sop_filename)
     if datasheet_sheet not in sheets:
         raise ValueError(f"Sheet '{datasheet_sheet}' not found in SOP workbook.")
@@ -270,7 +288,10 @@ def load_context(sop_bytes: bytes, sop_filename: str, datasheet_sheet: str, iodb
         raise ValueError("No 'TAG NO' column found in IODB.")
     ann_name, missing = find_annexure(sheets, fields)
     ann = parse_annexure(sheets[ann_name]) if ann_name else None
-    return Context(sheets, datasheet_sheet, target, fields, df, tag_col, ann, missing)
+    ctx = Context(sheets, datasheet_sheet, target, fields, df, tag_col, ann, missing)
+    if instrument_type is not None:
+        restrict_to_eligible(ctx, instrument_type)
+    return ctx
 
 
 def annexure_info(sheets: dict[str, SheetModel], datasheet_sheet: str) -> dict:
@@ -380,7 +401,11 @@ def validate(ctx: Context, fmt: str, tags_in: list[str], overrides: dict[str, li
         add("ERROR", "DUPLICATE_TAG", f"Tag {d} is selected more than once.", tag=d)
     rows, missing, iodb_dup = _rows_for(ctx, tags)
     for t in missing:
-        add("ERROR", "TAG_NOT_IN_IODB", f"Tag {t} is not in the IODB.", tag=t)
+        reason = ctx.why(t)
+        if reason == "Tag not found in the IODB":
+            add("ERROR", "TAG_NOT_IN_IODB", f"Tag {t} is not in the IODB.", tag=t)
+        else:
+            add("ERROR", "INELIGIBLE_TAG", f"Tag {t} cannot have a datasheet: {reason}.", tag=t)
     for t, n in iodb_dup.items():
         add("REVIEW", "IODB_DUPLICATE_ROWS", f"Tag {t} appears in {n} IODB rows - the first row is used.", tag=t)
     # mandatory fields (red, no EG default) must have an approved value
@@ -587,7 +612,7 @@ def generate_consolidated(sop_bytes: bytes, sop_filename: str, datasheet_sheet: 
     """One workbook: main datasheet (common specifications) + tag-wise annexure. Returns (bytes, filename, error, failed)."""
     overrides = overrides or {}
     try:
-        ctx = load_context(sop_bytes, sop_filename, datasheet_sheet, iodb_bytes)
+        ctx = load_context(sop_bytes, sop_filename, datasheet_sheet, iodb_bytes, instrument_type)
     except Exception as exc:
         return None, "", str(exc), []
     safe = re.sub(r"[^A-Za-z0-9_-]+", "_", datasheet_sheet).strip("_") or "DATASHEET"
@@ -597,10 +622,10 @@ def generate_consolidated(sop_bytes: bytes, sop_filename: str, datasheet_sheet: 
                                 f"(datasheet + annexure sheet), or use the individual format."), []
     tags, _ = _unique(selected_tags)
     rows, missing, _ = _rows_for(ctx, tags)
-    failed = [{"tag": t, "reason": "Tag not found in the IODB"} for t in missing]
+    failed = [{"tag": t, "reason": ctx.why(t)} for t in missing]
     present = [t for t in tags if t in rows]
     if not present:
-        return None, filename, "No datasheet generated - none of the selected tags is in the IODB.", failed
+        return None, filename, "No datasheet generated - none of the selected tags is an eligible physical instrument in the IODB.", failed
     mapping = normalize_mapping(ctx.annexure, [str(c) for c in ctx.df.columns], user_mapping)
     recs = annexure_records(ctx, present, mapping, rows)
     main = resolve_main(ctx.fields, overrides)

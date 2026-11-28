@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from utils import io_list_document as D  # noqa: E402
 from utils.io_list_basis import build_basis  # noqa: E402
 from utils.io_list_builder import build_io_list_document  # noqa: E402
+from utils.io_list_pagination import A3_PT, A4_PT, Section, visible_sheets  # noqa: E402
 
 COLS = ["TAG NO", "LOOP NUMBER", "LOOP TYPE", "SIGNAL DESCRIPTION", "SIGNAL I/O TYPE", "INSTRUMENT TYPE NAME", "SUB SYSTEM"]
 M1 = [("DI", "LOCAL/REMOTE INDICATION"), ("DI", "RUN INDICATION"), ("DI", "FAULT INDICATION"), ("DI", "READY FOR START"),
@@ -39,6 +40,26 @@ def loops(prefix, n, ltype, sigs, inst, sub="MCC", start=1):
 
 def df_of(rows):
     return pd.DataFrame(rows, columns=COLS)
+
+
+def fake_renderer(pages=None, calls=None, wrong_size=()):
+    """A stand-in for LibreOffice: blank pages of the right paper size, `pages` = {sheet: count} (default 1)."""
+    def render(workbook, sheets=None):
+        from pypdf import PdfWriter
+        names = [n for n in visible_sheets(workbook) if sheets is None or n in sheets]
+        if calls is not None:
+            calls.append(names)
+        out = {}
+        for n in names:
+            w, h = (A3_PT[1], A3_PT[0]) if n == "IO List" and n not in wrong_size else A4_PT
+            writer = PdfWriter()
+            for _ in range((pages or {}).get(n, 1)):
+                writer.add_blank_page(w, h)
+            buf = io.BytesIO()
+            writer.write(buf)
+            out[n] = Section(buf.getvalue(), [(w, h)] * (pages or {}).get(n, 1))
+        return out
+    return render
 
 
 def fixture_rows():
@@ -124,7 +145,7 @@ def test_abbreviation_header_is_the_six_row_iobasis_header_in_the_template():
 
 
 def test_generated_workbook_has_the_corrected_abbreviation_header_with_the_same_metadata():
-    out, _name, err, rep = build_io_list_document(df_of(fixture_rows()), COLS, None, "WITH_SUMMARY", None, pager=lambda wb: {})
+    out, _name, err, rep = build_io_list_document(df_of(fixture_rows()), COLS, None, "WITH_SUMMARY", None, renderer=fake_renderer())
     assert err is None
     wb = openpyxl.load_workbook(io.BytesIO(out))
     _check_abbreviation_header(wb)
@@ -149,7 +170,7 @@ def test_each_request_gets_an_independent_template_and_the_master_is_unchanged()
     a, b = D.load_standard_template(), D.load_standard_template()
     a["IO_BASIS"]["D1"].value = "PROJECT A"
     assert b["IO_BASIS"]["D1"].value is None
-    build_io_list_document(df_of(fixture_rows()), COLS, None, "WITH_SUMMARY", None, pager=lambda wb: {})
+    build_io_list_document(df_of(fixture_rows()), COLS, None, "WITH_SUMMARY", None, renderer=fake_renderer())
     assert hashlib.sha256(D.STANDARD_TEMPLATE.read_bytes()).hexdigest() == before
 
 
@@ -318,6 +339,12 @@ def test_merged_cells_are_centred_with_no_inner_lines():
     assert ws["F11"].border.top.style == "thin"                                                    # the rows of the descriptions stay separated
 
 
+def test_a_long_equipment_name_wraps_instead_of_being_cut_off():
+    name = "DIFFERENTIAL LEVEL TRANSMITTER (Diaphragm Seal Type with capillary on both side)"
+    ws, res, info = basis_ws([rec("LT-1", "L-1", "", "AI", "LEVEL", name)])
+    assert ws["C10"].value == name and ws["C10"].alignment.wrap_text and ws.row_dimensions[10].height > 23.4
+
+
 def test_long_text_gets_a_taller_row():
     rows = loops("MS", 1, "TYPE-M1", [("DI", "A VERY LONG SIGNAL DESCRIPTION " * 4)], "PUMP")
     ws, res, info = basis_ws(rows)
@@ -343,7 +370,7 @@ def test_cover_metadata_comes_from_the_linked_cover_and_the_date_is_the_latest_r
     assert (m["project"], m["client"], m["doc_no"], m["rev"], m["date"]) == ("SETTING UP A TEST PLANT", "TEST CLIENT LTD", "10P999-I0001-202", "02", "24-11-2026")
     assert (m["prepared"], m["checked"], m["approved"]) == ("DD", "EE", "FF")
     assert [r["rev"] for r in m["revisions"]] == ["02", "01", "00"]                      # as on the cover: newest first
-    assert m["location"] == "" and any("location" in w for w in m["warnings"])           # the cover has no location: never invented
+    assert m["location"] == ""                                                            # the iEZ cover has no location: never invented
 
 
 def test_without_a_cover_nothing_is_invented():
@@ -405,67 +432,236 @@ def test_missing_counts_stay_empty_not_estimated():
 
 
 # ───────── page counts / assembly ─────────
-def test_assembly_writes_measured_counts_and_verifies_them():
-    calls = []
+LINES = ("cover", "toc", "abbr", "basis", "iolist", "summary")
 
-    def pager(wb_bytes):
-        calls.append(openpyxl.load_workbook(io.BytesIO(wb_bytes)).sheetnames)
-        return {"COVER SHEET": 1, "TABLE OF CONTENTS": 1, "ABBREVIATION": 1, "IO_BASIS": 2, "IO List": 7, "IO Summary": 1}
-    out, name, err, rep = build_io_list_document(df_of(fixture_rows()), COLS, None, "WITH_SUMMARY", cover(), pager=pager)
+
+def shts(wb):
+    toc = wb["TABLE OF CONTENTS"]
+    return [toc.cell(r, 15).value for r in range(9, 15)]
+
+
+def test_assembly_writes_measured_counts_total_pages_and_a_matching_pdf():
+    from pypdf import PdfReader
+    calls = []
+    out, name, err, rep = build_io_list_document(df_of(fixture_rows()), COLS, None, "WITH_SUMMARY", cover(),
+                                                 renderer=fake_renderer({"IO_BASIS": 2, "IO List": 7}, calls))
     assert err is None and rep["pages"] == {"cover": 1, "toc": 1, "abbr": 1, "basis": 2, "iolist": 7, "summary": 1} and rep["pages_verified"]
+    assert rep["total_pages"] == 13 and len(PdfReader(io.BytesIO(rep["_pdf"])).pages) == 13
     wb = openpyxl.load_workbook(io.BytesIO(out))
-    assert wb.sheetnames == ["TABLE OF CONTENTS", "ABBREVIATION", "IO_BASIS", "IO List", "IO Summary"]
-    assert [wb["TABLE OF CONTENTS"].cell(r, 15).value for r in range(9, 15)] == [1, 1, 1, 2, 7, 1]
-    assert any("IO_BASIS prints on 2 pages" in w for w in rep["warnings"])               # an overflow is reported, never hidden
+    assert wb.sheetnames == ["COVER SHEET", "TABLE OF CONTENTS", "ABBREVIATION", "IO_BASIS", "IO List", "IO Summary"]
+    assert shts(wb) == [1, 1, 1, 2, 7, 1] and wb["TABLE OF CONTENTS"]["O16"].value == "=SUM(O9:O14)"
+    assert openpyxl.load_workbook(io.BytesIO(out), data_only=True)["TABLE OF CONTENTS"]["O16"].value == 13      # no empty / stale total
+    assert wb["COVER SHEET"]["P4"].value == "1 OF 13"
+    from utils.io_list_header import field_cells
+    assert [field_cells(wb[n])["pages"].value for n in ("TABLE OF CONTENTS", "ABBREVIATION", "IO_BASIS")] == [1, 1, 2]
     assert "IO List" in calls[0] and "COVER SHEET" in calls[0] and all("IO List" not in c for c in calls[1:])   # the heavy sheet is rendered once
+    assert not any("normally one" in w for w in rep["warnings"])                          # IO_BASIS and IO List may take several pages
+
+
+def test_every_generation_counts_its_own_pages():
+    for n in (3, 11):
+        rep = build_io_list_document(df_of(fixture_rows()), COLS, None, "WITH_SUMMARY", cover(), renderer=fake_renderer({"IO List": n}))[3]
+        assert rep["pages"]["iolist"] == n and rep["total_pages"] == n + 5
+
+
+def test_a_one_page_sheet_that_overflows_is_reported_with_its_actual_count():
+    out, _n, err, rep = build_io_list_document(df_of(fixture_rows()), COLS, None, "WITH_SUMMARY", cover(),
+                                               renderer=fake_renderer({"ABBREVIATION": 2}))
+    assert shts(openpyxl.load_workbook(io.BytesIO(out)))[2] == 2 and any("ABBREVIATION prints on 2 pages" in w for w in rep["warnings"])
+
+
+def test_a_wrong_paper_size_is_never_reported_as_a_verified_pdf():
+    rep = build_io_list_document(df_of(fixture_rows()), COLS, None, "WITH_SUMMARY", cover(), renderer=fake_renderer(wrong_size=("IO List",)))[3]
+    assert rep["_pdf"] is None and any("instead of A3 landscape" in w for w in rep["warnings"])
 
 
 def test_without_summary_the_summary_line_is_zero_and_no_cover_means_zero():
-    def pager(b):
-        return {"TABLE OF CONTENTS": 1, "ABBREVIATION": 1, "IO_BASIS": 1, "IO List": 3}
-    out, name, err, rep = build_io_list_document(df_of(fixture_rows()), COLS, None, "WITHOUT_SUMMARY", None, pager=pager)
-    toc = openpyxl.load_workbook(io.BytesIO(out))["TABLE OF CONTENTS"]
-    assert [toc.cell(r, 15).value for r in range(9, 15)] == [0, 1, 1, 1, 3, 0]
+    out, name, err, rep = build_io_list_document(df_of(fixture_rows()), COLS, None, "WITHOUT_SUMMARY", None, renderer=fake_renderer({"IO List": 3}))
+    assert shts(openpyxl.load_workbook(io.BytesIO(out))) == [0, 1, 1, 1, 3, 0] and rep["total_pages"] == 6
     assert any("No linked cover sheet" in w for w in rep["warnings"])
 
 
 def test_pagination_unavailable_is_reported_and_leaves_the_counts_empty():
     from utils.io_list_pagination import PaginationUnavailable
 
-    def pager(b):
+    def renderer(workbook, sheets=None):
         raise PaginationUnavailable("no renderer")
-    out, name, err, rep = build_io_list_document(df_of(fixture_rows()), COLS, None, "WITH_SUMMARY", cover(), pager=pager)
-    toc = openpyxl.load_workbook(io.BytesIO(out))["TABLE OF CONTENTS"]
-    assert err is None and all(toc.cell(r, 15).value is None for r in range(9, 15)) and any("no renderer" in w for w in rep["warnings"])
+    out, name, err, rep = build_io_list_document(df_of(fixture_rows()), COLS, None, "WITH_SUMMARY", cover(), renderer=renderer)
+    wb = openpyxl.load_workbook(io.BytesIO(out))
+    assert err is None and shts(wb) == [None] * 6 and any("no renderer" in w for w in rep["warnings"]) and rep["_pdf"] is None
+    assert wb["COVER SHEET"]["P4"].value == "1 of 9" and not rep["pages_verified"]       # the cover's own entry stays: nothing is estimated
+    assert wb["IO List"].page_setup.paperSize == 8                                     # the print settings do not depend on the renderer
 
 
+def test_page_counting_and_the_combined_pdf_do_not_need_pypdf(monkeypatch):
+    """The production server has pypdfium2 but not pypdf."""
+    from utils.io_list_pagination import combine, page_sizes
+    sections = fake_renderer({"IO List": 3})(build_io_list_document(df_of(fixture_rows()), COLS, None, "WITH_SUMMARY", None,
+                                                                    renderer=fake_renderer())[0])
+    for name in [n for n in sys.modules if n == "pypdf" or n.startswith("pypdf.")]:
+        monkeypatch.delitem(sys.modules, name)
+    monkeypatch.setitem(sys.modules, "pypdf", None)                                       # any "import pypdf" now fails
+    pdf = combine(list(sections.items()))
+    assert len(page_sizes(pdf)) == 7 and [s for s in page_sizes(pdf) if s[0] > 1000] == [s for s in page_sizes(sections["IO List"].pdf)]
+
+
+# ───────── Location ─────────
+def location_of(out):
+    from utils.io_list_header import field_cells
+    wb = openpyxl.load_workbook(io.BytesIO(out))
+    return [field_cells(wb[n])["location"].value for n in ("TABLE OF CONTENTS", "ABBREVIATION", "IO_BASIS")]
+
+
+def cover_with_location(value):
+    wb = openpyxl.load_workbook(io.BytesIO(cover()))
+    ws = wb.worksheets[0]
+    r = ws.max_row + 2
+    ws.cell(r, 1).value, ws.cell(r, 3).value = "LOCATION", value
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def build(cover_bytes, location, rows=None):
+    return build_io_list_document(df_of(rows or fixture_rows()), COLS, None, "WITH_SUMMARY", cover_bytes, renderer=fake_renderer(), location=location)
+
+
+def test_the_entered_location_reaches_all_three_headers_and_never_the_next_request():
+    for value in ("Kolkata  STP", "Delhi Works"):
+        out, _n, err, rep = build(cover(), value)
+        assert err is None and location_of(out) == [" ".join(value.split())] * 3
+        assert rep["location"]["source"] == "entered for this document"
+    out, _n, _e, rep = build(cover(), "")
+    assert location_of(out) == [None] * 3 and any("No Location" in w for w in rep["warnings"])
+
+
+def test_a_location_on_the_cover_wins_and_a_different_typed_one_is_reported():
+    out, _n, _e, rep = build(cover_with_location("Cover Town"), "Typed Town")
+    assert location_of(out) == ["Cover Town"] * 3 and any("Typed Town" in w and "not used" in w for w in rep["warnings"])
+    out, _n, _e, rep = build(cover_with_location("Cover Town"), "")
+    assert location_of(out) == ["Cover Town"] * 3 and rep["location"]["source"] == "cover sheet"
+
+
+def test_an_empty_cover_location_never_overwrites_the_typed_one_and_placeholders_are_refused():
+    out, _n, err, _r = build(cover_with_location(""), "Typed Town")
+    assert err is None and location_of(out) == ["Typed Town"] * 3
+    out, _n, err, _r = build(cover(), "TBA")
+    assert out is None and "placeholder" in err
+
+
+def test_a_long_location_wraps_in_a_taller_row():
+    out = build(cover(), "A VERY LONG PROJECT LOCATION " * 5)[0]
+    wb = openpyxl.load_workbook(io.BytesIO(out))
+    for name in ("TABLE OF CONTENTS", "ABBREVIATION", "IO_BASIS"):
+        assert wb[name].row_dimensions[4].height > 17.6
+        from utils.io_list_header import field_cells
+        assert field_cells(wb[name])["location"].alignment.wrap_text
+
+
+def test_the_instrument_location_column_of_the_io_list_is_untouched():
+    cols = COLS + ["LOCATION"]
+    df = df_of(fixture_rows())
+    df["LOCATION"] = "FIELD AREA"
+    out = build_io_list_document(df, cols, None, "WITH_SUMMARY", None, renderer=fake_renderer(), location="Project Town")[0]
+    ws = openpyxl.load_workbook(io.BytesIO(out))["IO List"]
+    assert {ws.cell(r, len(cols)).value for r in range(2, ws.max_row + 1)} == {"FIELD AREA"}
+
+
+# ───────── print settings ─────────
+def settings(ws):
+    ps = ws.page_setup
+    return (ps.paperSize, ps.orientation, ps.fitToWidth, ps.fitToHeight, ws.sheet_properties.pageSetUpPr.fitToPage, ps.scale, ps.firstPageNumber,
+            str(ws.print_area).replace("'", "").split("!")[-1], len(ws.row_breaks.brk))
+
+
+def test_every_sheet_has_its_own_paper_size_and_a_print_area_of_its_actual_content():
+    out = build(cover(), "Town")[0]
+    wb = openpyxl.load_workbook(io.BytesIO(out))
+    n = len(fixture_rows()) + 1
+    s = wb["IO Summary"]
+    assert settings(wb["COVER SHEET"]) == (9, "portrait", 1, 1, True, None, None, "$A$1:$P$24", 0)
+    assert settings(wb["TABLE OF CONTENTS"]) == (9, "portrait", 1, 1, True, None, None, "$A$1:$O$25", 0)
+    assert settings(wb["ABBREVIATION"]) == (9, "portrait", 1, 1, True, None, None, "$A$1:$G$26", 0)
+    basis = settings(wb["IO_BASIS"])
+    assert basis[:7] == (9, "portrait", 1, 0, True, None, None) and wb["IO_BASIS"].print_title_rows == "$8:$9"
+    assert settings(wb["IO List"]) == (8, "landscape", 1, 0, True, None, None, f"$A$1:$G${n}", 0) and wb["IO List"].print_title_rows == "$1:$1"
+    assert settings(s) == (9, "portrait", 1, 1, True, None, None, f"$A$1:$C${s.max_row}", 0)       # no IS/NIS column in this IODB
+
+
+def test_the_print_area_follows_the_data_size_and_selected_columns():
+    for rows, cols in ((fixture_rows()[:5], COLS[:3]), (fixture_rows() * 4, COLS)):
+        out = build_io_list_document(df_of(rows), cols, None, "WITH_SUMMARY", None, renderer=fake_renderer())[0]
+        ws = openpyxl.load_workbook(io.BytesIO(out))["IO List"]
+        assert str(ws.print_area).endswith(f"$A$1:${openpyxl.utils.get_column_letter(len(cols))}${len(rows) + 1}")
+        assert ws.max_row == len(rows) + 1 and all(ws.row_dimensions[r].height for r in (1, ws.max_row))
+
+
+# ───────── I/O Summary ─────────
+def summary_rows():
+    cols = COLS + ["IS/NIS TYPE"]
+    data = [("AI", "IS"), ("AI", "NIS"), ("AO", "IS"), ("DI", "NIS"), ("DO", "NIS"), ("SOFT", ""), ("SOFT", None), ("", "IS"), ("TBA", ""), (None, "")]
+    rows = [{**rec(f"T-{i}", f"L-{i}", "", t, "X", "SWITCH"), "IS/NIS TYPE": k} for i, (t, k) in enumerate(data)]
+    return pd.DataFrame(rows, columns=cols), cols
+
+
+def test_summary_has_five_columns_no_not_set_and_totals_over_the_shown_rows():
+    df, cols = summary_rows()
+    out, _n, err, rep = build_io_list_document(df, cols, None, "WITH_SUMMARY", None, renderer=fake_renderer())
+    wb = openpyxl.load_workbook(io.BytesIO(out))
+    ws = wb["IO Summary"]
+    table = [list(r) for r in ws.iter_rows(min_row=4, values_only=True)]
+    assert table == [["SL.NO", "SIGNAL I/O TYPE", "NO. OF SIGNALS", "IS", "NIS"], [1, "AI", 2, 1, 1], [2, "AO", 1, 1, 0], [3, "DI", 1, 0, 1],
+                     [4, "DO", 1, 0, 1], [5, "SOFT", 2, 0, 0], [None, "TOTAL", "=SUM(C5:C9)", "=SUM(D5:D9)", "=SUM(E5:E9)"]]
+    assert ws.max_column == 5 and sorted(map(str, ws.merged_cells.ranges)) == ["A1:E1", "A2:E2"] and str(ws.print_area).endswith("$A$1:$E$10")
+    values = openpyxl.load_workbook(io.BytesIO(out), data_only=True)["IO Summary"]
+    assert [values.cell(10, c).value for c in (3, 4, 5)] == [7, 2, 3]
+    assert "10 I/O List rows" in ws["A2"].value and "7 with a stated" in ws["A2"].value
+    assert wb["IO List"].max_row == 11                                                    # no record was removed from the I/O List
+    s = rep["summary"]
+    assert (s["source_records"], s["counted"], s["excluded"]) == (10, 7, 3)
+    assert [x["tag"] for x in s["excluded_records"]] == ["T-7", "T-8", "T-9"] and any("3 of 10" in w and "T-7" in w for w in rep["warnings"])
+
+
+def test_the_summary_shared_with_the_cable_schedule_is_unchanged():
+    from utils.io_summary import append_io_summary_sheet, build_io_summary
+    wb = openpyxl.Workbook()
+    ws = append_io_summary_sheet(wb, build_io_summary(summary_rows()[0]))
+    assert [c.value for c in ws[4]] == ["SL.NO", "SIGNAL I/O TYPE", "NO. OF SIGNALS", "IS", "NIS", "IS/NIS NOT SET"]
+    assert "NOT SET" in [ws.cell(r, 2).value for r in range(5, ws.max_row)] and not ws.print_area
+
+
+# ───────── real rendering ─────────
 @pytest.mark.skipif(not shutil.which("soffice"), reason="LibreOffice not installed")
-def test_real_rendering_matches_the_toc_total():
-    from utils import deliverable_output as DO
-    from utils.io_list_pagination import count_pages
+def test_real_rendering_matches_the_toc_total_and_the_page_sizes():
+    from pypdf import PdfReader
+    from utils.io_list_pagination import count_pages, size_name
     cv = cover()
-    out, name, err, rep = build_io_list_document(df_of(fixture_rows() * 3), COLS, None, "WITH_SUMMARY", cv)
+    rows = fixture_rows() * 8
+    out, name, err, rep = build_io_list_document(df_of(rows), COLS, None, "WITH_SUMMARY", cv, location="Town")
     assert err is None and rep["pages_verified"], rep["warnings"]
-    final = DO.insert_cover(out, cv)[0]
-    pages = count_pages(final)
-    assert sum(pages.values()) == sum(rep["pages"].values())
-    toc = openpyxl.load_workbook(io.BytesIO(final))["TABLE OF CONTENTS"]
-    assert [toc.cell(r, 15).value for r in range(9, 15)] == [rep["pages"][k] for k in ("cover", "toc", "abbr", "basis", "iolist", "summary")]
-    assert rep["pages"]["toc"] == rep["pages"]["abbr"] == rep["pages"]["basis"] == 1
+    pages = count_pages(out)                                                              # an independent render of the delivered workbook
+    assert [pages[n] for n in ("COVER SHEET", "TABLE OF CONTENTS", "ABBREVIATION", "IO_BASIS", "IO List", "IO Summary")] == [rep["pages"][k] for k in LINES]
+    assert rep["pages"]["cover"] == rep["pages"]["toc"] == rep["pages"]["abbr"] == rep["pages"]["summary"] == 1 and rep["pages"]["iolist"] > 1
+    assert shts(openpyxl.load_workbook(io.BytesIO(out))) == [rep["pages"][k] for k in LINES]
+    pdf = PdfReader(io.BytesIO(rep["_pdf"]))
+    sizes = [size_name(float(p.mediabox.width), float(p.mediabox.height)) for p in pdf.pages]
+    n = rep["pages"]["iolist"]
+    first = sum(rep["pages"][k] for k in LINES[:4])
+    assert len(sizes) == rep["total_pages"] and set(sizes[first:first + n]) == {"A3 landscape"}
+    assert set(sizes[:first] + sizes[first + n:]) == {"A4 portrait"}
+    assert all((p.extract_text() or "").strip() for p in pdf.pages)                        # no blank page
+    assert "SIGNAL" in pdf.pages[first + 1].extract_text() and rows[-1]["TAG NO"] in pdf.pages[first + n - 1].extract_text()
 
 
-# ───────── existing I/O List and Summary are untouched ─────────
-def test_io_list_and_summary_are_identical_to_the_existing_generator():
+# ───────── existing I/O List data is untouched ─────────
+def test_io_list_values_are_identical_to_the_existing_generator():
     from utils.generators import generate_io_list
     df = df_of(fixture_rows())
     old, _n, e1 = generate_io_list(df, COLS, None, template_wb=None, output_mode="WITH_SUMMARY")
-    new, _n2, e2, rep = build_io_list_document(df, COLS, None, "WITH_SUMMARY", None, pager=lambda b: {})
+    new, _n2, e2, rep = build_io_list_document(df, COLS, None, "WITH_SUMMARY", None, renderer=fake_renderer())
     assert e1 is None and e2 is None
     a = openpyxl.load_workbook(io.BytesIO(old))
     b = openpyxl.load_workbook(io.BytesIO(new))
-    for src, dst in ((a.worksheets[0], b["IO List"]), (a["IO Summary"], b["IO Summary"])):
-        va = [[c.value for c in r] for r in src.iter_rows()]
-        vb = [[c.value for c in r] for r in dst.iter_rows()]
-        assert va == vb
+    assert [[c.value for c in r] for r in a.worksheets[0].iter_rows()] == [[c.value for c in r] for r in b["IO List"].iter_rows()]
     summary = {r[1].value: r[2].value for r in b["IO Summary"].iter_rows() if r[1].value in ("AI", "AO", "DI", "DO")}
     assert sum(summary.values()) == len(df) == 64                                       # all signals, not the representative ones (IO_BASIS lists 7 loops)

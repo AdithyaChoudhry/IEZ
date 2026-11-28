@@ -497,10 +497,29 @@ def audit_trail(db: Session, project_id: str, limit: int = 200) -> list[dict]:
 
 
 # ── Regeneration (re-runs the EXISTING generators, never reimplements them) ──
-def _run_generator(module: str, src: bytes, tmpl: bytes | None, params: dict
+def _standard_io_list(src: bytes, params: dict, project_id: str):
+    """A standard I/O List is regenerated as the whole standard document (cover, contents, IO_BASIS, page counts), as on its page."""
+    from utils.file_handler import read_iodb
+    from utils.io_list_builder import build_io_list_document
+    from . import io_list_cover
+    df, err = read_iodb(io.BytesIO(src))
+    if err:
+        return None, None, f"Failed to read IODB: {err}", None
+    snap = io_list_cover.snapshot(project_id)
+    out, name, err, _report = build_io_list_document(
+        df, params.get("selected_columns") or [], params.get("filters") or None, params.get("output_mode") or "WITHOUT_SUMMARY",
+        snap["cover"], params.get("basis_overrides") or {}, params.get("basis_names") or {}, location=params.get("location"))
+    return out, name, err, None
+
+
+def _run_generator(module: str, src: bytes, tmpl: bytes | None, params: dict, project_id: str = ""
                    ) -> tuple[bytes | None, str | None, str | None, int | None]:
     """Returns (output_bytes, filename, error, sheet_count)."""
     _ensure_utils_importable()
+    if module == "io_list":
+        from utils.io_list_document import STANDARD_TEMPLATE
+        if params.get("standard_template") or tmpl == STANDARD_TEMPLATE.read_bytes():
+            return _standard_io_list(src, params, project_id)
     if module in ("instrument_list", "io_list"):
         from utils.template_processor import process_instrument_list, process_io_list
         fn = process_instrument_list if module == "instrument_list" else process_io_list
@@ -508,6 +527,7 @@ def _run_generator(module: str, src: bytes, tmpl: bytes | None, params: dict
             io.BytesIO(src), params.get("selected_columns") or [],
             filters=params.get("filters") or None,
             template_file=io.BytesIO(tmpl) if tmpl else None,
+            **({"output_mode": params["output_mode"]} if module == "io_list" and params.get("output_mode") else {}),
         )
         return out, name, err, None
     if module == "cable_schedule":
@@ -574,7 +594,7 @@ def regenerate_module(db: Session, project_id: str, module: str, user: str | Non
     src_bytes = Path(src.file_path).read_bytes()
 
     try:
-        out, name, err, sheets = _run_generator(module, src_bytes, tmpl, params)
+        out, name, err, sheets = _run_generator(module, src_bytes, tmpl, params, project_id)
     except Exception as exc:  # generator crashed - record, don't lose earlier revisions
         logger.exception("Regeneration of %s failed", module)
         out, name, err, sheets = None, None, str(exc), None

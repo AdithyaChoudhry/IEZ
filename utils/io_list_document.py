@@ -5,6 +5,7 @@ io_list_document.py - the standard I/O List workbook (TABLE OF CONTENTS, ABBREVI
     read_cover_meta(bytes)     project / client / document number / revision / date / signatories / revision history of the linked cover sheet
     write_io_basis(ws, result) the IO_BASIS table from utils.io_list_basis (merged equipment and I/O-type cells, five headings only)
     fill_front(wb, meta, counts, ...)  universal headers, TABLE OF CONTENTS rows / total / revision history
+    apply_front_print_setup(wb)        A4 print settings of the three front sheets
 
 The I/O List and I/O Summary sheets are produced by the existing generators and are not touched here.
 """
@@ -22,8 +23,11 @@ import openpyxl
 from openpyxl.cell.cell import MergedCell
 from openpyxl.styles import Alignment, Border, Side
 from openpyxl.worksheet.cell_range import CellRange
+from openpyxl.worksheet.page import PageMargins
 
-from utils.io_list_header import fill_header
+from utils import cable_header_meta as HM
+from utils.io_list_header import field_cells, fill_header
+from utils.io_list_print import content_area, page_setup
 
 STANDARD_TEMPLATE = Path(__file__).resolve().parent.parent / "backend" / "app" / "templates" / "io_list" / "IO_List_Standard_Template.xlsx"
 TOC_SHEET, ABBR_SHEET, BASIS_SHEET = "TABLE OF CONTENTS", "ABBREVIATION", "IO_BASIS"
@@ -65,7 +69,8 @@ def _cells(ws):
 def read_cover_meta(cover_bytes: Optional[bytes]) -> dict:
     """
     What the header / TOC need from the centralised cover sheet, found by the cover's labels. Nothing is guessed: a missing value stays
-    empty and is listed in `warnings`. The cover sheet carries no LOCATION, so location is always empty (reported).
+    empty and is listed in `warnings`. `location` is filled only when the cover itself states one (the iEZ cover sheet has no such field);
+    the caller resolves it against the Location entered for the document.
     """
     meta = {"project": "", "client": "", "location": "", "doc_no": "", "rev": "", "date": "", "prepared": "", "checked": "", "approved": "",
             "doc_title": "", "revisions": [], "warnings": []}
@@ -153,7 +158,9 @@ def read_cover_meta(cover_bytes: Optional[bytes]) -> dict:
     for key, label in (("project", "project name"), ("client", "client")):
         if not meta[key]:
             meta["warnings"].append(f"The cover sheet has no {label}: the header field is left empty.")
-    meta["warnings"].append("The cover sheet carries no location: the LOCATION header field is left empty.")
+    header = HM.read_cover_header(cover_bytes)                    # the same label search the Cable Schedule header uses
+    if "location" not in header.problems:
+        meta["location"] = header.values["location"]
     return meta
 
 
@@ -204,7 +211,9 @@ def write_io_basis(ws, result) -> dict:
             ws.merge_cells(start_row=r0, start_column=1, end_row=r1, end_column=1)
             ws.merge_cells(start_row=r0, start_column=2, end_row=r1, end_column=2)
             n_merge += 2
-        need = 14.5 * _lines(cls.equipment, w_equip) + 8                                    # the equipment text must fit its merged cell
+        al = ws.cell(r0, 3).alignment                                                       # a long equipment name wraps, never cut off
+        ws.cell(r0, 3).alignment = Alignment(horizontal=al.horizontal, vertical="center", wrap_text=True)
+        need = 14.5 * _lines(cls.equipment, w_equip * 0.9) + 8                              # the equipment text must fit its merged cell
         have = sum(ws.row_dimensions[x].height or 23.4 for x in range(r0, r1 + 1))
         if need > have:
             ws.row_dimensions[r1].height = (ws.row_dimensions[r1].height or 23.4) + (need - have)
@@ -246,6 +255,36 @@ def _frame_group(ws, r0: int, r1: int, io_runs: list) -> None:
 
 
 # ───────────────────────────── front sheets ─────────────────────────────
+def _fit_header_value(ws, key: str) -> None:
+    """A long header value wraps inside its cell and the row grows with it, so that it is never clipped."""
+    cell = field_cells(ws).get(key)
+    if cell is None or not cell.value:
+        return
+    last = next((m.max_col for m in ws.merged_cells.ranges if m.min_row == cell.row and m.min_col == cell.column), cell.column)
+    width = sum(float(ws.column_dimensions[openpyxl.utils.get_column_letter(c)].width or 8.43) for c in range(cell.column, last + 1))
+    lines = max(1, math.ceil(len(str(cell.value)) / max(8, int(width * 0.85))))
+    if lines > 1:
+        al = copy(cell.alignment)
+        cell.alignment = Alignment(horizontal=al.horizontal, vertical="center", wrap_text=True)
+        ws.row_dimensions[cell.row].height = max(ws.row_dimensions[cell.row].height or 17.6, 16.0 * lines + 2)
+
+
+def apply_front_print_setup(wb) -> None:
+    """TABLE OF CONTENTS and ABBREVIATION: one A4 portrait page. IO_BASIS: A4 portrait, one page wide, as many pages down as needed."""
+    toc, ab, basis = wb[TOC_SHEET], wb[ABBR_SHEET], wb[BASIS_SHEET]
+    page_setup(toc, "A4", "portrait", 1)                                   # print area: set with the revision history (_fill_revisions)
+    page_setup(ab, "A4", "portrait", 1, area=content_area(ab))
+    m = basis.page_margins
+    page_setup(basis, "A4", "portrait", 0, titles="8:9",                   # narrower side margins: larger print for the wide table
+               margins=PageMargins(left=0.25, right=0.25, top=m.top, bottom=m.bottom, header=m.header, footer=m.footer))
+
+
+def toc_rows(toc) -> dict:
+    """{"lines": {section key: row}, "total": "O16" | None} of the TABLE OF CONTENTS."""
+    head = _find_row(toc, 1, lambda s: s.startswith("S. NO")) or 8
+    tot = _find_row(toc, 2, lambda s: s.startswith("TOTAL"))
+    return {"lines": dict(zip(("cover", "toc", "abbr", "basis", "iolist", "summary"), range(head + 1, head + 7))),   # the six template lines
+            "total": f"O{tot}" if tot else None}
 def _find_row(ws, col: int, pred) -> Optional[int]:
     for r in range(1, ws.max_row + 1):
         v = ws.cell(r, col).value
@@ -294,9 +333,9 @@ def fill_front(wb, meta: dict, counts: dict, io_list_title: str = "") -> dict:
         miss = fill_header(ws, m)
         if miss:
             out["missing_fields"][name] = miss
+        _fit_header_value(ws, "location")
     toc = wb[TOC_SHEET]
-    head = _find_row(toc, 1, lambda s: s.startswith("S. NO")) or 8
-    rows = dict(zip(("cover", "toc", "abbr", "basis", "iolist", "summary"), range(head + 1, head + 7)))   # the six lines of the template, in order
+    rows = toc_rows(toc)["lines"]
     if io_list_title and rows["iolist"]:
         toc.cell(rows["iolist"], 2).value = io_list_title
     for key, r in rows.items():
@@ -304,9 +343,9 @@ def fill_front(wb, meta: dict, counts: dict, io_list_title: str = "") -> dict:
             v = counts.get(key)
             toc.cell(r, 15).value = int(v) if v is not None else None
     first, last = min(x for x in rows.values() if x), max(x for x in rows.values() if x)
-    tot = _find_row(toc, 2, lambda s: s.startswith("TOTAL"))
+    tot = toc_rows(toc)["total"]
     if tot:
-        toc.cell(tot, 15).value = f"=SUM(O{first}:O{last})"                 # replaces the worksheet-position formula of the old template
+        toc[tot].value = f"=SUM(O{first}:O{last})"                          # replaces the worksheet-position formula of the old template
     _fill_revisions(toc, meta.get("revisions") or [])
     return out
 

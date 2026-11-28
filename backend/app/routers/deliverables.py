@@ -59,13 +59,15 @@ def _safe(name: str) -> str:
 # ── used by the generators ───────────────────────────────────────────────────
 def finalize(user_id, module: str, project_id: Optional[str], data: bytes, filename: str, *, sub_key: str = "",
              sub_label: str = "", custom_template: Optional[bytes] = None, db: Optional[Session] = None,
-             snapshot: Optional[dict] = None) -> tuple[bytes, str, dict]:
+             snapshot: Optional[dict] = None, composed: Optional[dict] = None) -> tuple[bytes, str, dict]:
     """
     -> (final bytes, file name, cover info). The cover sheet of the project's MDL document is put first in the workbook
     (or in place of the template's own cover sheet). Without a resolvable cover the workbook is
     returned unchanged with the reason. The result is remembered for the Excel / PDF downloads.
     `snapshot` (optional): a cover resolution + cover workbook taken earlier in the same request ({"resolution", "cover", "warnings",
     "message"}); it is used instead of resolving again, so the document metadata and the inserted cover are one consistent snapshot.
+    `composed` (optional, I/O List standard document): {"bytes": the finished workbook, its cover already inserted, "cover_sheet": name or
+    None, "pdf": the PDF of exactly that workbook or None, "renderer": workbook -> PDF}; the workbook is then served as it is.
     """
     own = db is None
     db = db or SessionLocal()
@@ -84,7 +86,9 @@ def finalize(user_id, module: str, project_id: Optional[str], data: bytes, filen
             else:
                 cover, warnings = DC.cover_workbook(db, r, custom_template)
             draft = False                                    # a cover sheet has no approval state: nothing is marked DRAFT
-            if filename.lower().endswith(".zip"):
+            if composed is not None:
+                info["cover_sheet"] = composed["cover_sheet"]
+            elif filename.lower().endswith(".zip"):
                 data = DO.insert_cover_in_zip(data, cover, draft)
             else:
                 data, info["cover_sheet"] = DO.insert_cover(data, cover, draft)
@@ -99,8 +103,12 @@ def finalize(user_id, module: str, project_id: Optional[str], data: bytes, filen
     finally:
         if own:
             db.close()
-    _outputs[(user_id, module)] = {"bytes": data, "filename": filename, "info": info, "pdf": None, "pdf_status": None,
-                                   "pdf_error": None, "digest": hashlib.sha256(data).hexdigest()}
+    if composed is not None:
+        data = composed["bytes"]
+    ready = composed.get("pdf") if composed else None
+    _outputs[(user_id, module)] = {"bytes": data, "filename": filename, "info": info, "pdf": ready, "pdf_status": "done" if ready else None,
+                                   "pdf_error": None, "digest": hashlib.sha256(data).hexdigest(),
+                                   "renderer": composed.get("renderer") if composed else None}
     return data, filename, info
 
 
@@ -177,6 +185,8 @@ def _convert(out: dict) -> None:
         with _pdf_slot:
             if out["filename"].lower().endswith(".zip"):
                 pdf = DO.to_pdf_zip(out["bytes"], draft)
+            elif out.get("renderer"):                    # a document that carries its own print settings
+                pdf = out["renderer"](out["bytes"])
             else:
                 pdf = DO.to_pdf(out["bytes"], draft)
         out.update(pdf=pdf, pdf_status="done")

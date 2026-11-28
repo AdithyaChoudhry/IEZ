@@ -2,9 +2,9 @@
  * I/O List Generator
  * Upload an IODB file, pick columns (with I/O-relevant columns pre-suggested) + per-column filters, preview, and generate.
  */
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { Network, Upload, FileText, CheckCircle2, ChevronLeft, ChevronRight } from 'lucide-react';
-import { DeliverableCoverCard, DeliverableDownloads, type AppliedCover } from '../ui/DeliverableCover';
+import { DeliverableCoverCard, DeliverableDownloads, useProject, type AppliedCover } from '../ui/DeliverableCover';
 import api from '@/services/api';
 import PageHeader from '../ui/PageHeader';
 import ProjectSelector from '../ui/ProjectSelector';
@@ -34,6 +34,8 @@ interface GenerateResponse {
   sheets?: string[];   // sheets of the generated workbook, read from the output file
   basis?: {            // standard I/O List document: printed pages per section, warnings, IODB observations
     pages?: Record<string, number>; warnings?: string[]; issues?: { severity: string; category: string; message: string }[]; pages_verified?: boolean;
+    total_pages?: number | null; location?: { value: string; source: string };
+    sections?: { sheet: string; pages: number; size: string; expected: string }[];
   } | null;
 }
 
@@ -49,6 +51,10 @@ export default function IOListGenerator() {
   const [filterColumn, setFilterColumn] = useState<string>('');
   const [basisOverrides, setBasisOverrides] = useState<Record<string, string>>({});   // IO_BASIS review: chosen representative loops
   const [basisNames, setBasisNames] = useState<Record<string, string>>({});           // IO_BASIS review: edited equipment wording
+
+  const [location, setLocation] = useState('');                                      // document LOCATION of the headers
+  const project = useProject();
+  useEffect(() => { setLocation(''); setResult(null); }, [project]);                  // never carried over to another project
 
   const [page, setPage] = useState(0);
   const PAGE_SIZE = 25;
@@ -103,6 +109,7 @@ export default function IOListGenerator() {
     formData.append('output_mode', ioListOutputMode);
     formData.append('basis_overrides', JSON.stringify(basisOverrides));
     formData.append('basis_names', JSON.stringify(basisNames));
+    if (!templateFile) formData.append('location', location.trim());
 
     try {
       const response = await api.post<GenerateResponse>('/io-list/generate', formData, {
@@ -356,6 +363,18 @@ export default function IOListGenerator() {
 
           <DeliverableCoverCard docType="io_list" customTemplate={coverTemplate} onCustomTemplate={(f) => { setCoverTemplate(f); setResult(null); }} />
 
+          {!templateFile && (
+            <Card title="Document Location" description="Printed in the LOCATION field of the Table of Contents, Abbreviation and IO Basis headers. If the linked cover sheet states a Location, that one is used. It does not change the LOCATION column of the I/O List.">
+              <input
+                type="text" value={location} maxLength={200} aria-label="Document location" data-testid="io-location"
+                placeholder="Enter the project / document location"
+                onChange={(e) => { setLocation(e.target.value); setResult(null); }}
+                className="w-full border rounded-lg px-3 py-2 text-sm"
+                style={{ background: 'var(--s1)', color: 'var(--t0)', borderColor: 'var(--b2)' }}
+              />
+            </Card>
+          )}
+
           {/* Generate */}
           <Button
             onClick={handleGenerate}
@@ -384,11 +403,14 @@ export default function IOListGenerator() {
                   Workbook sheets: {result.sheets.join(' · ')}
                 </p>
               )}
-              {result.basis?.pages && (
-                <p className="text-sm text-green-800 mb-2">
-                  Printed pages (Shts.): {Object.entries(result.basis.pages).map(([k, v]) => `${k} ${v}`).join(' · ')}
-                  {result.basis.pages_verified ? ' — verified on the rendered workbook' : ''}
+              {result.basis?.sections && result.basis.sections.length > 0 && (
+                <p className="text-sm text-green-800 mb-2" data-testid="io-pages">
+                  Printed pages: {result.basis.sections.map((x) => `${x.sheet} ${x.pages} (${x.size})`).join(' · ')}
+                  {' '}— total {result.basis.total_pages}{result.basis.pages_verified ? ', verified on the rendered document' : ', NOT verified'}
                 </p>
+              )}
+              {result.basis?.location?.value && (
+                <p className="text-sm text-green-800 mb-2">Location in the headers: {result.basis.location.value} ({result.basis.location.source})</p>
               )}
               {(result.basis?.warnings || []).map((w, i) => <p key={i} className="text-sm text-amber-800 mb-1">• {w}</p>)}
               <p className="text-sm text-green-800 mb-2 font-mono">{result.filename}</p>

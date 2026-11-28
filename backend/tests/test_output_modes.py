@@ -195,7 +195,7 @@ def test_summary_counts_the_filtered_rows_only():
     assert rows["TOTAL"][2] == "=SUM(C5:C8)"
     assert "8 I/O List rows" in ws["A2"].value
     # IS/NIS split present because the IODB has the column
-    assert ws["D4"].value == "IS" and rows["AI"][3] + rows["AI"][4] + rows["AI"][5] == 4
+    assert ws["D4"].value == "IS" and rows["AI"][3] + rows["AI"][4] <= 4 and ws.max_column == 5
 
 
 def test_switching_modes_repeatedly_leaves_no_stale_summary():

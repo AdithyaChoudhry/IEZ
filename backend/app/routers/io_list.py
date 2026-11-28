@@ -7,6 +7,7 @@ from fastapi.responses import StreamingResponse
 from typing import Optional
 import io
 import json
+from functools import partial
 
 from ..offload import off_main_loop
 from ..deps import get_current_user
@@ -24,6 +25,9 @@ from utils import workbook_assembly as wa
 from utils.file_handler import read_iodb
 from utils.io_list_basis import build_basis
 from utils.io_list_builder import build_io_list_document
+from utils.io_list_pagination import combine, render_sections, visible_sheets
+from utils.io_summary import build_io_summary, summary_diagnostics
+from utils import deliverable_output as DO
 from utils.io_list_document import STANDARD_TEMPLATE
 from utils.generators import _apply_column_filters
 
@@ -109,6 +113,22 @@ async def preview_io_basis(
     return BasisPreviewResponse(classes=res.review_rows(), issues=res.issues, stats=res.stats, error=res.error)
 
 
+def _standard_pdf(workbook: bytes) -> bytes:
+    """The standard document as PDF when none was kept from generation: its own print settings, sheet by sheet (mixed A3 / A4)."""
+    sections = render_sections(workbook)
+    return combine([(n, sections[n]) for n in visible_sheets(workbook)])
+
+
+def _summary_report(iodb_bytes: bytes, filters: dict) -> Optional[dict]:
+    """With an uploaded template: only the records the I/O Summary does not count are reported."""
+    df, err = read_iodb(io.BytesIO(iodb_bytes))
+    if err:
+        return None
+    filtered = _apply_column_filters(df, filters or None)
+    summary = summary_diagnostics(filtered, build_io_summary(filtered))
+    return {"summary": summary, "warnings": [summary["message"]] if summary["excluded"] else []}
+
+
 @router.post("/generate", response_model=ListGenerateResponse)
 async def generate_io_list(
     iodb_file: UploadFile = File(...),
@@ -120,6 +140,7 @@ async def generate_io_list(
     output_mode: str = Form(wa.WITHOUT_SUMMARY),  # WITHOUT_SUMMARY | WITH_SUMMARY
     basis_overrides: str = Form("{}"),            # {class key: representative loop number} chosen in the IO_BASIS review
     basis_names: str = Form("{}"),                # {class key: EQUIPMENT wording} edited in the IO_BASIS review
+    location: str = Form(""),                     # document LOCATION for the headers, used when the linked cover sheet states none
     current_user: User = Depends(get_current_user),
 ):
     try:
@@ -149,7 +170,8 @@ async def generate_io_list(
     template_bytes = None
     standard = template_file is None                      # no template uploaded: the stored iEZ standard I/O List template is used
     cover_tpl = await cover_template_file.read() if cover_template_file is not None else None
-    snapshot, basis_report = None, None
+    snapshot, basis_report, composed = None, None, None
+    from .deliverables import finalize, _pdf_slot
     if standard:
         template_bytes = STANDARD_TEMPLATE.read_bytes()
         df, rerr = read_iodb(io.BytesIO(iodb_bytes))
@@ -157,9 +179,11 @@ async def generate_io_list(
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Failed to read IODB: {rerr}")
         # one consistent snapshot of the linked cover sheet for the whole request (headers, revision history and the inserted cover)
         snapshot = await run_in_threadpool(io_list_cover.snapshot, project_id, cover_tpl)
-        out_bytes, filename, err, basis_report = await run_in_threadpool(
+        overrides, names = _json(basis_overrides, "basis_overrides"), _json(basis_names, "basis_names")
+        renderer = partial(render_sections, lock=_pdf_slot)
+        out_bytes, filename, err, basis_report = await run_in_threadpool(partial(
             build_io_list_document, df, columns_list, filters_dict if filters_dict else None, output_mode, snapshot["cover"],
-            _json(basis_overrides, "basis_overrides"), _json(basis_names, "basis_names"))
+            overrides, names, renderer=renderer, location=location))
     else:
         template_bytes = await template_file.read()
         template_buffer = io.BytesIO(template_bytes)
@@ -172,6 +196,9 @@ async def generate_io_list(
         )
 
     reg_params = {"selected_columns": columns_list, "filters": filters_dict, "output_mode": output_mode}
+    if standard:
+        reg_params.update(standard_template=True, location=location, basis_overrides=_json(basis_overrides, "basis_overrides"),
+                          basis_names=_json(basis_names, "basis_names"))
     if err:
         register_safe("failure", project_id=project_id, module="io_list", user=current_user.username,
                       error=err, source_bytes=iodb_bytes, source_filename=iodb_file.filename or "IODB.xlsx",
@@ -181,13 +208,21 @@ async def generate_io_list(
 
     # The downloaded workbook must be exactly what the preview promised.
     planned = [s["name"] for s in _composition(template_bytes, output_mode)]
+    cover_sheet = None
+    if standard:                                               # the standard document arrives with its cover sheet already first
+        first = wa.composition_of(out_bytes)[0]
+        if DO._key(first) in DO.COVER_SHEET_NAMES:
+            cover_sheet, planned = first, [first] + planned
     mismatch = wa.check_composition(out_bytes, planned)
     if mismatch:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=mismatch)
 
-    from .deliverables import finalize
-    out_bytes, filename, cover = await run_in_threadpool(finalize, current_user.id, "io_list", project_id, out_bytes,
-                                                         filename, custom_template=cover_tpl, snapshot=snapshot)
+    if standard:
+        composed = {"bytes": out_bytes, "cover_sheet": cover_sheet, "pdf": basis_report.pop("_pdf", None), "renderer": _standard_pdf}
+    elif output_mode == wa.WITH_SUMMARY:
+        basis_report = await run_in_threadpool(_summary_report, iodb_bytes, filters_dict)
+    out_bytes, filename, cover = await run_in_threadpool(partial(finalize, current_user.id, "io_list", project_id, out_bytes,
+                                                         filename, custom_template=cover_tpl, snapshot=snapshot, composed=composed))
     if cover.get("cover_sheet") and cover["cover_sheet"] not in planned:
         planned = [cover["cover_sheet"]] + planned
     cache_key = f"{current_user.id}_io_list"

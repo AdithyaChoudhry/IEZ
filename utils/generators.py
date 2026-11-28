@@ -93,9 +93,11 @@ def generate_io_list(
     filters: dict | None = None,
     template_wb: openpyxl.Workbook | None = None,
     output_mode: str = "WITHOUT_SUMMARY",
+    layout_report: dict | None = None,
 ) -> tuple[bytes | None, str | None, str | None]:
     """
-    Same logic as Instrument List but outputs IO_List.xlsx.
+    Same logic as Instrument List but outputs IO_List.xlsx. The appended 'IO List' sheet is set up to print on A3 landscape, all
+    columns on one page width (utils.io_list_print); `layout_report` receives that layout's figures.
     Optional `filters` dict: {column_name: [allowed_values]} applied before output.
     Optional `template_wb`: if provided, the filtered data is appended as a new sheet
     named 'IO List' at the end of the template workbook; every template sheet is kept.
@@ -116,9 +118,14 @@ def generate_io_list(
             return None, None, "No rows remain after applying filters."
 
         def _summary_step(wb):
+            if template_wb is not None:
+                from utils.io_list_print import layout_list_sheet
+                figures = layout_list_sheet(wb["IO List"])
+                if layout_report is not None:
+                    layout_report.update(figures)
             if mode == WITH_SUMMARY:
                 from utils.io_summary import build_io_summary, append_io_summary_sheet
-                append_io_summary_sheet(wb, build_io_summary(filtered))
+                append_io_summary_sheet(wb, build_io_summary(filtered), classified_only=True)
             else:
                 drop_sheet(wb, IO_SUMMARY_SHEET)
 

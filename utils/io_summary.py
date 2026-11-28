@@ -4,6 +4,9 @@ io_summary.py - I/O SUMMARY sheet for the I/O List workbook (new; iEZ had no I/O
 Counts the SAME filtered IODB rows that go into the I/O List, by SIGNAL I/O TYPE (AI / AO / DI / DO,
 any other value as found, empty / "-" as NOT SET). When the IODB has an IS/NIS column the counts are also
 split IS / NIS. Nothing is inferred: a missing signal-type column gives an explicit reason on the sheet.
+
+The I/O List's own summary sheet (classified_only=True) shows only signals with a stated I/O type: no NOT SET
+line and no "IS/NIS NOT SET" column; the records left out are reported by summary_diagnostics().
 Layout follows the Cable Summary sheet (Arial 12, thin borders, same header fill).
 """
 from __future__ import annotations
@@ -13,6 +16,7 @@ from dataclasses import dataclass, field
 
 import pandas as pd
 
+from utils.io_list_print import page_setup
 from utils.workbook_assembly import IO_SUMMARY_SHEET, drop_sheet
 
 SUMMARY_TITLE = "I/O SUMMARY"
@@ -82,7 +86,52 @@ def build_io_summary(df: pd.DataFrame) -> IOSummaryResult:
     return res
 
 
-def append_io_summary_sheet(wb, result: IOSummaryResult):
+def classified_rows(result: IOSummaryResult) -> list[dict]:
+    """The summary lines with a stated I/O type (the NOT SET line is not one)."""
+    return [r for r in result.rows if r["type"] != _NOT_SET]
+
+
+def summary_totals(result: IOSummaryResult) -> dict:
+    """{cell: value} of the TOTAL formulas of the classified summary sheet."""
+    rows = classified_rows(result)
+    if not rows:
+        return {}
+    keys = ("total", "IS", "NIS") if result.has_isnis else ("total",)
+    return {f"{col}{5 + len(rows)}": sum(r[k] for r in rows) for col, k in zip("CDE", keys)}
+
+
+def summary_diagnostics(df: pd.DataFrame, result: IOSummaryResult, limit: int = 50) -> dict:
+    """Source records against counted signals, with the records that have no usable I/O type (they stay in the I/O List)."""
+    counted = sum(r["total"] for r in classified_rows(result))
+    out = {"source_records": result.total_rows, "counted": counted, "excluded": 0, "excluded_records": [], "message": result.reason}
+    if result.type_column is None:
+        return out
+    type_col = _find(df, _TYPE_HEADERS)
+    tag_col = _find(df, ("TAG NO", "TAG NUMBER", "TAG"))
+    sno_col = _find(df, ("S.NO", "S NO", "SL.NO", "SL NO"))
+    text = lambda v: "" if v is None or (not isinstance(v, str) and pd.isna(v)) else str(v).strip()
+    positions = [i for i, v in enumerate(df[type_col]) if _clean(v) == _NOT_SET]
+    out["excluded"] = len(positions)
+    for i in positions[:limit]:
+        r = df.iloc[i]
+        out["excluded_records"].append({"list_row": i + 2,                     # row of the IO List sheet (row 1 = headings)
+                                        "s_no": text(r[sno_col]) if sno_col is not None else "",
+                                        "tag": text(r[tag_col]) if tag_col is not None else "", "io_type": text(r[type_col])})
+    if positions:
+        def name(x):
+            if x["tag"]:
+                return f"IO List row {x['list_row']}, {x['tag']}"
+            if x["s_no"]:
+                return f"IO List row {x['list_row']}, S.NO {x['s_no']}"
+            return f"IO List row {x['list_row']}: no S.NO and no tag number, check whether it is a signal at all"
+        names = "; ".join(name(x) for x in out["excluded_records"][:5])
+        out["message"] = (f"{len(positions)} of {result.total_rows} I/O List record(s) have no usable SIGNAL I/O TYPE (blank, '-', TBA ...) and "
+                          f"are not counted in the I/O Summary ({names}{'; ...' if len(positions) > 5 else ''}). They remain in the I/O List: "
+                          "please review them.")
+    return out
+
+
+def append_io_summary_sheet(wb, result: IOSummaryResult, classified_only: bool = False):
     """Add the I/O SUMMARY as the LAST sheet. A stale sheet of the same name in the template is replaced."""
     from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
@@ -93,23 +142,31 @@ def append_io_summary_sheet(wb, result: IOSummaryResult):
     font = Font(name="Arial", size=12)
     bold = Font(name="Arial", size=12, bold=True)
     center = Alignment(horizontal="center", vertical="center", wrap_text=True)
-    heads = ["SL.NO", "SIGNAL I/O TYPE", "NO. OF SIGNALS"] + (["IS", "NIS", "IS/NIS NOT SET"] if result.has_isnis else [])
+    split = ["IS", "NIS"] if classified_only else ["IS", "NIS", "NOT SET"]
+    shown = classified_rows(result) if classified_only else result.rows
+    heads = ["SL.NO", "SIGNAL I/O TYPE", "NO. OF SIGNALS"] + (
+        [h if h != "NOT SET" else "IS/NIS NOT SET" for h in split] if result.has_isnis else [])
     last_col = len(heads)
     ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=last_col)
     ws["A1"] = SUMMARY_TITLE
     ws["A1"].font, ws["A1"].alignment = Font(name="Arial", size=14, bold=True), center
     ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=last_col)
     ws["A2"] = f"Source: {result.total_rows} I/O List rows (after the selected filters)"
+    if classified_only and result.rows:
+        counted = sum(r["total"] for r in shown)
+        ws["A2"] = (f"Source: {result.total_rows} I/O List rows (after the selected filters); "
+                    f"{counted} with a stated signal I/O type are counted below")
+        ws.row_dimensions[2].height = 27
     ws["A2"].font, ws["A2"].alignment = Font(name="Arial", size=10, italic=True), center
     for col, head in enumerate(heads, 1):
         c = ws.cell(4, col, head)
         c.font, c.alignment, c.border = bold, center, border
         c.fill = PatternFill("solid", fgColor="CCFFFF")
     row = 5
-    if result.rows:
+    if shown:
         first = row
-        for n, item in enumerate(result.rows, 1):
-            values = [n, item["type"], item["total"]] + ([item["IS"], item["NIS"], item["NOT SET"]] if result.has_isnis else [])
+        for n, item in enumerate(shown, 1):
+            values = [n, item["type"], item["total"]] + ([item[k] for k in split] if result.has_isnis else [])
             for col, value in enumerate(values, 1):
                 c = ws.cell(row, col, value)
                 c.font, c.alignment, c.border = font, center, border
@@ -127,7 +184,10 @@ def append_io_summary_sheet(wb, result: IOSummaryResult):
         c = ws.cell(row, 1, result.reason or "No signals to count.")
         c.font, c.alignment = Font(name="Arial", size=12, italic=True), Alignment(horizontal="left", vertical="center", wrap_text=True)
         ws.row_dimensions[row].height = 48
-    for col, width in zip("ABCDEF", (10, 24, 18, 12, 12, 18)):
+    for col, width in zip("ABCDEF"[:last_col if classified_only else 6], (10, 24, 18, 12, 12, 18)):
         ws.column_dimensions[col].width = width
     ws.page_setup.paperSize = 9
+    if classified_only:
+        page_setup(ws, "A4", "portrait", 1, area=f"A1:{ws.cell(4, last_col).column_letter}{row}")
+        ws.print_options.horizontalCentered = True
     return ws

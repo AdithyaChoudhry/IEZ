@@ -640,7 +640,12 @@ def generate_cable_schedule(
     """
     try:
         if extra_sheets and not include_schedule:
-            # extra sheets only: the schedule is not built, so its JB / tag columns are not needed
+            # extra sheets only: the schedule is not built, so its JB / tag columns are not needed. The page sends none
+            # until "Load Columns" is used: the IODB's own columns are taken, as the extra sheets themselves do.
+            from utils.cable_schedule_extra import resolve_columns
+            _found = resolve_columns(list(df.columns))
+            jb_column = jb_column or _found.get("jb_tag") or "JUNCTION BOX TAG NO."
+            tag_column = tag_column or _found.get("tag_no") or "TAG NO"
             df = df.assign(**{c: None for c in (jb_column, tag_column) if c and c not in df.columns})
         # ── Locate cable schedule sheet ──────────────────────────────────────
         target_sheet = _find_cs_sheet(template_wb)

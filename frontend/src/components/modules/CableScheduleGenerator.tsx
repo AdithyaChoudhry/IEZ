@@ -108,8 +108,13 @@ export default function CableScheduleGenerator() {
       setColumns(response.data.columns);
 
       // Pre-select likely JB/Tag columns
-      const jbGuess = response.data.columns.find((c) => c.toUpperCase().includes('JUNCTION'));
-      const tagGuess = response.data.columns.find((c) => c.toUpperCase().includes('TAG'));
+      // the plain heading wins; a "PREV TAG" / "PREV JUNCTION BOX" history column is never preselected
+      const plain = (c: string) => c.toUpperCase().replace(/[^A-Z0-9]+/g, ' ').trim();
+      const guess = (names: string[], word: string) =>
+        names.map((n) => response.data.columns.find((c) => plain(c) === n)).find(Boolean)
+        ?? response.data.columns.find((c) => plain(c).includes(word) && !/\b(PREV|PREVIOUS|OLD)\b/.test(plain(c)) && !plain(c).includes('CABLE'));
+      const jbGuess = guess(['JUNCTION BOX TAG NO', 'JUNCTION BOX TAG', 'JB TAG NO', 'JUNCTION BOX NO', 'JUNCTION BOX'], 'JUNCTION');
+      const tagGuess = guess(['TAG NO', 'TAG NUMBER'], 'TAG');
       if (jbGuess) setJbColumn(jbGuess);
       if (tagGuess) setTagColumn(tagGuess);
     } catch (err: any) {

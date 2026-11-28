@@ -230,3 +230,11 @@ def test_bad_requests_and_the_scope_endpoint(client):
     p = client.post("/api/cable-schedule/preview", files={"file": ("i.xlsx", iodb())},
                     data={"jb_column": "JUNCTION BOX TAG NO.", "tag_column": "TAG NO", "scope_filters": json.dumps({"areas": ["RO"]})})
     assert [x["junction_box"] for x in p.json()["rows"]] == ["JB-1", "JB-2"]
+
+
+def test_extra_sheets_only_work_without_loading_the_columns(client):
+    r_ = post_generate(client, files={"iodb_file": ("IODB.xlsx", iodb()), "io_assignment_file": ("a.xlsx", assignment(IOA))},
+                       data={"output_mode": "WITH_SUMMARY", "extra_sheets": "MCC DI,MCC DO", "include_schedule": "false"})
+    assert r_.status_code == 200, r_.text
+    _wb, values = texts(client.get("/api/cable-schedule/download").content)
+    assert {"MS-101A", "MS-101C", "02"} <= values and "MS-101B" not in values
